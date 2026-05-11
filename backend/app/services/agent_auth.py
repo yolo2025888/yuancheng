@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import hashlib
 import hmac
 import secrets
@@ -72,10 +73,18 @@ def authenticate_agent_token(token: str, settings: Settings, session: Session) -
             or device.agent_token_revoked_at is not None
         ):
             return None
+        if device.agent_token_expires_at is not None and _ensure_utc(device.agent_token_expires_at) <= _utc_now():
+            return None
 
         supplied_hash = hash_device_agent_secret(credential)
         if not hmac.compare_digest(supplied_hash, device.agent_token_hash):
             return None
+
+        used_at = _utc_now()
+        device.agent_token_last_used_at = used_at
+        device.updated_at = used_at
+        session.add(device)
+        session.commit()
 
         return AgentPrincipal(device_id=device_id, token_version="v2")
 
@@ -95,3 +104,13 @@ def _legacy_global_token_allowed(settings: Settings) -> bool:
 
 def _urlsafe_b64encode(value: bytes) -> str:
     return base64.urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _ensure_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)

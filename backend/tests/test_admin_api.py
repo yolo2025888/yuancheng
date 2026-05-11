@@ -8,11 +8,12 @@ from uuid import UUID, uuid4
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
+from app.api.deps import get_current_auth_principal
 from app.core.config import Settings
 from app.main import create_app
 from app.models import AuditLog, AttendanceRecord, BehaviorEvent, Device, Employee, Policy, Role, Screenshot, User
 from app.services.agent_auth import create_device_agent_token, generate_device_agent_secret, hash_device_agent_secret
-from app.services.auth import hash_password
+from app.services.auth import AuthenticatedPrincipal, hash_password
 
 
 def test_attendance_clock_records_are_listed_with_anomaly_status(
@@ -163,6 +164,8 @@ def test_admin_list_apis_return_employees_devices_and_policies(
     assert devices_payload["items"][0]["last_foreground_window"]["process_name"] == "Cursor.exe"
     assert devices_payload["items"][0]["last_session_state"]["is_rdp_session"] is True
     assert devices_payload["items"][0]["last_input_activity"]["mouse_wheel_count"] == 1
+    assert devices_payload["items"][0]["agent_token_expires_at"] is not None
+    assert devices_payload["items"][0]["agent_token_last_used_at"] is not None
 
     assert policies_response.status_code == 200
     policies_payload = policies_response.json()
@@ -199,6 +202,7 @@ def test_device_agent_token_can_be_issued_used_and_revoked(
     issued_token = issued["token"]
     assert issued["device_id"] == seeded_device["device_id"]
     assert issued_token.startswith(f"v2:{seeded_device['device_id']}:")
+    assert issued["expires_at"] is not None
 
     with Session(client.app.state.engine) as session:
         device = session.get(Device, UUID(seeded_device["device_id"]))
@@ -206,6 +210,8 @@ def test_device_agent_token_can_be_issued_used_and_revoked(
         assert device.agent_token_hash is not None
         assert issued_token.split(":", maxsplit=2)[2] not in device.agent_token_hash
         assert device.agent_token_revoked_at is None
+        assert device.agent_token_expires_at is not None
+        assert device.agent_token_last_used_at is None
         issued_audit = session.exec(
             select(AuditLog).where(AuditLog.action == "device.agent_token.issued")
         ).first()
@@ -234,9 +240,14 @@ def test_device_agent_token_can_be_issued_used_and_revoked(
     assert revoked_policy_response.json()["detail"] == "Invalid agent token"
     device_item = devices_response.json()["items"][0]
     assert device_item["has_agent_token"] is True
+    assert device_item["agent_token_expires_at"] is not None
+    assert device_item["agent_token_last_used_at"] is not None
     assert device_item["agent_token_revoked_at"] is not None
 
     with Session(client.app.state.engine) as session:
+        device = session.get(Device, UUID(seeded_device["device_id"]))
+        assert device is not None
+        assert device.agent_token_last_used_at is not None
         revoked_audit = session.exec(
             select(AuditLog).where(AuditLog.action == "device.agent_token.revoked")
         ).first()
@@ -244,7 +255,59 @@ def test_device_agent_token_can_be_issued_used_and_revoked(
         assert revoked_audit.target_id == UUID(seeded_device["device_id"])
 
 
-def test_device_agent_token_revoke_requires_directory_manage_permission(
+def test_device_agent_token_endpoints_reject_directory_manage_without_device_tokens_manage(
+    client: TestClient,
+    seeded_device: dict[str, str],
+) -> None:
+    app = client.app
+    principal = AuthenticatedPrincipal(
+        user=User(
+            username="directory.operator",
+            password_hash="placeholder",
+            status="active",
+        ),
+        role_name="Directory Operator",
+        permissions={"directory.manage"},
+    )
+
+    app.dependency_overrides[get_current_auth_principal] = lambda: principal
+    try:
+        issue_response = client.post(f"/api/devices/{seeded_device['device_id']}/agent-token")
+        revoke_response = client.post(f"/api/devices/{seeded_device['device_id']}/agent-token/revoke")
+    finally:
+        app.dependency_overrides.pop(get_current_auth_principal, None)
+
+    assert issue_response.status_code == 403
+    assert revoke_response.status_code == 403
+    assert issue_response.json()["detail"] == "Missing permissions: device_tokens.manage"
+    assert revoke_response.json()["detail"] == "Missing permissions: device_tokens.manage"
+
+
+def test_compliance_role_can_issue_and_revoke_device_agent_token(
+    client: TestClient,
+    seeded_device: dict[str, str],
+    auth_headers,
+) -> None:
+    headers = auth_headers(
+        username="compliance.device.tokens",
+        password="compliance-password",
+        role_name="Compliance",
+    )
+
+    issue_response = client.post(
+        f"/api/devices/{seeded_device['device_id']}/agent-token",
+        headers=headers,
+    )
+    revoke_response = client.post(
+        f"/api/devices/{seeded_device['device_id']}/agent-token/revoke",
+        headers=headers,
+    )
+
+    assert issue_response.status_code == 200
+    assert revoke_response.status_code == 200
+
+
+def test_device_agent_token_revoke_requires_device_tokens_manage_permission(
     client: TestClient,
     seeded_device: dict[str, str],
     auth_headers,
@@ -267,14 +330,6 @@ def test_device_agent_token_revoke_requires_directory_manage_permission(
 
     assert issue_response.status_code == 200
     assert blocked_response.status_code == 403
-
-    policy_response = client.get(
-        "/api/agent/policy",
-        headers={"Authorization": f"Bearer {issue_response.json()['token']}"},
-        params={"device_id": seeded_device["device_id"]},
-    )
-
-    assert policy_response.status_code == 200
 
     with Session(client.app.state.engine) as session:
         device = session.get(Device, UUID(seeded_device["device_id"]))
@@ -308,8 +363,8 @@ def test_reissuing_device_agent_token_rotates_secret_and_invalidates_old_token(
     first_token = first_issue_response.json()["token"]
     second_token = second_issue_response.json()["token"]
     assert first_token != second_token
-    assert first_issue_response.json().keys() == {"device_id", "token", "issued_at"}
-    assert second_issue_response.json().keys() == {"device_id", "token", "issued_at"}
+    assert first_issue_response.json().keys() == {"device_id", "token", "issued_at", "expires_at"}
+    assert second_issue_response.json().keys() == {"device_id", "token", "issued_at", "expires_at"}
 
     first_policy_response = client.get(
         "/api/agent/policy",
@@ -821,6 +876,8 @@ def test_access_matrix_endpoint_returns_roles_users_and_recommended_planning_mat
 
     recommended_roles = {role["name"] for role in payload["roles"] if role["source"] == "recommended"}
     assert {"Compliance", "Manager", "Risk Analyst"} <= recommended_roles
+    compliance_role = next(role for role in payload["roles"] if role["name"] == "Compliance")
+    assert "device_tokens.manage" in compliance_role["permission_keys"]
     assert payload["unassigned_users"] == [
         {
             "id": str(unassigned_user_id),

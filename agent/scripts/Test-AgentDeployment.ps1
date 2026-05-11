@@ -129,6 +129,89 @@ function Test-PlaceholderValue {
     return $normalized.Contains("replace-") -or $normalized.Contains("example.internal")
 }
 
+function Get-AgentTokenShape {
+    param(
+        [string]$Value
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        return "empty"
+    }
+
+    if (Test-PlaceholderValue -Value $Value) {
+        return "placeholder"
+    }
+
+    $normalized = $Value.Trim()
+    if ($normalized.StartsWith("v2:", [System.StringComparison]::OrdinalIgnoreCase)) {
+        return "v2"
+    }
+
+    if ($normalized.StartsWith("v1:", [System.StringComparison]::OrdinalIgnoreCase)) {
+        return "v1"
+    }
+
+    return "raw"
+}
+
+function Test-ProtectedTokenFile {
+    param(
+        [string]$Path,
+        [bool]$DryRun
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        Add-CheckResult -Check "AgentService.ProtectedTokenPath" -Status "WARN" -Detail "ProtectedTokenPath is empty. ApiToken fallback will be used."
+        return $false
+    }
+
+    $resolvedPath = [System.IO.Path]::GetFullPath([System.Environment]::ExpandEnvironmentVariables($Path))
+    if ([System.IO.Path]::IsPathRooted($Path)) {
+        Add-CheckResult -Check "AgentService.ProtectedTokenPath" -Status "PASS" -Detail "Protected token path '$resolvedPath' is rooted."
+    }
+    else {
+        Add-CheckResult -Check "AgentService.ProtectedTokenPath" -Status "WARN" -Detail "Protected token path '$Path' is relative; resolved as '$resolvedPath'."
+    }
+
+    if (-not (Test-Path -LiteralPath $resolvedPath -PathType Leaf)) {
+        $status = if ($DryRun) { "WARN" } else { "FAIL" }
+        Add-CheckResult -Check "Protected token file" -Status $status -Detail "Protected token file '$resolvedPath' does not exist."
+        return $false
+    }
+
+    try {
+        $payload = Get-Content -LiteralPath $resolvedPath -Raw | ConvertFrom-Json
+        $format = [string]$payload.format
+        $scope = [string]$payload.scope
+        $protectedToken = [string]$payload.protectedToken
+
+        if ($format -ne "dpapi/v1") {
+            Add-CheckResult -Check "Protected token format" -Status "FAIL" -Detail "Expected format 'dpapi/v1', got '$format'."
+            return $false
+        }
+
+        if ($scope -notin @("LocalMachine", "CurrentUser")) {
+            Add-CheckResult -Check "Protected token scope" -Status "FAIL" -Detail "Expected scope LocalMachine or CurrentUser, got '$scope'."
+            return $false
+        }
+
+        try {
+            [Convert]::FromBase64String($protectedToken) | Out-Null
+        }
+        catch {
+            Add-CheckResult -Check "Protected token payload" -Status "FAIL" -Detail "Protected token payload is not valid base64."
+            return $false
+        }
+
+        Add-CheckResult -Check "Protected token file" -Status "PASS" -Detail "Protected token metadata is valid at '$resolvedPath'."
+        return $true
+    }
+    catch {
+        Add-CheckResult -Check "Protected token file" -Status "FAIL" -Detail "Could not parse protected token file '$resolvedPath': $($_.Exception.Message)"
+        return $false
+    }
+}
+
 function Test-ApiReachability {
     param(
         [Uri]$BaseUri,
@@ -207,6 +290,7 @@ $serviceUri = $null
 if ($null -ne $serviceSection) {
     foreach ($requiredProperty in @(
         "ApiBaseUrl",
+        "ProtectedTokenPath",
         "ApiToken",
         "DryRun",
         "DeviceIdPath",
@@ -237,16 +321,38 @@ if ($null -ne $serviceSection) {
         Add-CheckResult -Check "AgentService.ApiBaseUrl" -Status "FAIL" -Detail "Value '$apiBaseUrl' is not a valid absolute URI."
     }
 
-    if (Test-PlaceholderValue -Value ([string]$serviceSection.ApiToken)) {
-        if ($serviceSection.DryRun -eq $true) {
-            Add-CheckResult -Check "AgentService.ApiToken" -Status "WARN" -Detail "ApiToken still looks like a placeholder, which is acceptable only while DryRun=true."
-        }
-        else {
-            Add-CheckResult -Check "AgentService.ApiToken" -Status "FAIL" -Detail "ApiToken still looks like a placeholder while DryRun=false."
-        }
+    $dryRun = $serviceSection.DryRun -eq $true
+    $protectedTokenPath = if (Test-PropertyExists -InputObject $serviceSection -Name "ProtectedTokenPath") {
+        [string]$serviceSection.ProtectedTokenPath
     }
     else {
-        Add-CheckResult -Check "AgentService.ApiToken" -Status "PASS" -Detail "ApiToken is populated."
+        ""
+    }
+    $protectedTokenConfigured = Test-ProtectedTokenFile -Path $protectedTokenPath -DryRun $dryRun
+    $apiToken = [string]$serviceSection.ApiToken
+    $apiTokenShape = Get-AgentTokenShape -Value $apiToken
+
+    if ($apiTokenShape -eq "v2") {
+        Add-CheckResult -Check "AgentService.ApiToken" -Status "PASS" -Detail "ApiToken is an issued v2 device-scoped token."
+    }
+    elseif ($apiTokenShape -in @("empty", "placeholder")) {
+        if ($protectedTokenConfigured) {
+            Add-CheckResult -Check "AgentService.ApiToken" -Status "PASS" -Detail "ApiToken fallback is empty/placeholder because ProtectedTokenPath is valid."
+        }
+        elseif ($dryRun) {
+            Add-CheckResult -Check "AgentService.ApiToken" -Status "WARN" -Detail "ApiToken is empty/placeholder and ProtectedTokenPath is not available. This is acceptable only while DryRun=true."
+        }
+        else {
+            Add-CheckResult -Check "AgentService.ApiToken" -Status "FAIL" -Detail "DryRun=false requires either a valid ProtectedTokenPath file or an issued v2 ApiToken."
+        }
+    }
+    elseif ($apiTokenShape -eq "v1") {
+        $status = if ($dryRun) { "WARN" } else { "FAIL" }
+        Add-CheckResult -Check "AgentService.ApiToken" -Status $status -Detail "ApiToken is a legacy v1 token. Production backends reject v1 tokens."
+    }
+    else {
+        $status = if ($dryRun) { "WARN" } else { "FAIL" }
+        Add-CheckResult -Check "AgentService.ApiToken" -Status $status -Detail "ApiToken is a raw signing secret or unknown token shape. Use issued v2 tokens for production."
     }
 
     Test-BooleanValue -Check "AgentService.DryRun" -Value $serviceSection.DryRun

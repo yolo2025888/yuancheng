@@ -196,6 +196,8 @@ export type DeviceRecord = {
   metadataLabels?: string[];
   hasAgentToken?: boolean;
   agentTokenRevokedAt?: string | null;
+  agentTokenExpiresAt?: string | null;
+  agentTokenLastUsedAt?: string | null;
 };
 
 export type TimelineSegment = {

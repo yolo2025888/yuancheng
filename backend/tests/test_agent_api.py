@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 import struct
 import zlib
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -348,6 +348,56 @@ def test_v2_agent_token_rejects_missing_hash_and_revoked_device(
     assert missing_hash_response.json()["detail"] == "Invalid agent token"
     assert revoked_response.status_code == 401
     assert revoked_response.json()["detail"] == "Invalid agent token"
+
+
+def test_v2_agent_token_rejects_expired_device_secret(
+    client: TestClient,
+    seeded_device: dict[str, str],
+) -> None:
+    with Session(client.app.state.engine) as session:
+        device = session.get(Device, UUID(seeded_device["device_id"]))
+        assert device is not None
+        device.agent_token_expires_at = datetime.now(timezone.utc) - timedelta(days=1)
+        device.agent_token_last_used_at = None
+        session.add(device)
+        session.commit()
+
+    response = client.get(
+        "/api/agent/policy",
+        params={"device_id": seeded_device["device_id"]},
+        headers={"Authorization": f"Bearer {seeded_device['agent_token']}"},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid agent token"
+
+    with Session(client.app.state.engine) as session:
+        device = session.get(Device, UUID(seeded_device["device_id"]))
+        assert device is not None
+        assert device.agent_token_last_used_at is None
+
+
+def test_v2_agent_token_updates_last_used_at_on_success(
+    client: TestClient,
+    seeded_device: dict[str, str],
+) -> None:
+    with Session(client.app.state.engine) as session:
+        device = session.get(Device, UUID(seeded_device["device_id"]))
+        assert device is not None
+        assert device.agent_token_last_used_at is None
+
+    response = client.get(
+        "/api/agent/policy",
+        params={"device_id": seeded_device["device_id"]},
+        headers={"Authorization": f"Bearer {seeded_device['agent_token']}"},
+    )
+
+    assert response.status_code == 200
+
+    with Session(client.app.state.engine) as session:
+        device = session.get(Device, UUID(seeded_device["device_id"]))
+        assert device is not None
+        assert device.agent_token_last_used_at is not None
 
 
 def test_heartbeat_returns_policy(client: TestClient, seeded_device: dict[str, str], agent_headers: dict[str, str]) -> None:

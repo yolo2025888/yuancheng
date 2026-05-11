@@ -86,6 +86,8 @@ class DeviceItem(BaseModel):
     last_input_activity: SafeInputActivity | None = None
     has_agent_token: bool = False
     agent_token_revoked_at: datetime | None = None
+    agent_token_expires_at: datetime | None = None
+    agent_token_last_used_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -99,6 +101,7 @@ class DeviceAgentTokenIssueResponse(BaseModel):
     device_id: UUID
     token: str
     issued_at: datetime
+    expires_at: datetime
 
 
 class DeviceAgentTokenRevokeResponse(BaseModel):

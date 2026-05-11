@@ -192,7 +192,8 @@ jobs:
           $scripts = @(
             'agent/scripts/Install-AgentPilot.ps1',
             'agent/scripts/Uninstall-AgentPilot.ps1',
-            'agent/scripts/Test-AgentDeployment.ps1'
+            'agent/scripts/Test-AgentDeployment.ps1',
+            'agent/scripts/Write-AgentProtectedToken.ps1'
           )
           foreach ($script in $scripts) {
             $tokens = $null

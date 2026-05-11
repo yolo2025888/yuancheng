@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlmodel import Session
 
-from app.api.deps import get_audit_context, get_session, require_agent_token, require_permissions
+from app.api.deps import get_audit_context, get_session, get_settings, require_agent_token, require_permissions
+from app.core.config import Settings
 from app.schemas.admin import (
     AccessMatrixResponse,
     AttendanceClockRequest,
@@ -66,17 +67,21 @@ def list_devices(
 def issue_device_agent_token(
     device_id: UUID,
     session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
     audit_context: AuditContext = Depends(get_audit_context),
-    _: object = Depends(require_permissions("directory.manage")),
+    _: object = Depends(require_permissions("device_tokens.manage")),
 ) -> DeviceAgentTokenIssueResponse:
     device = session.get(Device, device_id)
     if device is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device not found")
 
     issued_at = datetime.now(timezone.utc)
+    expires_at = issued_at + timedelta(days=settings.device_agent_token_ttl_days)
     secret = generate_device_agent_secret()
     device.agent_token_hash = hash_device_agent_secret(secret)
     device.agent_token_revoked_at = None
+    device.agent_token_expires_at = expires_at
+    device.agent_token_last_used_at = None
     device.updated_at = issued_at
     session.add(device)
     AuditService(session).log(
@@ -92,6 +97,7 @@ def issue_device_agent_token(
         device_id=device.id,
         token=create_device_agent_token(device.id, secret),
         issued_at=issued_at,
+        expires_at=expires_at,
     )
 
 
@@ -100,7 +106,7 @@ def revoke_device_agent_token(
     device_id: UUID,
     session: Session = Depends(get_session),
     audit_context: AuditContext = Depends(get_audit_context),
-    _: object = Depends(require_permissions("directory.manage")),
+    _: object = Depends(require_permissions("device_tokens.manage")),
 ) -> DeviceAgentTokenRevokeResponse:
     device = session.get(Device, device_id)
     if device is None:

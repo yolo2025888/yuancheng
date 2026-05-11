@@ -30,6 +30,7 @@ def test_login_bootstraps_dev_admin_and_me_excludes_password_hash(client: TestCl
     assert login_payload["user"]["username"] == client.app.state.settings.bootstrap_admin_username
     assert "password_hash" not in login_payload["user"]
     assert "directory.manage" in login_payload["user"]["permissions"]
+    assert "device_tokens.manage" in login_payload["user"]["permissions"]
 
     me_response = client.get(
         "/api/auth/me",

@@ -99,11 +99,49 @@ Copy-Item .\agent\src\EmployeeBehavior.Agent.Service\appsettings.json.example .\
 `AgentService` notes:
 
 - Keep `DryRun=true` for local contract verification before pointing at a real backend.
-- `ApiToken` should be an issued device-scoped `v2:<device_id>:<secret>` bearer token. If the value starts with `v2:`, the service uses it directly as `Authorization: Bearer ...`.
+- `ProtectedTokenPath` is checked before `ApiToken`. Point it at a DPAPI-protected JSON file created by `agent\publish\Service\Write-AgentProtectedToken.ps1`, `EmployeeBehavior.Agent.Service.exe --write-protected-token`, or an equivalent PowerShell command.
+- `ApiToken` should be an issued device-scoped `v2:<device_id>:<secret>` bearer token when you use the dev fallback path. If the value starts with `v2:`, the service uses it directly as `Authorization: Bearer ...`.
 - A raw backend signing secret and legacy `v1:<device_id>:<signature>` tokens are development/test compatibility paths only; production backends reject both.
-- The launcher forwards `ApiToken` as Bearer unchanged, so launcher-backed attendance/profile calls must be configured with an issued `v2:...` token.
+- The launcher now reads the same `ProtectedTokenPath` first and falls back to `ApiToken`, so launcher-backed attendance/profile calls can use the same protected token file when the desktop user has read access to it.
+- Use `LocalMachine` scope for the common Windows service deployment path. Use `CurrentUser` only when the agent runs entirely under one Windows identity and you do not need cross-account decryption.
 - `SessionHelperRequestTimeoutSeconds` must be long enough to cover multi-screen capture on slower endpoints.
 - `UploadBatchSize` affects only upload concurrency, not collection semantics.
+
+Protected token write example:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\publish\Service\Write-AgentProtectedToken.ps1 `
+  -Token 'v2:replace-with-issued-device-token' `
+  -Path 'C:\ProgramData\EmployeeBehaviorAgent\secrets\agent-token.protected.json' `
+  -Scope LocalMachine
+```
+
+Direct EXE invocation:
+
+```powershell
+.\agent\publish\Service\EmployeeBehavior.Agent.Service.exe `
+  --write-protected-token `
+  --token 'v2:replace-with-issued-device-token' `
+  --path 'C:\ProgramData\EmployeeBehaviorAgent\secrets\agent-token.protected.json' `
+  --scope LocalMachine
+```
+
+PowerShell-only fallback if you do not want to ship the helper script:
+
+```powershell
+$path = 'C:\ProgramData\EmployeeBehaviorAgent\secrets\agent-token.protected.json'
+$token = 'v2:replace-with-issued-device-token'
+$bytes = [System.Text.Encoding]::UTF8.GetBytes($token)
+$protected = [System.Security.Cryptography.ProtectedData]::Protect(
+  $bytes,
+  $null,
+  [System.Security.Cryptography.DataProtectionScope]::LocalMachine)
+@{
+  format = 'dpapi/v1'
+  scope = 'LocalMachine'
+  protectedToken = [Convert]::ToBase64String($protected)
+} | ConvertTo-Json | Set-Content -LiteralPath $path -Encoding UTF8
+```
 
 ## Deployment references
 

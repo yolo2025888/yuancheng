@@ -12,6 +12,8 @@ public sealed class AgentServiceOptions
     // signing secrets and legacy `v1:` tokens are development/test paths only.
     public string ApiToken { get; set; } = "replace-with-issued-scoped-token";
 
+    public string? ProtectedTokenPath { get; set; }
+
     public bool DryRun { get; set; } = true;
 
     public string? EmployeeId { get; set; }

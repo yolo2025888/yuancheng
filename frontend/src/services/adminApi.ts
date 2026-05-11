@@ -81,6 +81,7 @@ type DeviceTokenIssueResult = {
   apiStatus: ApiStatus;
   deviceId?: string;
   token?: string;
+  expiresAt?: string;
   errorCode?: 'forbidden' | 'not_found' | 'unavailable';
 };
 type DeviceTokenRevokeResult = {
@@ -204,6 +205,8 @@ type DeviceApiItem = Record<string, unknown> & {
   agent_version?: string;
   last_heartbeat_at?: string | null;
   status?: string;
+  agent_token_expires_at?: string | null;
+  agent_token_last_used_at?: string | null;
 };
 
 type PolicyApiItem = Record<string, unknown> & {
@@ -617,6 +620,7 @@ export const adminApi = {
       const record = asRecord(payload);
       const token = readString(record, ['token']);
       const resolvedDeviceId = readString(record, ['device_id', 'deviceId']) ?? deviceId;
+      const expiresAt = formatOptionalDateTime(readString(record, ['expires_at', 'expiresAt'])) ?? undefined;
 
       if (!token) {
         throw new Error('Device token response did not include a token');
@@ -625,6 +629,7 @@ export const adminApi = {
       return {
         deviceId: resolvedDeviceId,
         token,
+        expiresAt,
         apiStatus: liveStatus(endpoint, 'Issued a device-scoped agent token')
       };
     } catch (error) {
@@ -1306,6 +1311,8 @@ function mapDeviceRecord(item: DeviceApiItem, index: number): DeviceRecord {
     status: normalizeDeviceStatus(readString(item, ['status'])),
     hasAgentToken: readBoolean(item, ['has_agent_token', 'hasAgentToken']) ?? false,
     agentTokenRevokedAt: formatOptionalDateTime(readString(item, ['agent_token_revoked_at', 'agentTokenRevokedAt'])),
+    agentTokenExpiresAt: formatOptionalDateTime(readString(item, ['agent_token_expires_at', 'agentTokenExpiresAt'])),
+    agentTokenLastUsedAt: formatOptionalDateTime(readString(item, ['agent_token_last_used_at', 'agentTokenLastUsedAt'])),
     metadataLabels: buildDeviceMetadataLabels(
       item,
       metadata,

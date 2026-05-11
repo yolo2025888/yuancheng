@@ -79,8 +79,10 @@ Start from `agent/src/EmployeeBehavior.Agent.Service/appsettings.json.example` a
 
 - `ApiBaseUrl`
   Absolute backend base URL, for example `https://monitoring.internal.example`.
+- `ProtectedTokenPath`
+  Preferred path to a DPAPI-protected JSON token file, for example `C:\ProgramData\EmployeeBehaviorAgent\secrets\agent-token.protected.json`. The service checks this file before `ApiToken`.
 - `ApiToken`
-  Use an issued device-scoped `v2:<device_id>:<secret>` bearer token from `POST /api/devices/{device_id}/agent-token`. The plaintext token is returned once; the backend stores only a hash and can revoke that one device without affecting the fleet. Raw signing secrets and legacy `v1:` tokens are development/test compatibility paths only and are rejected by production backends.
+  Dev fallback only. Use an issued device-scoped `v2:<device_id>:<secret>` bearer token from `POST /api/devices/{device_id}/agent-token` if you intentionally keep local plaintext or inject it with `AGENT_AgentService__ApiToken`. The plaintext token is returned once; the backend stores only a hash and can revoke that one device without affecting the fleet. Raw signing secrets and legacy `v1:` tokens are development/test compatibility paths only and are rejected by production backends.
 - `DryRun`
   Keep `true` for initial validation. Switch to `false` only after local and backend checks pass.
 - `EmployeeId`
@@ -107,6 +109,51 @@ Start from `agent/src/EmployeeBehavior.Agent.Service/appsettings.json.example` a
   Lease expiry for in-flight queue items after service interruption. Current default is `300`.
 - `DefaultPolicy`
   Bootstrap policy used before the backend returns a newer one.
+
+Protected token provisioning:
+
+- Helper script: `agent\publish\Service\Write-AgentProtectedToken.ps1`
+- Direct EXE command: `agent\publish\Service\EmployeeBehavior.Agent.Service.exe --write-protected-token --token ... --path ... --scope ...`
+- Recommended default for Windows service deployments: `-Scope LocalMachine`
+- Use `-Scope CurrentUser` only when the same Windows user both writes and reads the token, and the service is not expected to decrypt it under another account.
+- If the launcher must call backend endpoints too, grant that desktop user read access to the protected token file or keep launcher features on the dev fallback path.
+
+Example:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\publish\Service\Write-AgentProtectedToken.ps1 `
+  -Token 'v2:replace-with-issued-device-token' `
+  -Path 'C:\ProgramData\EmployeeBehaviorAgent\secrets\agent-token.protected.json' `
+  -Scope LocalMachine
+```
+
+Equivalent direct EXE invocation:
+
+```powershell
+.\agent\publish\Service\EmployeeBehavior.Agent.Service.exe `
+  --write-protected-token `
+  --token 'v2:replace-with-issued-device-token' `
+  --path 'C:\ProgramData\EmployeeBehaviorAgent\secrets\agent-token.protected.json' `
+  --scope LocalMachine
+```
+
+Equivalent PowerShell without the helper script:
+
+```powershell
+$path = 'C:\ProgramData\EmployeeBehaviorAgent\secrets\agent-token.protected.json'
+$token = 'v2:replace-with-issued-device-token'
+$directory = Split-Path -Parent $path
+New-Item -ItemType Directory -Path $directory -Force | Out-Null
+$protected = [System.Security.Cryptography.ProtectedData]::Protect(
+  [System.Text.Encoding]::UTF8.GetBytes($token),
+  $null,
+  [System.Security.Cryptography.DataProtectionScope]::LocalMachine)
+[ordered]@{
+  format = 'dpapi/v1'
+  scope = 'LocalMachine'
+  protectedToken = [Convert]::ToBase64String($protected)
+} | ConvertTo-Json | Set-Content -LiteralPath $path -Encoding UTF8
+```
 
 ### Session helper config
 
@@ -150,7 +197,8 @@ Use `DryRun=true` first. This validates local capture, named-pipe wiring, and co
 1. Copy both example config files into their real `appsettings.json` locations.
 2. Set a shared pipe name in both files.
 3. Set `DeviceIdPath` to a writable location under `C:\ProgramData`.
-4. Start the helper inside the signed-in desktop session:
+4. Either provision `ProtectedTokenPath` with the helper script above or set a dev fallback token with `AGENT_AgentService__ApiToken`.
+5. Start the helper inside the signed-in desktop session:
 
 ```powershell
 dotnet run --project .\agent\src\EmployeeBehavior.Agent.SessionHelper\EmployeeBehavior.Agent.SessionHelper.csproj -- --console

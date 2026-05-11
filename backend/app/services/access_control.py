@@ -46,6 +46,11 @@ ACCESS_CAPABILITY_DEFINITIONS = (
         "description": "Import and export employee directory records through admin workflows.",
     },
     {
+        "key": "device_tokens.manage",
+        "label": "Device agent tokens",
+        "description": "Issue and revoke device-scoped agent tokens for managed devices.",
+    },
+    {
         "key": "attendance.view",
         "label": "Attendance records",
         "description": "View employee clock-in, clock-out, and attendance anomaly records.",
@@ -115,6 +120,7 @@ ACCESS_ROLE_TEMPLATES = (
             "directory.view",
             "attendance.view",
             "attendance.manage",
+            "device_tokens.manage",
         ],
     },
 )

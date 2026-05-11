@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     default_retention_days: int = 30
     auth_secret: str = "dev-only-change-me"
     agent_api_token: str = "dev-agent-token-change-me"
+    device_agent_token_ttl_days: int = Field(default=90, ge=1)
     session_token_ttl_seconds: int = 43200
     password_hash_iterations: int = 120000
     bootstrap_admin_username: str = "admin"

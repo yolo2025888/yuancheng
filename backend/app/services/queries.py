@@ -555,6 +555,8 @@ class QueryService:
                     ),
                     has_agent_token=device.agent_token_hash is not None,
                     agent_token_revoked_at=device.agent_token_revoked_at,
+                    agent_token_expires_at=device.agent_token_expires_at,
+                    agent_token_last_used_at=device.agent_token_last_used_at,
                     created_at=device.created_at,
                     updated_at=device.updated_at,
                 )

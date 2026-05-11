@@ -49,7 +49,7 @@ export function DevicesPage() {
   const [pendingAction, setPendingAction] = useState<PendingAction>(null);
   const [loadingDevices, setLoadingDevices] = useState(false);
   const [messageApi, contextHolder] = message.useMessage();
-  const canManageDirectory = !permissionsResolved || canAccess('directory.manage');
+  const canManageDeviceTokens = !permissionsResolved || canAccess('device_tokens.manage');
 
   const loadDevices = useCallback(async () => {
     setLoadingDevices(true);
@@ -117,7 +117,9 @@ export function DevicesPage() {
               ? {
                   ...row,
                   hasAgentToken: true,
-                  agentTokenRevokedAt: null
+                  agentTokenRevokedAt: null,
+                  agentTokenExpiresAt: result.expiresAt ?? null,
+                  agentTokenLastUsedAt: null
                 }
               : row
           )
@@ -213,13 +215,13 @@ export function DevicesPage() {
     },
     {
       title: 'Agent Token',
-      width: 200,
+      width: 260,
       render: (_value: unknown, record: DeviceRecord) => (
         <Space direction="vertical" size={4}>
           <Tag color={deviceTokenStatusColor(record)}>{deviceTokenStatusLabel(record)}</Tag>
-          <Typography.Text type="secondary">
-            {buildDeviceTokenSummary(record)}
-          </Typography.Text>
+          <Typography.Text type="secondary">{buildDeviceTokenSummary(record)}</Typography.Text>
+          <Typography.Text type="secondary">Expires: {record.agentTokenExpiresAt ?? '--'}</Typography.Text>
+          <Typography.Text type="secondary">Last used: {record.agentTokenLastUsedAt ?? '--'}</Typography.Text>
         </Space>
       )
     },
@@ -236,7 +238,7 @@ export function DevicesPage() {
     }
   ];
 
-  if (canManageDirectory) {
+  if (canManageDeviceTokens) {
     columns.push({
       title: 'Actions',
       width: 190,
@@ -301,12 +303,12 @@ export function DevicesPage() {
       />
       {apiStatus ? <ApiStatusNotice status={apiStatus} title="Device API" /> : null}
       {credentialStatus ? <ApiStatusNotice status={credentialStatus} title="Device token API" /> : null}
-      {!canManageDirectory ? (
+      {!canManageDeviceTokens ? (
         <Alert
           type="warning"
           showIcon
           message="Agent token management is restricted for the current role."
-          description="Issue and revoke actions require the directory.manage permission when RBAC permissions are resolved."
+          description="Issue and revoke actions require the device_tokens.manage permission when RBAC permissions are resolved."
         />
       ) : null}
       <Card bordered={false} className="panel-card">

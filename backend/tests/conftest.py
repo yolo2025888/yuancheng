@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Generator
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import os
 from pathlib import Path
 from uuid import uuid4
@@ -68,6 +68,9 @@ def seeded_device(client: TestClient) -> dict[str, str]:
             screen_count=2,
             last_heartbeat_at=datetime.now(timezone.utc),
             agent_token_hash=hash_device_agent_secret(agent_secret),
+            agent_token_expires_at=(
+                datetime.now(timezone.utc) + timedelta(days=client.app.state.settings.device_agent_token_ttl_days)
+            ),
             status="online",
         )
         session.add(employee)

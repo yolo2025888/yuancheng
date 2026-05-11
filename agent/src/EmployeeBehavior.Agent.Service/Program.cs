@@ -8,6 +8,12 @@ using EmployeeBehavior.Agent.Service.Session;
 using EmployeeBehavior.Agent.Service.Transport;
 using EmployeeBehavior.Agent.Service.Uploads;
 
+if (ProtectedTokenCommand.TryExecute(args, out var protectedTokenCommandExitCode))
+{
+    Environment.ExitCode = protectedTokenCommandExitCode;
+    return;
+}
+
 var builder = Host.CreateApplicationBuilder(args);
 
 builder.Services.AddWindowsService(options =>
@@ -49,6 +55,8 @@ var host = builder.Build();
 
 var policyCache = host.Services.GetRequiredService<IPolicyCache>();
 var options = host.Services.GetRequiredService<Microsoft.Extensions.Options.IOptions<AgentServiceOptions>>().Value;
+var startupLogger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("AgentStartup");
+options.ApiToken = ProtectedTokenStore.ResolveToken(options.ProtectedTokenPath, options.ApiToken, startupLogger) ?? string.Empty;
 policyCache.Update(options.DefaultPolicy ?? AgentPolicy.CreateDefault());
 
 await host.RunAsync();
