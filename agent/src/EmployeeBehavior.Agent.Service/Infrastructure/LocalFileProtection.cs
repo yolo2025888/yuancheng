@@ -47,6 +47,7 @@ public static class LocalFileProtection
         security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
         AddDirectoryRule(security, new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null));
         AddDirectoryRule(security, new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null));
+        AddDirectoryRule(security, GetCurrentIdentitySid());
         return security;
     }
 
@@ -56,7 +57,14 @@ public static class LocalFileProtection
         security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
         AddFileRule(security, new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null));
         AddFileRule(security, new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null));
+        AddFileRule(security, GetCurrentIdentitySid());
         return security;
+    }
+
+    private static SecurityIdentifier GetCurrentIdentitySid()
+    {
+        return WindowsIdentity.GetCurrent().User
+            ?? throw new InvalidOperationException("Current Windows identity does not expose a user SID.");
     }
 
     private static void AddDirectoryRule(DirectorySecurity security, SecurityIdentifier identity)
