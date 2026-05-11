@@ -122,6 +122,31 @@ function Test-BooleanValue {
     }
 }
 
+function Test-SessionHelperVisibility {
+    param(
+        [object]$EnableTrayIcon,
+        [object]$RunInConsole,
+        [bool]$DryRun
+    )
+
+    if ($EnableTrayIcon -isnot [bool] -or $RunInConsole -isnot [bool]) {
+        Add-CheckResult -Check "SessionHelper visibility" -Status "FAIL" -Detail "EnableTrayIcon and RunInConsole must be boolean values before visibility can be validated."
+        return
+    }
+
+    if ($EnableTrayIcon -eq $true) {
+        Add-CheckResult -Check "SessionHelper visibility" -Status "PASS" -Detail "Tray icon is enabled for transparent interactive monitoring."
+        return
+    }
+
+    if ($DryRun -and $RunInConsole -eq $true) {
+        Add-CheckResult -Check "SessionHelper visibility" -Status "WARN" -Detail "Tray icon is disabled only for operator-observed DryRun console validation."
+        return
+    }
+
+    Add-CheckResult -Check "SessionHelper visibility" -Status "FAIL" -Detail "EnableTrayIcon must be true unless DryRun=true and RunInConsole=true for an operator-observed console dry-run."
+}
+
 function Test-PlaceholderValue {
     param(
         [string]$Value
@@ -467,6 +492,16 @@ if ($null -ne $helperSection) {
     Test-BooleanValue -Check "SessionHelper.EnableDesktopStateInspection" -Value $helperSection.EnableDesktopStateInspection
     Test-PositiveInteger -Check "SessionHelper.InputHookStartupTimeoutSeconds" -Value $helperSection.InputHookStartupTimeoutSeconds
     Test-PositiveInteger -Check "SessionHelper.SampleLogIntervalSeconds" -Value $helperSection.SampleLogIntervalSeconds
+
+    $dryRunForVisibility = $false
+    if ($null -ne $serviceSection) {
+        $dryRunForVisibility = $serviceSection.DryRun -eq $true
+    }
+
+    Test-SessionHelperVisibility `
+        -EnableTrayIcon $helperSection.EnableTrayIcon `
+        -RunInConsole $helperSection.RunInConsole `
+        -DryRun $dryRunForVisibility
 }
 
 if ($null -ne $serviceSection -and $null -ne $helperSection) {

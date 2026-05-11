@@ -83,6 +83,12 @@ Copy-Item .\agent\src\EmployeeBehavior.Agent.Service\appsettings.json.example .\
 
 `SessionHelper` toggles:
 
+- `EnableTrayIcon`
+  - Default `true`
+  - Must remain `true` for installed and production deployments so the signed-in employee has a visible session indicator
+- `RunInConsole`
+  - Default `false`
+  - Use `true` only for operator-observed `DryRun=true` validation; console visibility is not a production replacement for the tray icon
 - `EnableInputActivityHooks`
   - Default `true`
   - Disables keyboard, mouse, and foreground-switch counters when set to `false`

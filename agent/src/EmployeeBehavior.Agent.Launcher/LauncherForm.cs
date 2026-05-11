@@ -71,13 +71,15 @@ internal sealed class LauncherForm : Form
         title.Dock = DockStyle.Top;
 
         var subtitle = CreateLabel(
-            "Clock in starts company-device monitoring: screenshots, active app/session metadata, and aggregate input counts." +
+            "Clock in starts company-device monitoring: full screenshots on all displays; active window title, process name/path, session/lock/RDP/idle metadata; aggregate keyboard/mouse counts." +
             Environment.NewLine +
-            "No raw keys, clipboard, camera, microphone, or remote control.",
-            9,
+            "Purpose: attendance, work-risk review, and code/data leakage investigation by authorized admins. Retention and appeal follow company HR/IT policy." +
+            Environment.NewLine +
+            "No raw keystrokes, clipboard, camera, microphone, or remote control.",
+            8.5F,
             FontStyle.Regular);
         subtitle.ForeColor = Color.FromArgb(92, 101, 116);
-        subtitle.Height = 58;
+        subtitle.Height = 104;
         subtitle.Dock = DockStyle.Top;
 
         var employeeLabel = CreateFieldLabel("Employee code");
