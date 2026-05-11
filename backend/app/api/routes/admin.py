@@ -33,6 +33,7 @@ from app.schemas.admin import (
     PolicyListResponse,
     PolicyUpdateRequest,
     ReviewQueueResponse,
+    ScreenshotRetentionCleanupResponse,
 )
 from app.models import Device
 from app.services.queries import QueryService
@@ -47,6 +48,7 @@ from app.services.attendance import AttendanceService
 from app.services.attendance_rules import AttendanceRuleService, format_rule_time
 from app.services.employee_admin import EmployeeAdminService
 from app.services.policies import PolicyService
+from app.services.retention import ScreenshotRetentionService
 
 router = APIRouter(prefix="/api", tags=["admin"])
 
@@ -204,6 +206,29 @@ def list_audit_logs(
     _: object = Depends(require_permissions("audit_logs.view")),
 ) -> AuditLogListResponse:
     return QueryService(session).list_audit_logs(limit=limit)
+
+
+@router.post("/admin/screenshots/retention/cleanup", response_model=ScreenshotRetentionCleanupResponse)
+def cleanup_expired_screenshot_files(
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+    audit_context: AuditContext = Depends(get_audit_context),
+    _: object = Depends(require_permissions("screenshots.retention.manage")),
+) -> ScreenshotRetentionCleanupResponse:
+    result = ScreenshotRetentionService(session, settings).cleanup_expired_screenshot_files(
+        audit_context=audit_context,
+    )
+    return ScreenshotRetentionCleanupResponse(
+        job_id=result.job_id,
+        retention_days=result.retention_days,
+        cutoff_at=result.cutoff_at,
+        expired_count=result.expired_count,
+        records_updated=result.records_updated,
+        records_failed=result.records_failed,
+        files_deleted=result.files_deleted,
+        files_missing=result.files_missing,
+        files_failed=result.files_failed,
+    )
 
 
 @router.get("/attendance", response_model=AttendanceListResponse)

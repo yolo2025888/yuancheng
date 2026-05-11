@@ -300,11 +300,16 @@ For an already installed pilot or production endpoint, add `-RequireInstalledHel
    - Helper is running in the real signed-in session.
    - Named pipe values match.
    - Dry-run uploads log realistic screen counts and metadata.
-7. Session behavior:
+7. Retention enforcement:
+   - A `screenshots.retention.manage` user runs `POST /api/admin/screenshots/retention/cleanup` after policy changes and on the production maintenance cadence.
+   - The cleanup removes expired screenshot image and thumbnail files, clears only successfully handled image URIs, keeps metadata records for audit/trend continuity, and writes per-screenshot audit logs plus a `screenshots.retention.cleaned` summary audit log with `job_id`.
+   - Any `files_missing` or `files_failed` count is an investigation signal, not a silent success.
+   - After cleanup, expired screenshots must no longer return image or thumbnail content through `/api/screenshots/{id}/image` or `/thumbnail`.
+8. Session behavior:
    - `is_locked` changes when the workstation is locked.
    - `is_remote_session` and `is_rdp_session` change as expected during remote access.
    - `idle_seconds` increases when no input is present.
-8. Operational logging:
+9. Operational logging:
    - `service.log` and `helper.log` exist if your wrapper redirects stdout/stderr.
    - If no files exist, do not assume logs are preserved elsewhere.
 

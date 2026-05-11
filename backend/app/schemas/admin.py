@@ -166,6 +166,18 @@ class AuditLogListResponse(BaseModel):
     total: int
 
 
+class ScreenshotRetentionCleanupResponse(BaseModel):
+    job_id: UUID
+    retention_days: int
+    cutoff_at: datetime
+    expired_count: int
+    records_updated: int
+    records_failed: int
+    files_deleted: int
+    files_missing: int
+    files_failed: int
+
+
 class AttendanceClockRequest(BaseModel):
     device_id: UUID | None = None
     user_name: str = Field(min_length=1, max_length=120)

@@ -41,6 +41,11 @@ ACCESS_CAPABILITY_DEFINITIONS = (
         "description": "View protected screenshot image and thumbnail evidence with an audited access reason.",
     },
     {
+        "key": "screenshots.retention.manage",
+        "label": "Screenshot retention cleanup",
+        "description": "Run audited cleanup of expired screenshot image and thumbnail evidence.",
+    },
+    {
         "key": "policies.manage",
         "label": "Policy management",
         "description": "Create, update, and activate monitoring policy definitions.",

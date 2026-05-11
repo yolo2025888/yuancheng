@@ -29,6 +29,7 @@ Production gates:
 - The installed helper scheduled task exists and can be inspected by `Test-AgentDeployment.ps1`.
 - The installed helper scheduled task does not include `--console`.
 - Strict production validation uses real `appsettings.json`; example config fallback must fail.
+- Screenshot retention cleanup is exercised with `POST /api/admin/screenshots/retention/cleanup` by a `screenshots.retention.manage` user, and the resulting `screenshots.retention.cleaned` audit log includes `job_id`, success counts, missing-file counts, and failure counts.
 - Users launch `EmployeeBehavior.Agent.Launcher.exe`, not the service or session helper directly.
 - Review queue, attendance, devices, screenshot activity summaries, and GitHub risk menus have been checked in the web console.
 - Employee-facing disclosure states the collected data, purpose, retention, authorized viewers, and appeal channel before rollout.

@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import UUID, uuid4
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
@@ -14,6 +15,7 @@ from app.main import create_app
 from app.models import AuditLog, AttendanceRecord, BehaviorEvent, Device, Employee, Policy, Role, Screenshot, User
 from app.services.agent_auth import create_device_agent_token, generate_device_agent_secret, hash_device_agent_secret
 from app.services.auth import AuthenticatedPrincipal, hash_password
+from app.services.storage import LocalScreenshotStorage
 
 
 def test_attendance_clock_records_are_listed_with_anomaly_status(
@@ -478,6 +480,208 @@ def test_policy_crud_and_activation_write_audit_logs(client: TestClient, auth_he
     assert audit_payload["total"] == 3
     assert audit_payload["items"][0]["action"] == "policy.activated"
     assert audit_payload["items"][0]["target_type"] == "policy"
+
+
+def test_screenshot_retention_cleanup_removes_expired_files_and_writes_audit(
+    client: TestClient,
+    seeded_device: dict[str, str],
+    auth_headers,
+) -> None:
+    headers = auth_headers(bootstrap=True)
+    employee_id = UUID(seeded_device["employee_id"])
+    device_id = UUID(seeded_device["device_id"])
+    storage_root = Path(client.app.state.settings.storage_root_dir)
+    expired_image = storage_root / "screenshots" / "expired.png"
+    expired_thumb = storage_root / "screenshots" / "expired_thumb.png"
+    fresh_image = storage_root / "screenshots" / "fresh.png"
+    fresh_thumb = storage_root / "screenshots" / "fresh_thumb.png"
+    for path in (expired_image, expired_thumb, fresh_image, fresh_thumb):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"image")
+
+    expired_id = uuid4()
+    fresh_id = uuid4()
+    with Session(client.app.state.engine) as session:
+        session.add(
+            Policy(
+                name="retention-test",
+                version="2026.05",
+                screenshot_interval_seconds=10,
+                no_change_threshold=4,
+                retention_days=7,
+                is_active=True,
+                rules_json={},
+            )
+        )
+        session.add(
+            Screenshot(
+                id=expired_id,
+                employee_id=employee_id,
+                device_id=device_id,
+                captured_at=datetime.now(timezone.utc) - timedelta(days=8),
+                width=1,
+                height=1,
+                image_uri=expired_image.relative_to(storage_root.parent).as_posix(),
+                thumb_uri=expired_thumb.relative_to(storage_root.parent).as_posix(),
+                upload_status="completed",
+            )
+        )
+        session.add(
+            Screenshot(
+                id=fresh_id,
+                employee_id=employee_id,
+                device_id=device_id,
+                captured_at=datetime.now(timezone.utc) - timedelta(days=2),
+                width=1,
+                height=1,
+                image_uri=fresh_image.relative_to(storage_root.parent).as_posix(),
+                thumb_uri=fresh_thumb.relative_to(storage_root.parent).as_posix(),
+                upload_status="completed",
+            )
+        )
+        session.commit()
+
+    response = client.post("/api/admin/screenshots/retention/cleanup", headers=headers)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["retention_days"] == 7
+    assert payload["job_id"]
+    assert payload["expired_count"] == 1
+    assert payload["records_updated"] == 1
+    assert payload["records_failed"] == 0
+    assert payload["files_deleted"] == 2
+    assert payload["files_missing"] == 0
+    assert payload["files_failed"] == 0
+    assert not expired_image.exists()
+    assert not expired_thumb.exists()
+    assert fresh_image.exists()
+    assert fresh_thumb.exists()
+
+    with Session(client.app.state.engine) as session:
+        expired = session.get(Screenshot, expired_id)
+        fresh = session.get(Screenshot, fresh_id)
+        audit_log = session.exec(
+            select(AuditLog).where(AuditLog.action == "screenshots.retention.cleaned")
+        ).one()
+        item_audit_log = session.exec(
+            select(AuditLog).where(AuditLog.action == "screenshot.retention.deleted")
+        ).one()
+
+        assert expired is not None
+        assert expired.image_uri is None
+        assert expired.thumb_uri is None
+        assert fresh is not None
+        assert fresh.image_uri is not None
+        assert fresh.thumb_uri is not None
+        assert audit_log.target_type == "screenshot_retention"
+        assert "Cleaned 1 screenshot record(s)" in (audit_log.reason or "")
+        assert f"job_id={payload['job_id']}" in (audit_log.reason or "")
+        assert audit_log.actor_id is not None
+        assert audit_log.ip_address == "testclient"
+        assert item_audit_log.target_id == expired_id
+        assert f"job_id={payload['job_id']}" in (item_audit_log.reason or "")
+
+
+def test_screenshot_retention_cleanup_requires_policy_management_permission(
+    client: TestClient,
+    auth_headers,
+) -> None:
+    headers = auth_headers(
+        username="retention.reviewer",
+        password="reviewer-password",
+        role_name="Reviewer",
+    )
+
+    response = client.post("/api/admin/screenshots/retention/cleanup", headers=headers)
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Missing permissions: screenshots.retention.manage"
+
+
+def test_screenshot_retention_cleanup_keeps_failed_file_uri_and_audits_failure(
+    client: TestClient,
+    seeded_device: dict[str, str],
+    auth_headers,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    headers = auth_headers(bootstrap=True)
+    employee_id = UUID(seeded_device["employee_id"])
+    device_id = UUID(seeded_device["device_id"])
+    storage_root = Path(client.app.state.settings.storage_root_dir)
+    expired_image = storage_root / "screenshots" / "locked.png"
+    expired_thumb = storage_root / "screenshots" / "locked_thumb.png"
+    for path in (expired_image, expired_thumb):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"image")
+
+    image_uri = expired_image.relative_to(storage_root.parent).as_posix()
+    thumb_uri = expired_thumb.relative_to(storage_root.parent).as_posix()
+    screenshot_id = uuid4()
+    with Session(client.app.state.engine) as session:
+        session.add(
+            Policy(
+                name="retention-failure-test",
+                version="2026.05",
+                screenshot_interval_seconds=10,
+                no_change_threshold=4,
+                retention_days=7,
+                is_active=True,
+                rules_json={},
+            )
+        )
+        session.add(
+            Screenshot(
+                id=screenshot_id,
+                employee_id=employee_id,
+                device_id=device_id,
+                captured_at=datetime.now(timezone.utc) - timedelta(days=8),
+                width=1,
+                height=1,
+                image_uri=image_uri,
+                thumb_uri=thumb_uri,
+                upload_status="completed",
+            )
+        )
+        session.commit()
+
+    original_resolve = LocalScreenshotStorage.resolve_stored_uri
+
+    class LockedPath:
+        def unlink(self) -> None:
+            raise OSError("locked by another process")
+
+    def resolve_with_locked_image(self: LocalScreenshotStorage, uri: str | None):
+        if uri == image_uri:
+            return LockedPath()
+        return original_resolve(self, uri)
+
+    monkeypatch.setattr(LocalScreenshotStorage, "resolve_stored_uri", resolve_with_locked_image)
+
+    response = client.post("/api/admin/screenshots/retention/cleanup", headers=headers)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["expired_count"] == 1
+    assert payload["records_updated"] == 1
+    assert payload["records_failed"] == 1
+    assert payload["files_deleted"] == 1
+    assert payload["files_failed"] == 1
+    assert expired_image.exists()
+    assert not expired_thumb.exists()
+
+    with Session(client.app.state.engine) as session:
+        screenshot = session.get(Screenshot, screenshot_id)
+        failure_log = session.exec(
+            select(AuditLog).where(AuditLog.action == "screenshot.retention.failed")
+        ).one()
+
+        assert screenshot is not None
+        assert screenshot.image_uri == image_uri
+        assert screenshot.thumb_uri is None
+        assert failure_log.target_id == screenshot_id
+        assert "files_failed=1" in (failure_log.reason or "")
+        assert f"job_id={payload['job_id']}" in (failure_log.reason or "")
 
 
 def test_event_review_updates_status_and_note(client: TestClient, seeded_device: dict[str, str], auth_headers) -> None:
@@ -1269,6 +1473,7 @@ def test_access_matrix_endpoint_returns_roles_users_and_recommended_planning_mat
     assert "dashboard.view" in admin_role["permission_keys"]
     assert "screenshots.metadata.view" in admin_role["permission_keys"]
     assert "screenshots.image.view" in admin_role["permission_keys"]
+    assert "screenshots.retention.manage" in admin_role["permission_keys"]
 
     reviewer_role = next(role for role in payload["roles"] if role["name"] == "Reviewer")
     assert reviewer_role["source"] == "existing"
