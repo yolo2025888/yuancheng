@@ -5,7 +5,8 @@ param(
     [string]$HelperTaskName = "EmployeeBehavior.Agent.SessionHelper",
     [string]$ApiHealthPath = "/health",
     [string]$LogRootPath = "C:\ProgramData\EmployeeBehaviorAgent\logs",
-    [int]$TimeoutSeconds = 5
+    [int]$TimeoutSeconds = 5,
+    [switch]$RequireInstalledHelperTask
 )
 
 Set-StrictMode -Version Latest
@@ -196,24 +197,27 @@ function Test-SessionHelperVisibilityOverrides {
 function Test-HelperScheduledTaskArguments {
     param(
         [string]$TaskName,
-        [bool]$DryRun
+        [bool]$DryRun,
+        [bool]$RequireInstalledTask
     )
 
     if ($null -eq (Get-Command Get-ScheduledTask -ErrorAction SilentlyContinue)) {
-        Add-CheckResult -Check "SessionHelper scheduled task arguments" -Status "WARN" -Detail "Get-ScheduledTask is not available in this shell; installed helper task arguments were not inspected."
+        $status = if ($RequireInstalledTask) { "FAIL" } else { "WARN" }
+        Add-CheckResult -Check "SessionHelper scheduled task arguments" -Status $status -Detail "Get-ScheduledTask is not available in this shell; installed helper task arguments were not inspected."
         return
     }
 
     $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
     if ($null -eq $task) {
-        Add-CheckResult -Check "SessionHelper scheduled task arguments" -Status "WARN" -Detail "Scheduled task '$TaskName' was not found; run this check after installation to inspect effective helper arguments."
+        $status = if ($RequireInstalledTask) { "FAIL" } else { "WARN" }
+        Add-CheckResult -Check "SessionHelper scheduled task arguments" -Status $status -Detail "Scheduled task '$TaskName' was not found; run this check after installation to inspect effective helper arguments."
         return
     }
 
     foreach ($action in $task.Actions) {
         $arguments = [string]$action.Arguments
         if ($arguments -match '(^|\s)--console(\s|$)') {
-            $status = if ($DryRun) { "WARN" } else { "FAIL" }
+            $status = if ($DryRun -and -not $RequireInstalledTask) { "WARN" } else { "FAIL" }
             Add-CheckResult -Check "SessionHelper scheduled task arguments" -Status $status -Detail "Scheduled task '$TaskName' includes --console. Installed helper tasks must keep the tray indicator visible outside operator-observed DryRun validation."
             return
         }
@@ -578,7 +582,10 @@ if ($null -ne $helperSection) {
         -RunInConsole $helperSection.RunInConsole `
         -DryRun $dryRunForVisibility
     Test-SessionHelperVisibilityOverrides -DryRun $dryRunForVisibility
-    Test-HelperScheduledTaskArguments -TaskName $HelperTaskName -DryRun $dryRunForVisibility
+    Test-HelperScheduledTaskArguments `
+        -TaskName $HelperTaskName `
+        -DryRun $dryRunForVisibility `
+        -RequireInstalledTask $RequireInstalledHelperTask.IsPresent
 }
 
 if ($null -ne $serviceSection -and $null -ne $helperSection) {

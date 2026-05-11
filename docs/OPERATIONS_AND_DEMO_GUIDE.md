@@ -13,6 +13,7 @@ Provision production tokens with a DPAPI protected token file, then validate the
 powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Test-AgentPublish.ps1 -PublishRoot .\agent\publish
 powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Test-AgentPublish.ps1 -PublishRoot .\agent\publish -StrictProduction
 powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Test-AgentDeployment.ps1 -ServiceConfigPath .\agent\publish\Service\appsettings.json -HelperConfigPath .\agent\publish\SessionHelper\appsettings.json
+powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Test-AgentDeployment.ps1 -ServiceConfigPath 'C:\Program Files\EmployeeBehaviorAgent\Service\appsettings.json' -HelperConfigPath 'C:\Program Files\EmployeeBehaviorAgent\SessionHelper\appsettings.json' -RequireInstalledHelperTask
 ```
 
-Strict production validation must fail on localhost API URLs, `DryRun=true`, missing protected token files, placeholder credentials, example config fallback, hidden tray configuration, console-only production helper mode, or incomplete launcher packaging.
+Strict production validation must fail on localhost API URLs, `DryRun=true`, missing protected token files, placeholder credentials, example config fallback, hidden tray configuration, console-only production helper mode, missing or uninspectable installed helper task, or incomplete launcher packaging.

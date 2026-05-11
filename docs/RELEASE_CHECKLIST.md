@@ -10,6 +10,7 @@ Set-Location frontend; npm run build
 powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Test-AgentPublish.ps1 -PublishRoot .\agent\publish
 powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Test-AgentPublish.ps1 -PublishRoot .\agent\publish -StrictProduction
 powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Test-AgentDeployment.ps1 -ServiceConfigPath .\agent\publish\Service\appsettings.json -HelperConfigPath .\agent\publish\SessionHelper\appsettings.json
+powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Test-AgentDeployment.ps1 -ServiceConfigPath 'C:\Program Files\EmployeeBehaviorAgent\Service\appsettings.json' -HelperConfigPath 'C:\Program Files\EmployeeBehaviorAgent\SessionHelper\appsettings.json' -RequireInstalledHelperTask
 ```
 
 Run the GitHub Actions `Security Audit` workflow before promoting a release candidate. It performs backend Python, frontend npm, and agent .NET dependency audits separately from ordinary PR CI.
@@ -24,6 +25,8 @@ Production gates:
 - `SessionHelper.RunInConsole` is `false`.
 - No process/user/machine environment override sets `SESSION_HELPER_SessionHelper__EnableTrayIcon=false`.
 - No process/user/machine environment override sets `SESSION_HELPER_SessionHelper__RunInConsole=true`.
+- Installed deployment validation uses `-RequireInstalledHelperTask`.
+- The installed helper scheduled task exists and can be inspected by `Test-AgentDeployment.ps1`.
 - The installed helper scheduled task does not include `--console`.
 - Strict production validation uses real `appsettings.json`; example config fallback must fail.
 - Users launch `EmployeeBehavior.Agent.Launcher.exe`, not the service or session helper directly.

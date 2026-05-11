@@ -244,13 +244,21 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Install-Agen
 6. If the installer is being run by an admin on behalf of another user, set `-HelperTaskUser` explicitly to the pilot account instead of relying on the current user default.
 7. Redirect both process outputs to the recommended `logs\` directory during pilot rollout if you wrap the binaries. The current code still emits console logging only.
 8. Start the helper task or have the pilot user sign in so the logon trigger fires.
-9. Run `Test-AgentDeployment.ps1` against the installed target directories and confirm it does not report hidden tray, console-mode, environment override, or scheduled-task argument failures.
+9. Run `Test-AgentDeployment.ps1` against the installed target directories with `-RequireInstalledHelperTask`, and confirm it does not report hidden tray, console-mode, environment override, missing helper task, or scheduled-task argument failures.
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Test-AgentDeployment.ps1 `
+  -ServiceConfigPath 'C:\Program Files\EmployeeBehaviorAgent\Service\appsettings.json' `
+  -HelperConfigPath 'C:\Program Files\EmployeeBehaviorAgent\SessionHelper\appsettings.json' `
+  -RequireInstalledHelperTask
+```
+
 10. Confirm backend reachability with `/health` and confirm the agent receives `200 OK` from:
    - `POST /api/agent/heartbeat`
    - `GET /api/agent/policy`
    - `POST /api/agent/screenshots/upload`
    All three requests must include a device-scoped `Authorization: Bearer v2:<device_id>:<secret>` token.
-9. Restart the service once and confirm any queued screenshots retry from `UploadQueuePath`.
+11. Restart the service once and confirm any queued screenshots retry from `UploadQueuePath`.
 
 Helper task notes:
 
@@ -269,6 +277,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Test-AgentDe
   -ServiceConfigPath .\agent\src\EmployeeBehavior.Agent.Service\appsettings.json `
   -HelperConfigPath .\agent\src\EmployeeBehavior.Agent.SessionHelper\appsettings.json
 ```
+
+For an already installed pilot or production endpoint, add `-RequireInstalledHelperTask` and point the config paths at the installed `Program Files` directories so the validation fails if the helper logon task cannot be inspected or is missing.
 
 2. Backend secret and storage posture:
    - Production sets `EBM_ENVIRONMENT=production`.

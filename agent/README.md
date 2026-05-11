@@ -236,6 +236,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Test-AgentDe
 ```
 
 If you only have the example files copied in-repo, point the script at the `.example` files instead.
+After installing a pilot or production endpoint, run the same script against the installed `Program Files` config files with `-RequireInstalledHelperTask` so missing or uninspectable helper logon tasks fail the validation.
 
 ## Verification focus
 
