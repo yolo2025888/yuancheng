@@ -94,12 +94,18 @@ function Test-PositiveInteger {
         [object]$Value
     )
 
-    if ($Value -is [int] -and $Value -gt 0) {
-        Add-CheckResult -Check $Check -Status "PASS" -Detail "Value '$Value' is a positive integer."
+    try {
+        $number = [int64]$Value
+        if ($number -gt 0 -and ([double]$Value -eq [double]$number)) {
+            Add-CheckResult -Check $Check -Status "PASS" -Detail "Value '$Value' is a positive integer."
+            return
+        }
     }
-    else {
-        Add-CheckResult -Check $Check -Status "FAIL" -Detail "Value '$Value' must be a positive integer."
+    catch {
+        # Fall through to the common failure result.
     }
+
+    Add-CheckResult -Check $Check -Status "FAIL" -Detail "Value '$Value' must be a positive integer."
 }
 
 function Test-BooleanValue {

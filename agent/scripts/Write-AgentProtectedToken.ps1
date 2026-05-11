@@ -14,6 +14,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.Security
 
 $normalizedToken = $Token.Trim()
 if (-not $normalizedToken.StartsWith('v2:', [System.StringComparison]::OrdinalIgnoreCase)) {
