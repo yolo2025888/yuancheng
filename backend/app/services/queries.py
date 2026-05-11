@@ -31,6 +31,8 @@ from app.schemas.admin import (
     PolicyItem,
     PolicyListResponse,
     PolicySummary,
+    ReviewQueueItem,
+    ReviewQueueResponse,
     RiskFactorItem,
     RiskLevelBreakdown,
     SafeForegroundWindow,
@@ -78,6 +80,13 @@ SENSITIVE_DETAIL_KEY_MARKERS = ("token", "secret", "password", "passwd", "key", 
 
 STALE_DEVICE_AFTER_SECONDS = 10 * 60
 AGED_DEVICE_AFTER_SECONDS = 30 * 60
+REVIEWABLE_EVENT_STATUSES = {"open", "new", "reviewing", "in_progress"}
+SEVERITY_ORDER = {
+    "critical": 0,
+    "high": 1,
+    "medium": 2,
+    "low": 3,
+}
 
 
 def day_bounds(date_value: date) -> tuple[datetime, datetime]:
@@ -961,6 +970,114 @@ class QueryService:
             top_risks=risk_scores[:5],
         )
 
+    def list_review_queue(self, limit: int = 100) -> ReviewQueueResponse:
+        generated_at = datetime.now(timezone.utc)
+        events = self.session.exec(
+            select(BehaviorEvent)
+            .where(BehaviorEvent.status.in_(REVIEWABLE_EVENT_STATUSES))
+            .order_by(BehaviorEvent.start_at.desc())
+        ).all()
+        devices = self.session.exec(select(Device)).all()
+        employee_ids = {event.employee_id for event in events} | {
+            device.employee_id for device in devices if device.employee_id is not None
+        }
+        employees = (
+            {
+                employee.id: employee
+                for employee in self.session.exec(select(Employee).where(Employee.id.in_(employee_ids))).all()
+            }
+            if employee_ids
+            else {}
+        )
+        device_map = {device.id: device for device in devices}
+        items = [
+            self._review_item_from_event(
+                event=event,
+                employee=employees.get(event.employee_id),
+                device=device_map.get(event.device_id),
+                generated_at=generated_at,
+            )
+            for event in events
+        ]
+        items.extend(
+            self._review_item_from_device(device=device, employee=employees.get(device.employee_id), generated_at=generated_at)
+            for device in devices
+            if self._device_needs_review(device, generated_at)
+        )
+        items.sort(key=_review_queue_sort_key)
+        limited_items = items[:limit]
+        return ReviewQueueResponse(items=limited_items, total=len(items), generated_at=generated_at)
+
+    def _review_item_from_event(
+        self,
+        *,
+        event: BehaviorEvent,
+        employee: Employee | None,
+        device: Device | None,
+        generated_at: datetime,
+    ) -> ReviewQueueItem:
+        title = _event_review_title(event)
+        return ReviewQueueItem(
+            id=f"event:{event.id}",
+            item_type="behavior_event",
+            severity=event.severity,
+            status=event.status,
+            title=title,
+            reason=event.reason or title,
+            occurred_at=event.start_at,
+            age_seconds=_age_seconds(event.start_at, generated_at),
+            is_actionable=True,
+            employee_id=event.employee_id,
+            employee_name=employee.name if employee is not None else None,
+            employee_no=employee.employee_no if employee is not None else None,
+            device_id=event.device_id,
+            device_hostname=device.hostname if device is not None else None,
+            event_type=event.event_type,
+            related_event_id=event.id,
+            related_screenshot_id=event.related_screenshot_id,
+            details_json=_safe_review_details(event.details_json or {}),
+        )
+
+    def _review_item_from_device(
+        self,
+        *,
+        device: Device,
+        employee: Employee | None,
+        generated_at: datetime,
+    ) -> ReviewQueueItem:
+        last_seen = device.last_heartbeat_at or device.updated_at
+        age_seconds = _age_seconds(last_seen, generated_at)
+        severity = "high" if device.status == "offline" or age_seconds >= AGED_DEVICE_AFTER_SECONDS else "medium"
+        title = "Agent offline" if device.status == "offline" else "Agent heartbeat stale"
+        return ReviewQueueItem(
+            id=f"device:{device.id}",
+            item_type="device_health",
+            severity=severity,
+            status=device.status,
+            title=title,
+            reason=f"{device.hostname} last heartbeat is {age_seconds // 60} minute(s) old.",
+            occurred_at=last_seen,
+            age_seconds=age_seconds,
+            is_actionable=False,
+            employee_id=device.employee_id,
+            employee_name=employee.name if employee is not None else None,
+            employee_no=employee.employee_no if employee is not None else None,
+            device_id=device.id,
+            device_hostname=device.hostname,
+            details_json={
+                "agent_version": device.agent_version,
+                "os_type": device.os_type,
+                "last_heartbeat_at": device.last_heartbeat_at.isoformat() if device.last_heartbeat_at else None,
+            },
+        )
+
+    def _device_needs_review(self, device: Device, generated_at: datetime) -> bool:
+        if device.status == "offline":
+            return True
+        if device.last_heartbeat_at is None:
+            return False
+        return _age_seconds(device.last_heartbeat_at, generated_at) >= STALE_DEVICE_AFTER_SECONDS
+
     def list_risk_scores(self, limit: int | None = None) -> EmployeeRiskScoreListResponse:
         generated_at, risk_scores, _, _, _, _ = self._build_risk_snapshot()
         items = risk_scores if limit is None else risk_scores[:limit]
@@ -1203,3 +1320,41 @@ def _github_event_type_for_action(action: str) -> str:
     if normalized in {"review", "comment"}:
         return "github_offhours_review"
     raise ValueError("Unsupported GitHub action")
+
+
+def _review_queue_sort_key(item: ReviewQueueItem) -> tuple[int, int, float]:
+    return (
+        SEVERITY_ORDER.get(item.severity, len(SEVERITY_ORDER)),
+        0 if item.is_actionable else 1,
+        -ensure_utc(item.occurred_at).timestamp(),
+    )
+
+
+def _age_seconds(value: datetime, generated_at: datetime) -> int:
+    return max(0, int((generated_at - ensure_utc(value)).total_seconds()))
+
+
+def _event_review_title(event: BehaviorEvent) -> str:
+    details = event.details_json or {}
+    risk_rule = _safe_detail_string(details, "risk_rule")
+    if risk_rule:
+        return risk_rule
+    return event.event_type.replace("_", " ").title()
+
+
+def _safe_review_details(details: dict[str, object]) -> dict[str, object]:
+    safe: dict[str, object] = {}
+    for key, value in details.items():
+        normalized_key = str(key).strip()
+        if not normalized_key:
+            continue
+        if any(marker in normalized_key.casefold() for marker in SENSITIVE_DETAIL_KEY_MARKERS):
+            safe[normalized_key] = "[redacted]"
+            continue
+        if isinstance(value, str):
+            stripped = value.strip()
+            if stripped:
+                safe[normalized_key] = stripped[:500]
+        elif isinstance(value, bool | int | float) or value is None:
+            safe[normalized_key] = value
+    return safe

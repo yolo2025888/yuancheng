@@ -15,6 +15,7 @@ import type {
   EventRecord,
   HeatmapPoint,
   KpiMetric,
+  ReviewQueueRecord,
   RiskScoreRecord,
   StatusBucket
 } from '../types/models';
@@ -26,10 +27,12 @@ export function DashboardPage() {
   const [riskScores, setRiskScores] = useState<RiskScoreRecord[]>([]);
   const [accessMatrix, setAccessMatrix] = useState<AccessMatrixRecord[]>([]);
   const [eventItems, setEventItems] = useState<EventRecord[]>([]);
+  const [reviewQueue, setReviewQueue] = useState<ReviewQueueRecord[]>([]);
   const [dashboardApiStatus, setDashboardApiStatus] = useState<ApiStatus | null>(null);
   const [riskApiStatus, setRiskApiStatus] = useState<ApiStatus | null>(null);
   const [accessApiStatus, setAccessApiStatus] = useState<ApiStatus | null>(null);
   const [eventApiStatus, setEventApiStatus] = useState<ApiStatus | null>(null);
+  const [reviewQueueApiStatus, setReviewQueueApiStatus] = useState<ApiStatus | null>(null);
   const [backendHealth, setBackendHealth] = useState<BackendHealth | null>(null);
 
   useEffect(() => {
@@ -44,6 +47,8 @@ export function DashboardPage() {
       setAccessApiStatus(data.accessApiStatus);
       setEventItems(data.events);
       setEventApiStatus(data.eventApiStatus);
+      setReviewQueue(data.reviewQueue);
+      setReviewQueueApiStatus(data.reviewQueueApiStatus);
       setBackendHealth(data.backendHealth);
     });
   }, []);
@@ -53,12 +58,16 @@ export function DashboardPage() {
       riskScores.filter((item) => item.riskLevel >= 3).map((item) => item.employee)
     );
     const modules = new Set(accessMatrix.flatMap((item) => item.modules));
+    const reviewQueueCritical = reviewQueue.filter(
+      (item) => item.severity === 'critical' || item.severity === 'high'
+    );
 
     return {
       highRiskEmployees: highRiskEmployees.size,
-      modules: modules.size
+      modules: modules.size,
+      reviewQueueCritical: reviewQueueCritical.length
     };
-  }, [accessMatrix, riskScores]);
+  }, [accessMatrix, reviewQueue, riskScores]);
 
   return (
     <Space direction="vertical" size={20} className="page-stack">
@@ -87,6 +96,14 @@ export function DashboardPage() {
                 Events {eventApiStatus.label}
               </Tag>
             ) : null}
+            {reviewQueueApiStatus ? (
+              <Tag color={reviewQueueApiStatus.source === 'live' ? 'green' : 'gold'}>
+                Queue {reviewQueueApiStatus.label}
+              </Tag>
+            ) : null}
+            <Tag color={summary.reviewQueueCritical > 0 ? 'volcano' : 'green'}>
+              {reviewQueue.length} review items
+            </Tag>
             <Tag color={summary.highRiskEmployees > 0 ? 'orange' : 'green'}>
               {summary.highRiskEmployees} employees on watch
             </Tag>
@@ -118,7 +135,11 @@ export function DashboardPage() {
           <WorkStatusStackedChart data={workStatus} />
         </Col>
         <Col xs={24} xl={9}>
-          <EventList items={eventItems} />
+          <EventList
+            items={eventItems}
+            reviewQueue={reviewQueue}
+            reviewQueueApiStatus={reviewQueueApiStatus}
+          />
         </Col>
       </Row>
       <Row gutter={[16, 16]}>

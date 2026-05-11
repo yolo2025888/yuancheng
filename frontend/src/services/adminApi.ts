@@ -40,6 +40,7 @@ import type {
   PolicyMutationInput,
   PolicyRecord,
   RealtimeStatusRecord,
+  ReviewQueueRecord,
   RiskScoreRecord,
   ScreenshotComparison,
   ScreenshotListItem,
@@ -58,6 +59,8 @@ type DashboardData = {
   accessApiStatus: ApiStatus;
   events: EventRecord[];
   eventApiStatus: ApiStatus;
+  reviewQueue: ReviewQueueRecord[];
+  reviewQueueApiStatus: ApiStatus;
   backendHealth: BackendHealth;
 };
 
@@ -110,6 +113,7 @@ type GitHubRiskData = {
   trend: readonly (readonly [string, number])[];
   apiStatus: ApiStatus;
 };
+type ReviewQueueListData = ApiResult<ReviewQueueRecord[]>;
 type RiskScoreListData = ApiResult<RiskScoreRecord[]>;
 type AccessMatrixListData = ApiResult<AccessMatrixRecord[]>;
 type PolicyMutationResult = { apiStatus: ApiStatus; data?: PolicyRecord[] };
@@ -159,6 +163,8 @@ type EventApiListResponse = {
   items: EventApiItem[];
   total: number;
 };
+
+type ReviewQueueApiItem = Record<string, unknown>;
 
 type TimelineApiItem = Record<string, unknown> & {
   time?: string;
@@ -407,6 +413,7 @@ export const adminApi = {
       this.getRiskScores(),
       this.getAccessMatrix()
     ]);
+    const reviewQueueResult = await this.getReviewQueue(eventResult.data, riskResult.data);
 
     return {
       kpis: summaryResult.data.kpis,
@@ -419,6 +426,8 @@ export const adminApi = {
       accessApiStatus: accessResult.apiStatus,
       events: eventResult.data,
       eventApiStatus: eventResult.apiStatus,
+      reviewQueue: reviewQueueResult.data,
+      reviewQueueApiStatus: reviewQueueResult.apiStatus,
       backendHealth
     };
   },
@@ -813,11 +822,66 @@ export const adminApi = {
         apiStatus: liveStatus('/api/events', `Loaded ${payload.total} events`)
       };
     } catch (error) {
+      const status = readErrorStatus(error);
+      if (status === 401 || status === 403) {
+        return {
+          data: [],
+          apiStatus: {
+            source: 'mock',
+            state: 'unavailable',
+            label: 'Access denied',
+            detail: `Event list access denied: ${getErrorMessage(error)}`,
+            endpoint: '/api/events'
+          }
+        };
+      }
+
       return {
         data: buildMockEventRecords().sort(compareEvents),
         apiStatus: fallbackStatus('/api/events', getErrorMessage(error))
       };
     }
+  },
+
+  async getReviewQueue(
+    fallbackEvents: EventRecord[] = [],
+    fallbackRiskScores: RiskScoreRecord[] = []
+  ): Promise<ReviewQueueListData> {
+    const endpoints = ['/api/review-queue', '/api/alerts/review-queue'];
+    let lastError: unknown = new Error('Review queue endpoint unavailable');
+
+    for (const endpoint of endpoints) {
+      try {
+        const payload = await apiClient<unknown>(endpoint);
+        const rows = mapReviewQueueRecords(payload);
+
+        return {
+          data: rows.sort(compareReviewQueueItems),
+          apiStatus: liveStatus(endpoint, `Loaded ${rows.length} review queue items`)
+        };
+      } catch (error) {
+        const status = readErrorStatus(error);
+        if (status === 401 || status === 403) {
+          return {
+            data: [],
+            apiStatus: {
+              source: 'mock',
+              state: 'unavailable',
+              label: 'Access denied',
+              detail: `Review queue access denied: ${getErrorMessage(error)}`,
+              endpoint
+            }
+          };
+        }
+        lastError = error;
+      }
+    }
+
+    const fallbackRows = buildFallbackReviewQueue(fallbackEvents, fallbackRiskScores);
+    return {
+      data: fallbackRows.sort(compareReviewQueueItems),
+      apiStatus: fallbackStatus(endpoints[0], getErrorMessage(lastError))
+    };
   },
 
   async reviewEvent(
@@ -1842,6 +1906,217 @@ function mapEventRecord(item: EventApiItem): EventRecord {
     changeMetrics,
     reviewedAt: item.reviewed_at ? formatDateTime(item.reviewed_at) : null,
     reviewNote: item.review_note ?? null
+  };
+}
+
+function mapReviewQueueRecords(payload: unknown): ReviewQueueRecord[] {
+  const items = extractUnknownItems(payload, ['items', 'rows', 'records', 'queue', 'alerts', 'results', 'data']);
+  if (items) {
+    return items
+      .map((item: unknown, index: number) => mapReviewQueueRecord(item, index))
+      .filter((record): record is ReviewQueueRecord => record !== null);
+  }
+
+  const root = unwrapPrimaryRecord(payload);
+  if (looksLikeReviewQueueItem(root)) {
+    const mapped = mapReviewQueueRecord(root, 0);
+    return mapped ? [mapped] : [];
+  }
+
+  throw new Error('Review queue payload did not contain a usable list');
+}
+
+function mapReviewQueueRecord(item: unknown, index: number): ReviewQueueRecord | null {
+  const record = asRecord(item) as ReviewQueueApiItem | undefined;
+  if (!record) {
+    return null;
+  }
+
+  const details = pickRecords(record, ['details_json', 'details', 'payload', 'context', 'meta']);
+  const nestedEvent = pickRecords(record, ['event', 'alert', 'risk', 'source_event']);
+  const employeeRecord = pickRecords(record, ['employee', 'employee_info', 'employee_profile', 'user']);
+  const ageSeconds = readNumber(record, ['age_seconds', 'ageSeconds']);
+  const type =
+    formatLabel(
+      firstString(
+        readString(record, ['title', 'type', 'event_type', 'item_type', 'alert_type', 'category', 'rule_name', 'name']),
+        readString(nestedEvent, ['type', 'event_type', 'alert_type', 'category', 'rule_name', 'title', 'name']),
+        readString(details, ['type', 'event_type', 'alert_type', 'category', 'rule_name', 'title', 'name']),
+        'Alert'
+      ) ?? 'Alert'
+    );
+  const queuedAt =
+    firstString(
+      readString(record, ['queued_at', 'created_at', 'detected_at', 'occurred_at', 'start_at', 'timestamp']),
+      readString(nestedEvent, ['queued_at', 'created_at', 'detected_at', 'occurred_at', 'start_at', 'timestamp']),
+      readString(details, ['queued_at', 'created_at', 'detected_at', 'occurred_at', 'start_at', 'timestamp'])
+    ) ?? null;
+  const ageMinutes =
+    readNumber(record, ['age_minutes', 'ageMinutes']) ??
+    (ageSeconds !== undefined ? Math.floor(ageSeconds / 60) : undefined) ??
+    readNumber(details, ['age_minutes', 'ageMinutes']) ??
+    inferAgeMinutes(queuedAt);
+  const ageLabel =
+    firstString(readString(record, ['age', 'age_label', 'ageLabel']), readString(details, ['age', 'age_label'])) ??
+    formatQueueAge(ageMinutes);
+  const employee =
+    firstString(
+      readString(record, ['employee_name', 'employee', 'user_name']),
+      readString(employeeRecord, ['name', 'display_name', 'employee_name']),
+      readString(details, ['employee_name', 'employee', 'user_name']),
+      shortenOptionalId(readString(record, ['employee_id', 'user_id'])),
+      shortenOptionalId(readString(nestedEvent, ['employee_id', 'user_id']))
+    ) ?? 'Unknown employee';
+  const status = normalizeReviewQueueStatus(
+    firstString(
+      readString(record, ['status', 'review_status', 'state', 'queue_status']),
+      readString(nestedEvent, ['status', 'review_status', 'state']),
+      readString(details, ['status', 'review_status', 'state']),
+      'new'
+    ) ?? 'new'
+  );
+
+  return {
+    id:
+      firstString(
+        readString(record, ['id', 'key', 'review_id', 'alert_id']),
+        readString(nestedEvent, ['id', 'event_id']),
+        readString(details, ['id', 'event_id'])
+      ) ?? `queue-${index + 1}`,
+    severity: normalizeReviewQueueSeverity(record, nestedEvent, details),
+    type,
+    employee,
+    itemType: readString(record, ['item_type', 'itemType']) ?? undefined,
+    department:
+      firstString(
+        readString(record, ['department', 'department_name']),
+        readString(employeeRecord, ['department', 'department_name']),
+        readString(details, ['department', 'department_name'])
+      ) ?? undefined,
+    status,
+    ageLabel,
+    ageMinutes,
+    isActionable: readBoolean(record, ['is_actionable', 'isActionable']) ?? undefined,
+    reason:
+      firstString(
+        readString(record, ['reason', 'summary', 'description', 'message', 'review_reason', 'risk_rule']),
+        readString(nestedEvent, ['reason', 'summary', 'description', 'message', 'review_reason', 'risk_rule']),
+        readString(details, ['reason', 'summary', 'description', 'message', 'review_reason', 'risk_rule']),
+        summarizeDetails(details),
+        `${type} needs review`
+      ) ?? `${type} needs review`,
+    queuedAt,
+    linkedEventId:
+      firstString(
+        readString(record, ['related_event_id', 'event_id', 'linked_event_id']),
+        readString(nestedEvent, ['id', 'event_id']),
+        readString(details, ['event_id', 'linked_event_id'])
+      ) ?? undefined,
+    linkedScreenshotId:
+      firstString(
+        readString(record, ['related_screenshot_id', 'screenshot_id']),
+        readString(nestedEvent, ['related_screenshot_id', 'screenshot_id']),
+        readString(details, ['related_screenshot_id', 'screenshot_id'])
+      ) ?? null,
+    deviceHostname:
+      firstString(
+        readString(record, ['device_hostname', 'hostname', 'device_name']),
+        readString(details, ['device_hostname', 'hostname', 'device_name'])
+      ) ?? null,
+    eventType:
+      firstString(
+        readString(record, ['event_type']),
+        readString(nestedEvent, ['event_type']),
+        readString(details, ['event_type'])
+      ) ?? null,
+    source: 'review_queue'
+  };
+}
+
+function looksLikeReviewQueueItem(record?: Record<string, unknown>) {
+  if (!record) {
+    return false;
+  }
+
+  return Boolean(
+    readString(record, ['id', 'review_id', 'alert_id', 'event_id']) ||
+      readString(record, ['employee_name', 'employee', 'user_name']) ||
+      readString(record, ['type', 'event_type', 'alert_type', 'category', 'rule_name']) ||
+      readString(record, ['reason', 'summary', 'description', 'message'])
+  );
+}
+
+function buildFallbackReviewQueue(
+  fallbackEvents: EventRecord[],
+  fallbackRiskScores: RiskScoreRecord[]
+): ReviewQueueRecord[] {
+  const eventRows = fallbackEvents
+    .filter((item) => item.status === 'new' || item.status === 'reviewing')
+    .map((item) => mapEventToReviewQueue(item));
+  const seenEmployees = new Set<string>();
+  const riskRows = sortRiskScores(fallbackRiskScores)
+    .filter((item) => item.riskLevel >= 3 || item.score >= 70)
+    .filter((item) => {
+      if (seenEmployees.has(item.employee)) {
+        return false;
+      }
+
+      seenEmployees.add(item.employee);
+      return true;
+    })
+    .map((item) => mapRiskScoreToReviewQueue(item));
+
+  return [...eventRows, ...riskRows].sort(compareReviewQueueItems).slice(0, 8);
+}
+
+function mapEventToReviewQueue(item: EventRecord): ReviewQueueRecord {
+  const ageMinutes = inferAgeMinutes(item.startedAt);
+
+  return {
+    id: item.id,
+    severity: item.severity,
+    type: item.type,
+    employee: item.employee,
+    department: item.department,
+    status: item.status,
+    ageLabel: formatQueueAge(ageMinutes),
+    ageMinutes,
+    reason: item.reviewNote || item.summary,
+    queuedAt: item.startedAt,
+    isActionable: true,
+    linkedEventId: item.id,
+    linkedScreenshotId: item.relatedScreenshotId ?? null,
+    eventType: item.eventCode ?? null,
+    source: 'events'
+  };
+}
+
+function mapRiskScoreToReviewQueue(item: RiskScoreRecord): ReviewQueueRecord {
+  const queuedAt = buildRiskScoreTimestamp(item.slot);
+  const ageMinutes = inferAgeMinutes(queuedAt);
+  const severity = severityFromNumeric(item.riskLevel);
+  const type = item.riskLevel >= 4 ? 'Escalated risk score' : 'Risk watch';
+  const reason = [
+    `Score ${Math.round(item.score)}`,
+    `${item.eventCount} linked event${item.eventCount === 1 ? '' : 's'}`,
+    item.policyName
+  ]
+    .filter(Boolean)
+    .join(' / ');
+
+  return {
+    id: item.key,
+    severity,
+    type,
+    employee: item.employee,
+    department: item.department,
+    status: item.riskLevel >= 4 ? 'new' : 'watch',
+    ageLabel: formatQueueAge(ageMinutes),
+    ageMinutes,
+    reason,
+    queuedAt,
+    isActionable: false,
+    source: 'risk'
   };
 }
 
@@ -3419,6 +3694,17 @@ function compareEvents(left: EventRecord, right: EventRecord) {
   return rightPriority - leftPriority;
 }
 
+function compareReviewQueueItems(left: ReviewQueueRecord, right: ReviewQueueRecord) {
+  const leftPriority = severityWeight(left.severity) + reviewQueueStatusWeight(left.status);
+  const rightPriority = severityWeight(right.severity) + reviewQueueStatusWeight(right.status);
+
+  if (leftPriority !== rightPriority) {
+    return rightPriority - leftPriority;
+  }
+
+  return (right.ageMinutes ?? -1) - (left.ageMinutes ?? -1);
+}
+
 function compareAuditLogs(left: AuditLogRecord, right: AuditLogRecord) {
   return toTimestamp(right.timestamp) - toTimestamp(left.timestamp);
 }
@@ -3440,6 +3726,19 @@ function severityWeight(value: EventSeverity) {
       return 20;
     default:
       return 10;
+  }
+}
+
+function reviewQueueStatusWeight(status: string) {
+  switch (normalizeReviewQueueStatus(status)) {
+    case 'new':
+      return 20;
+    case 'reviewing':
+      return 15;
+    case 'watch':
+      return 10;
+    default:
+      return 0;
   }
 }
 
@@ -3549,12 +3848,122 @@ function normalizeEventStatus(status: string): EventStatus {
   return normalized;
 }
 
+function normalizeReviewQueueStatus(status: string) {
+  const normalized = status.trim().toLowerCase();
+
+  if (
+    normalized === 'pending' ||
+    normalized === 'open' ||
+    normalized === 'queued' ||
+    normalized === 'unreviewed' ||
+    normalized === 'needs_review'
+  ) {
+    return 'new';
+  }
+
+  if (
+    normalized === 'in_review' ||
+    normalized === 'in-review' ||
+    normalized === 'review' ||
+    normalized === 'processing' ||
+    normalized === 'escalated'
+  ) {
+    return 'reviewing';
+  }
+
+  if (normalized === 'watch' || normalized === 'watchlist') {
+    return 'watch';
+  }
+
+  if (normalized === 'resolved' || normalized === 'done' || normalized === 'completed') {
+    return 'reviewed';
+  }
+
+  if (normalized === 'dismissed' || normalized === 'false_positive' || normalized === 'skipped') {
+    return 'ignored';
+  }
+
+  return normalizeEventStatus(status);
+}
+
 function normalizeSeverity(severity: string): EventSeverity {
   if (severity === 'low' || severity === 'medium' || severity === 'high' || severity === 'critical') {
     return severity;
   }
 
   return 'medium';
+}
+
+function normalizeReviewQueueSeverity(
+  ...sources: Array<Record<string, unknown> | undefined>
+): EventSeverity {
+  const safeSources = sources.filter((source): source is Record<string, unknown> => Boolean(source));
+  const rawSeverity = firstStringFromSources(safeSources, ['severity', 'priority', 'risk_severity']);
+  if (rawSeverity) {
+    const normalized = rawSeverity.trim().toLowerCase();
+
+    if (normalized === 'urgent' || normalized === 'blocker') {
+      return 'critical';
+    }
+
+    if (normalized === 'warning') {
+      return 'medium';
+    }
+
+    if (normalized === 'info') {
+      return 'low';
+    }
+
+    if (/^\d+(\.\d+)?$/.test(normalized)) {
+      return severityFromNumeric(Number(normalized));
+    }
+
+    return normalizeSeverity(normalized);
+  }
+
+  const numericLevel = readNumberFromSources(safeSources, ['risk_level', 'level', 'priority_level', 'severity_level']);
+  if (numericLevel !== undefined) {
+    return severityFromNumeric(numericLevel);
+  }
+
+  const score = readNumberFromSources(safeSources, ['score', 'risk_score', 'priority_score']);
+  if (score !== undefined) {
+    return severityFromNumeric(score);
+  }
+
+  return 'medium';
+}
+
+function severityFromNumeric(value: number): EventSeverity {
+  if (value <= 1) {
+    return 'low';
+  }
+
+  if (value <= 4) {
+    if (value >= 4) {
+      return 'critical';
+    }
+
+    if (value >= 3) {
+      return 'high';
+    }
+
+    return 'medium';
+  }
+
+  if (value >= 85) {
+    return 'critical';
+  }
+
+  if (value >= 70) {
+    return 'high';
+  }
+
+  if (value >= 40) {
+    return 'medium';
+  }
+
+  return 'low';
 }
 
 function normalizeRatio(value?: number | null) {
@@ -3584,6 +3993,39 @@ function formatOptionalDateTime(value?: string | null) {
   }
 
   return formatDateTime(value);
+}
+
+function formatQueueAge(value?: number | null) {
+  if (value === undefined || value === null || value < 0) {
+    return '--';
+  }
+
+  if (value < 60) {
+    return `${value}m`;
+  }
+
+  if (value < 1440) {
+    const hours = Math.floor(value / 60);
+    const minutes = value % 60;
+    return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+  }
+
+  const days = Math.floor(value / 1440);
+  const hours = Math.floor((value % 1440) / 60);
+  return hours > 0 ? `${days}d ${hours}h` : `${days}d`;
+}
+
+function inferAgeMinutes(value?: string | null) {
+  if (!value) {
+    return null;
+  }
+
+  const timestamp = toTimestamp(value);
+  if (timestamp <= 0) {
+    return null;
+  }
+
+  return Math.max(0, Math.floor((Date.now() - timestamp) / 60000));
 }
 
 function normalizeTimeValue(value?: string | null) {
@@ -3628,6 +4070,19 @@ function summarizeDetails(details?: Record<string, unknown>) {
 
 function shortenUuid(value: string) {
   return value.length > 12 ? `${value.slice(0, 8)}...` : value;
+}
+
+function shortenOptionalId(value?: string) {
+  return value ? shortenUuid(value) : undefined;
+}
+
+function buildRiskScoreTimestamp(slot: string) {
+  const normalized = normalizeTimeValue(slot);
+  if (!normalized) {
+    return null;
+  }
+
+  return `${today} ${normalized}`;
 }
 
 function getLocalDateString() {

@@ -407,6 +407,33 @@ class DashboardSummaryResponse(BaseModel):
     top_risks: list[EmployeeRiskScoreItem] = Field(default_factory=list)
 
 
+class ReviewQueueItem(BaseModel):
+    id: str
+    item_type: str
+    severity: str
+    status: str
+    title: str
+    reason: str
+    occurred_at: datetime
+    age_seconds: int = Field(ge=0)
+    is_actionable: bool = True
+    employee_id: UUID | None = None
+    employee_name: str | None = None
+    employee_no: str | None = None
+    device_id: UUID | None = None
+    device_hostname: str | None = None
+    event_type: str | None = None
+    related_event_id: UUID | None = None
+    related_screenshot_id: UUID | None = None
+    details_json: dict[str, Any] = Field(default_factory=dict)
+
+
+class ReviewQueueResponse(BaseModel):
+    items: list[ReviewQueueItem]
+    total: int
+    generated_at: datetime
+
+
 class AccessCapabilityItem(BaseModel):
     key: str
     label: str

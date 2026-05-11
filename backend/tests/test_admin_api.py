@@ -888,6 +888,136 @@ def test_github_risks_endpoint_maps_github_behavior_events(
     assert payload["items"][1]["correlation"] == "Linked to DEV-PC-001"
 
 
+def test_review_queue_endpoint_prioritizes_open_events_and_stale_devices(
+    client: TestClient,
+    seeded_device: dict[str, str],
+    auth_headers,
+) -> None:
+    headers = auth_headers(bootstrap=True)
+    employee_id = UUID(seeded_device["employee_id"])
+    device_id = UUID(seeded_device["device_id"])
+    stale_device_id = uuid4()
+
+    with Session(client.app.state.engine) as session:
+        device = session.get(Device, device_id)
+        assert device is not None
+        device.status = "online"
+        device.last_heartbeat_at = datetime.now(timezone.utc)
+        session.add(device)
+        session.add(
+            BehaviorEvent(
+                employee_id=employee_id,
+                device_id=device_id,
+                event_type="github_sensitive_repo_clone",
+                severity="critical",
+                start_at=datetime.now(timezone.utc) - timedelta(minutes=2),
+                status="open",
+                reason="Sensitive repository cloned repeatedly.",
+                details_json={
+                    "repository": "corp/infra-secrets",
+                    "risk_rule": "Sensitive repository clone",
+                    "token": "ghp_should_not_persist",
+                },
+            )
+        )
+        session.add(
+            BehaviorEvent(
+                employee_id=employee_id,
+                device_id=device_id,
+                event_type="no_change_streak_triggered",
+                severity="high",
+                start_at=datetime.now(timezone.utc) - timedelta(minutes=1),
+                status="resolved",
+                reason="Already resolved.",
+                details_json={},
+            )
+        )
+        session.add(
+            Device(
+                id=stale_device_id,
+                employee_id=employee_id,
+                hostname="DEV-PC-STALE",
+                os_type="windows",
+                agent_version="0.1.0",
+                screen_count=1,
+                last_heartbeat_at=datetime.now(timezone.utc) - timedelta(minutes=45),
+                status="online",
+            )
+        )
+        session.commit()
+
+    response = client.get("/api/review-queue", headers=headers)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 2
+    assert [item["item_type"] for item in payload["items"]] == ["behavior_event", "device_health"]
+    assert payload["items"][0]["title"] == "Sensitive repository clone"
+    assert payload["items"][0]["is_actionable"] is True
+    assert payload["items"][0]["event_type"] == "github_sensitive_repo_clone"
+    assert payload["items"][0]["employee_name"] == "Alice"
+    assert payload["items"][0]["details_json"]["repository"] == "corp/infra-secrets"
+    assert payload["items"][0]["details_json"]["token"] == "[redacted]"
+    assert payload["items"][1]["is_actionable"] is False
+    assert payload["items"][1]["device_hostname"] == "DEV-PC-STALE"
+    assert payload["items"][1]["severity"] == "high"
+
+    limited_response = client.get("/api/review-queue?limit=1", headers=headers)
+    assert limited_response.status_code == 200
+    assert limited_response.json()["total"] == 2
+    assert len(limited_response.json()["items"]) == 1
+
+
+def test_review_queue_requires_event_review_permission(
+    client: TestClient,
+    auth_headers,
+) -> None:
+    headers = auth_headers(role_name="Manager")
+
+    response = client.get("/api/review-queue", headers=headers)
+
+    assert response.status_code == 403
+
+
+def test_review_queue_limit_is_applied_after_priority_sort(
+    client: TestClient,
+    seeded_device: dict[str, str],
+    auth_headers,
+) -> None:
+    headers = auth_headers(bootstrap=True)
+    employee_id = UUID(seeded_device["employee_id"])
+    device_id = UUID(seeded_device["device_id"])
+    now = datetime.now(timezone.utc)
+
+    with Session(client.app.state.engine) as session:
+        for minutes_ago, severity, reason in (
+            (1, "medium", "Recent medium review"),
+            (2, "medium", "Second recent medium review"),
+            (100, "critical", "Older critical review"),
+        ):
+            session.add(
+                BehaviorEvent(
+                    employee_id=employee_id,
+                    device_id=device_id,
+                    event_type="priority_test",
+                    severity=severity,
+                    start_at=now - timedelta(minutes=minutes_ago),
+                    status="open",
+                    reason=reason,
+                    details_json={},
+                )
+            )
+        session.commit()
+
+    response = client.get("/api/review-queue?limit=2", headers=headers)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 3
+    assert payload["items"][0]["severity"] == "critical"
+    assert payload["items"][0]["reason"] == "Older critical review"
+
+
 def test_github_risk_create_endpoint_records_sanitized_behavior_event(
     client: TestClient,
     seeded_device: dict[str, str],

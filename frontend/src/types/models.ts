@@ -152,6 +152,26 @@ export type EventRecord = {
   reviewNote?: string | null;
 };
 
+export type ReviewQueueRecord = {
+  id: string;
+  severity: EventSeverity;
+  type: string;
+  itemType?: string;
+  employee: string;
+  department?: string;
+  status: string;
+  ageLabel: string;
+  ageMinutes?: number | null;
+  reason: string;
+  queuedAt?: string | null;
+  isActionable?: boolean;
+  linkedEventId?: string;
+  linkedScreenshotId?: string | null;
+  deviceHostname?: string | null;
+  eventType?: string | null;
+  source: 'review_queue' | 'events' | 'risk';
+};
+
 export type RealtimeStatusRecord = {
   key: string;
   employee: string;

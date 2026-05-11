@@ -32,6 +32,7 @@ from app.schemas.admin import (
     PolicyItem,
     PolicyListResponse,
     PolicyUpdateRequest,
+    ReviewQueueResponse,
 )
 from app.models import Device
 from app.services.queries import QueryService
@@ -155,6 +156,15 @@ def list_github_risks(
     _: object = Depends(require_permissions("github_risks.view")),
 ) -> GitHubRiskEventListResponse:
     return QueryService(session).list_github_risks(limit=limit)
+
+
+@router.get("/review-queue", response_model=ReviewQueueResponse)
+def list_review_queue(
+    limit: int = Query(default=100, ge=1, le=500),
+    session: Session = Depends(get_session),
+    _: object = Depends(require_permissions("events.review")),
+) -> ReviewQueueResponse:
+    return QueryService(session).list_review_queue(limit=limit)
 
 
 @router.post("/github-risks", response_model=GitHubRiskEventItem, status_code=status.HTTP_201_CREATED)
