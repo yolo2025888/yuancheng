@@ -21,6 +21,7 @@ else:
     os.environ["EBM_ENVIRONMENT"] = _previous_environment
 
 from app.models import Device, Employee, Role, User
+from app.services.agent_auth import create_device_agent_token, generate_device_agent_secret, hash_device_agent_secret
 from app.services.auth import hash_password
 
 
@@ -49,6 +50,7 @@ def seeded_device(client: TestClient) -> dict[str, str]:
     app = client.app
     employee_id = uuid4()
     device_id = uuid4()
+    agent_secret = generate_device_agent_secret()
 
     with Session(app.state.engine) as session:
         employee = Employee(
@@ -65,13 +67,19 @@ def seeded_device(client: TestClient) -> dict[str, str]:
             agent_version="0.1.0",
             screen_count=2,
             last_heartbeat_at=datetime.now(timezone.utc),
+            agent_token_hash=hash_device_agent_secret(agent_secret),
             status="online",
         )
         session.add(employee)
         session.add(device)
         session.commit()
 
-    return {"employee_id": str(employee_id), "device_id": str(device_id)}
+    return {
+        "employee_id": str(employee_id),
+        "device_id": str(device_id),
+        "agent_secret": agent_secret,
+        "agent_token": create_device_agent_token(device_id, agent_secret),
+    }
 
 
 @pytest.fixture
@@ -135,5 +143,5 @@ def auth_headers(client: TestClient):
 
 
 @pytest.fixture
-def agent_headers(client: TestClient) -> dict[str, str]:
-    return {"Authorization": f"Bearer {client.app.state.settings.agent_api_token}"}
+def agent_headers(seeded_device: dict[str, str]) -> dict[str, str]:
+    return {"Authorization": f"Bearer {seeded_device['agent_token']}"}

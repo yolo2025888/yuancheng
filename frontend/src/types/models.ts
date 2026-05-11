@@ -295,6 +295,12 @@ export type AttendanceRuleSummary = {
   sourceLabel?: string;
 };
 
+export type AttendanceRuleUpdateInput = {
+  name?: string;
+  clockInLateAfter: string;
+  clockOutEarlyBefore: string;
+};
+
 export type AttendanceReviewStatus =
   | 'pending'
   | 'reviewed'

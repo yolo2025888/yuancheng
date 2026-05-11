@@ -460,15 +460,24 @@ class QueryService:
 
         records = self.session.exec(statement.limit(limit)).all()
         employee_ids = [record.employee_id for record in records if record.employee_id is not None]
+        employee_nos = sorted({record.employee_no for record in records if record.employee_no})
         employees_by_id = {
             employee.id: employee
             for employee in self.session.exec(select(Employee).where(Employee.id.in_(employee_ids))).all()
         } if employee_ids else {}
+        employees_by_no = {
+            employee.employee_no: employee
+            for employee in self.session.exec(select(Employee).where(Employee.employee_no.in_(employee_nos))).all()
+        } if employee_nos else {}
         return AttendanceListResponse(
             items=[
                 self._build_attendance_item(
                     record=record,
-                    employee=employees_by_id.get(record.employee_id) if record.employee_id is not None else None,
+                    employee=(
+                        employees_by_id.get(record.employee_id)
+                        if record.employee_id is not None
+                        else employees_by_no.get(record.employee_no or "")
+                    ) or employees_by_no.get(record.employee_no or ""),
                 )
                 for record in records
             ],
@@ -544,6 +553,8 @@ class QueryService:
                         if device.last_input_activity_json
                         else None
                     ),
+                    has_agent_token=device.agent_token_hash is not None,
+                    agent_token_revoked_at=device.agent_token_revoked_at,
                     created_at=device.created_at,
                     updated_at=device.updated_at,
                 )

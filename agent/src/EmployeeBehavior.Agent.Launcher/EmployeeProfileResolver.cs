@@ -25,28 +25,40 @@ internal sealed class EmployeeProfileResolver
         try
         {
             var resolved = await TryResolveEmployeeAsync(config, normalizedCode);
-            var ruleSummary = await TryLoadAttendanceRuleSummaryAsync(config, normalizedCode)
-                              ?? await TryLoadPolicySummaryAsync(config);
-
             if (resolved is not null)
             {
-                return resolved with
-                {
-                    RuleSummary = ChooseRuleSummary(resolved.RuleSummary, ruleSummary),
-                    Source = "backend"
-                };
+                return resolved with { Source = "backend" };
             }
 
             return EmployeeProfile.LocalFallback(
                 normalizedCode,
-                "employee resolver unavailable",
-                ruleSummary);
+                "employee resolver unavailable");
         }
         catch (Exception ex) when (
             ex is IOException or HttpRequestException or JsonException or InvalidOperationException or TaskCanceledException)
         {
             return EmployeeProfile.LocalFallback(normalizedCode, $"{ex.GetType().Name}: {ex.Message}");
         }
+    }
+
+    public async Task<EmployeeProfile> ResolveRuleSummaryAsync(EmployeeProfile profile)
+    {
+        var config = LauncherBackendConfigLoader.TryLoad();
+        if (config is null)
+        {
+            return profile.WithLocalDefaultRules("backend config unavailable");
+        }
+
+        var result = await TryLoadAttendanceRuleSummaryAsync(config, profile.EmployeeNo);
+        if (!string.IsNullOrWhiteSpace(result.Summary))
+        {
+            return profile.WithRuleSummary(
+                result.Summary,
+                "backend attendance rules",
+                "loaded from GET /api/agent/attendance/rules");
+        }
+
+        return profile.WithLocalDefaultRules(result.Failure ?? "attendance rules unavailable");
     }
 
     private async Task<EmployeeProfile?> TryResolveEmployeeAsync(LauncherBackendConfig config, string employeeCode)
@@ -98,74 +110,36 @@ internal sealed class EmployeeProfileResolver
         }
     }
 
-    private async Task<string?> TryLoadPolicySummaryAsync(LauncherBackendConfig config)
+    private async Task<RuleSummaryFetchResult> TryLoadAttendanceRuleSummaryAsync(LauncherBackendConfig config, string employeeCode)
     {
-        var response = await SendAsync(config, new HttpRequestMessage(HttpMethod.Get, new Uri(config.ApiBaseUrl, "/api/agent/policy")));
-        if (response is null)
+        try
         {
-            return null;
+            var query = $"employee_no={Uri.EscapeDataString(employeeCode)}";
+            var response = await SendAsync(
+                config,
+                new HttpRequestMessage(HttpMethod.Get, new Uri(config.ApiBaseUrl, $"/api/agent/attendance/rules?{query}")));
+            if (response is null)
+            {
+                return RuleSummaryFetchResult.Failed("attendance/rules returned no response");
+            }
+
+            using (response)
+            {
+                if (!response.IsSuccessStatusCode)
+                {
+                    return RuleSummaryFetchResult.Failed($"attendance/rules returned HTTP {(int)response.StatusCode}");
+                }
+
+                var root = JsonNode.Parse(await response.Content.ReadAsStringAsync());
+                var lateAfter = FirstNonBlank(ReadString(root, "clock_in_late_after"), "09:30");
+                var earlyBefore = FirstNonBlank(ReadString(root, "clock_out_early_before"), "18:00");
+                return RuleSummaryFetchResult.Success($"late after {lateAfter}; early leave before {earlyBefore}");
+            }
         }
-
-        using (response)
+        catch (Exception ex) when (
+            ex is IOException or HttpRequestException or JsonException or InvalidOperationException or TaskCanceledException)
         {
-            if (!response.IsSuccessStatusCode)
-            {
-                return null;
-            }
-
-            var root = JsonNode.Parse(await response.Content.ReadAsStringAsync());
-            var version = ReadString(root, "version");
-            var interval = ReadInt(root, "screenshot_interval_seconds");
-            var threshold = ReadInt(root, "no_change_threshold");
-            var retention = ReadInt(root, "retention_days");
-
-            var parts = new List<string>();
-            if (!string.IsNullOrWhiteSpace(version))
-            {
-                parts.Add($"policy {version}");
-            }
-
-            if (interval is not null)
-            {
-                parts.Add($"screenshot {interval}s");
-            }
-
-            if (threshold is not null)
-            {
-                parts.Add($"no-change threshold {threshold}");
-            }
-
-            if (retention is not null)
-            {
-                parts.Add($"retention {retention}d");
-            }
-
-            return parts.Count > 0 ? string.Join("; ", parts) : null;
-        }
-    }
-
-    private async Task<string?> TryLoadAttendanceRuleSummaryAsync(LauncherBackendConfig config, string employeeCode)
-    {
-        var query = $"employee_no={Uri.EscapeDataString(employeeCode)}";
-        var response = await SendAsync(
-            config,
-            new HttpRequestMessage(HttpMethod.Get, new Uri(config.ApiBaseUrl, $"/api/agent/attendance/rules?{query}")));
-        if (response is null)
-        {
-            return null;
-        }
-
-        using (response)
-        {
-            if (!response.IsSuccessStatusCode)
-            {
-                return null;
-            }
-
-            var root = JsonNode.Parse(await response.Content.ReadAsStringAsync());
-            var lateAfter = FirstNonBlank(ReadString(root, "clock_in_late_after"), "09:30");
-            var earlyBefore = FirstNonBlank(ReadString(root, "clock_out_early_before"), "18:00");
-            return $"late after {lateAfter}; early leave before {earlyBefore}";
+            return RuleSummaryFetchResult.Failed($"{ex.GetType().Name}: {ex.Message}");
         }
     }
 
@@ -226,6 +200,10 @@ internal sealed class EmployeeProfileResolver
             DisplayName: displayName,
             Department: department,
             RuleSummary: ruleSummary,
+            RuleSource: string.IsNullOrWhiteSpace(ruleSummary) ? "local default" : "employee profile payload",
+            RuleStatus: string.IsNullOrWhiteSpace(ruleSummary)
+                ? "attendance/rules will refresh after clock-in"
+                : "rule summary carried by employee profile payload",
             Source: "backend",
             Message: "employee resolved by backend");
     }
@@ -251,11 +229,6 @@ internal sealed class EmployeeProfileResolver
         return string.Join("; ", parts);
     }
 
-    private static string? ChooseRuleSummary(string? preferred, string? fallback)
-    {
-        return !string.IsNullOrWhiteSpace(preferred) ? preferred : fallback;
-    }
-
     private static string? ReadString(JsonNode? node, string propertyName)
     {
         var value = node?[propertyName];
@@ -274,24 +247,6 @@ internal sealed class EmployeeProfileResolver
         }
     }
 
-    private static int? ReadInt(JsonNode? node, string propertyName)
-    {
-        var value = node?[propertyName];
-        if (value is null)
-        {
-            return null;
-        }
-
-        try
-        {
-            return value.GetValue<int>();
-        }
-        catch (InvalidOperationException)
-        {
-            return null;
-        }
-    }
-
     private static string FirstNonBlank(params string?[] values)
     {
         return values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value))?.Trim() ?? string.Empty;
@@ -303,17 +258,61 @@ internal sealed record EmployeeProfile(
     string DisplayName,
     string? Department,
     string? RuleSummary,
+    string RuleSource,
+    string? RuleStatus,
     string Source,
     string Message)
 {
+    public const string DefaultRuleSummary = "late after 09:30; early leave before 18:00";
+
     public static EmployeeProfile LocalFallback(string employeeCode, string message, string? ruleSummary = null)
     {
         return new EmployeeProfile(
             EmployeeNo: employeeCode,
             DisplayName: employeeCode,
             Department: null,
-            RuleSummary: ruleSummary ?? "local fallback: late after 09:30; early leave before 18:00",
+            RuleSummary: ruleSummary ?? DefaultRuleSummary,
+            RuleSource: "local default",
+            RuleStatus: BuildRuleFallbackStatus(message),
             Source: "local fallback",
             Message: message);
+    }
+
+    public EmployeeProfile WithRuleSummary(string? ruleSummary, string ruleSource, string? ruleStatus)
+    {
+        return this with
+        {
+            RuleSummary = string.IsNullOrWhiteSpace(ruleSummary) ? RuleSummary ?? DefaultRuleSummary : ruleSummary,
+            RuleSource = ruleSource,
+            RuleStatus = ruleStatus
+        };
+    }
+
+    public EmployeeProfile WithLocalDefaultRules(string message)
+    {
+        return this with
+        {
+            RuleSummary = DefaultRuleSummary,
+            RuleSource = "local default",
+            RuleStatus = BuildRuleFallbackStatus(message)
+        };
+    }
+
+    private static string BuildRuleFallbackStatus(string message)
+    {
+        return $"attendance/rules unavailable; using local default ({message})";
+    }
+}
+
+internal sealed record RuleSummaryFetchResult(string? Summary, string? Failure)
+{
+    public static RuleSummaryFetchResult Success(string summary)
+    {
+        return new RuleSummaryFetchResult(summary, null);
+    }
+
+    public static RuleSummaryFetchResult Failed(string failure)
+    {
+        return new RuleSummaryFetchResult(null, failure);
     }
 }

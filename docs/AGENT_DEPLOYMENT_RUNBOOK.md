@@ -80,7 +80,7 @@ Start from `agent/src/EmployeeBehavior.Agent.Service/appsettings.json.example` a
 - `ApiBaseUrl`
   Absolute backend base URL, for example `https://monitoring.internal.example`.
 - `ApiToken`
-  Service deployments use the backend agent signing secret and derive device-scoped bearer tokens locally. Launcher-only deployments may use a pre-issued device-scoped `v1:<device_id>:<signature>` token. Production backends reject the raw signing secret itself.
+  Use an issued device-scoped `v2:<device_id>:<secret>` bearer token from `POST /api/devices/{device_id}/agent-token`. The plaintext token is returned once; the backend stores only a hash and can revoke that one device without affecting the fleet. Raw signing secrets and legacy `v1:` tokens are development/test compatibility paths only and are rejected by production backends.
 - `DryRun`
   Keep `true` for initial validation. Switch to `false` only after local and backend checks pass.
 - `EmployeeId`
@@ -198,7 +198,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Install-Agen
    - `POST /api/agent/heartbeat`
    - `GET /api/agent/policy`
    - `POST /api/agent/screenshots/upload`
-   All three requests must include a device-scoped `Authorization: Bearer v1:<device_id>:<signature>` token.
+   All three requests must include a device-scoped `Authorization: Bearer v2:<device_id>:<secret>` token.
 9. Restart the service once and confirm any queued screenshots retry from `UploadQueuePath`.
 
 Helper task notes:

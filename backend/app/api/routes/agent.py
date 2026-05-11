@@ -48,9 +48,10 @@ def resolve_employee(
 def get_attendance_rules(
     employee_no: str | None = Query(default=None, max_length=64),
     _: AgentPrincipal = Depends(require_agent_token),
+    session: Session = Depends(get_session),
 ) -> AttendanceRuleResponse:
     normalized_employee_no = (employee_no.strip() or None) if employee_no is not None else None
-    rules = AttendanceRuleService().get_rules(employee_no=normalized_employee_no)
+    rules = AttendanceRuleService(session).get_rules(employee_no=normalized_employee_no)
     return AttendanceRuleResponse(
         clock_in_late_after=format_rule_time(rules.clock_in_late_after),
         clock_out_early_before=format_rule_time(rules.clock_out_early_before),

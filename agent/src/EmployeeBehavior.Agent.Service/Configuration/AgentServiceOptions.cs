@@ -8,7 +8,9 @@ public sealed class AgentServiceOptions
 
     public string ApiBaseUrl { get; set; } = "https://backend.example.internal";
 
-    public string ApiToken { get; set; } = "replace-me";
+    // Use an issued device-scoped bearer token (`v2:`) for production. Raw
+    // signing secrets and legacy `v1:` tokens are development/test paths only.
+    public string ApiToken { get; set; } = "replace-with-issued-scoped-token";
 
     public bool DryRun { get; set; } = true;
 

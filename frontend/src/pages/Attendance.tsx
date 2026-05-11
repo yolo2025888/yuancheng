@@ -1,4 +1,4 @@
-import { Button, Card, Input, Modal, Select, Space, Table, Tag, Typography, message } from 'antd';
+import { Alert, Button, Card, Form, Input, Modal, Select, Space, Table, Tag, Typography, message } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { ApiStatusNotice } from '../components/ApiStatusNotice';
@@ -18,6 +18,11 @@ type ReviewDraft = {
   record: AttendanceRecord;
   reviewStatus: AttendanceReviewStatus;
   note: string;
+};
+
+type AttendanceRuleEditorValues = {
+  clockInLateAfter: string;
+  clockOutEarlyBefore: string;
 };
 
 const DEFAULT_FILTERS: AttendanceFilters = {
@@ -43,11 +48,15 @@ export function AttendancePage() {
   const [ruleApiStatus, setRuleApiStatus] = useState<ApiStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [reviewingKey, setReviewingKey] = useState<string | null>(null);
+  const [ruleEditorOpen, setRuleEditorOpen] = useState(false);
+  const [ruleSaving, setRuleSaving] = useState(false);
+  const [ruleSaveError, setRuleSaveError] = useState<string | null>(null);
   const [filters, setFilters] = useState<AttendanceFilters>(DEFAULT_FILTERS);
   const [reviewDraft, setReviewDraft] = useState<ReviewDraft | null>(null);
   const { canAccess } = useAuth();
   const canManageAttendance = canAccess('attendance.manage');
   const [messageApi, contextHolder] = message.useMessage();
+  const [ruleForm] = Form.useForm<AttendanceRuleEditorValues>();
 
   const loadAttendance = useCallback(async () => {
     setLoading(true);
@@ -64,6 +73,7 @@ export function AttendancePage() {
     const result = await adminApi.getAttendanceRules();
     setRuleSummary(result.data);
     setRuleApiStatus(result.apiStatus);
+    return result;
   }, []);
 
   useEffect(() => {
@@ -94,6 +104,53 @@ export function AttendancePage() {
     },
     [messageApi, reviewDraft]
   );
+
+  const openRuleEditor = useCallback(() => {
+    ruleForm.setFieldsValue({
+      clockInLateAfter: ruleSummary.lateThreshold,
+      clockOutEarlyBefore: ruleSummary.earlyLeaveThreshold
+    });
+    setRuleSaveError(null);
+    setRuleEditorOpen(true);
+  }, [ruleForm, ruleSummary.earlyLeaveThreshold, ruleSummary.lateThreshold]);
+
+  const submitRuleUpdate = useCallback(async () => {
+    const values = await ruleForm.validateFields().catch(() => null);
+
+    if (!values) {
+      return;
+    }
+
+    setRuleSaving(true);
+    setRuleSaveError(null);
+    const result = await adminApi.updateAttendanceRule({
+      name: ruleSummary.name,
+      clockInLateAfter: values.clockInLateAfter,
+      clockOutEarlyBefore: values.clockOutEarlyBefore
+    });
+
+    setRuleApiStatus(result.apiStatus);
+
+    if (result.data) {
+      setRuleSummary(result.data);
+      const refreshed = await loadAttendanceRules();
+
+      if (refreshed.apiStatus.source !== 'live') {
+        setRuleSummary(result.data);
+        setRuleApiStatus(result.apiStatus);
+      }
+
+      messageApi.success('Default attendance rule updated.');
+      setRuleEditorOpen(false);
+      setRuleSaving(false);
+      return;
+    }
+
+    const failureMessage = getRuleUpdateFailureMessage(result.errorCode, result.apiStatus.detail);
+    setRuleSaveError(failureMessage);
+    messageApi.error(failureMessage);
+    setRuleSaving(false);
+  }, [loadAttendanceRules, messageApi, ruleForm, ruleSummary.name]);
 
   const filteredRows = useMemo(
     () =>
@@ -156,6 +213,11 @@ export function AttendancePage() {
               {ruleSummary.sourceLabel ?? ruleApiStatus?.label ?? 'Fallback defaults'}
             </Tag>
             {ruleSummary.timezone ? <Tag color="blue">{ruleSummary.timezone}</Tag> : null}
+            {canManageAttendance ? (
+              <Button size="small" onClick={openRuleEditor}>
+                Edit thresholds
+              </Button>
+            ) : null}
           </Space>
           <Space size={[8, 8]} wrap>
             <Tag color="orange">Late after {ruleSummary.lateThreshold}</Tag>
@@ -342,6 +404,57 @@ export function AttendancePage() {
         />
       </Card>
       <Modal
+        title="Edit default attendance rule"
+        open={ruleEditorOpen}
+        okText="Save"
+        confirmLoading={ruleSaving}
+        destroyOnClose
+        onCancel={() => {
+          setRuleEditorOpen(false);
+          setRuleSaveError(null);
+        }}
+        onOk={() => void submitRuleUpdate()}
+      >
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          {ruleSaveError ? (
+            <Alert
+              type="error"
+              showIcon
+              message="Unable to save the default attendance rule"
+              description={ruleSaveError}
+            />
+          ) : null}
+          <Form form={ruleForm} layout="vertical" preserve={false}>
+            <Form.Item
+              label="Late after"
+              name="clockInLateAfter"
+              rules={[
+                { required: true, message: 'Enter the late threshold.' },
+                {
+                  validator: (_rule, value: string) =>
+                    isValidTimeValue(value) ? Promise.resolve() : Promise.reject(new Error('Use 24-hour HH:MM.'))
+                }
+              ]}
+            >
+              <Input type="time" step={60} aria-label="Late after" />
+            </Form.Item>
+            <Form.Item
+              label="Early leave before"
+              name="clockOutEarlyBefore"
+              rules={[
+                { required: true, message: 'Enter the early leave threshold.' },
+                {
+                  validator: (_rule, value: string) =>
+                    isValidTimeValue(value) ? Promise.resolve() : Promise.reject(new Error('Use 24-hour HH:MM.'))
+                }
+              ]}
+            >
+              <Input type="time" step={60} aria-label="Early leave before" />
+            </Form.Item>
+          </Form>
+        </Space>
+      </Modal>
+      <Modal
         title={reviewDraft ? `${reviewStatusLabel(reviewDraft.reviewStatus)} - ${reviewDraft.record.employee}` : 'Review'}
         open={Boolean(reviewDraft)}
         okText="Submit review"
@@ -398,6 +511,26 @@ function reviewStatusColor(status: string) {
     return 'green';
   }
   return 'default';
+}
+
+function isValidTimeValue(value?: string) {
+  return Boolean(value && /^([01]\d|2[0-3]):([0-5]\d)$/.test(value));
+}
+
+function getRuleUpdateFailureMessage(errorCode: string | undefined, detail: string) {
+  if (errorCode === 'forbidden') {
+    return 'You do not have permission to update the default attendance rule.';
+  }
+
+  if (errorCode === 'not_found') {
+    return 'This backend does not expose the default attendance rule update API yet.';
+  }
+
+  if (errorCode === 'invalid') {
+    return detail || 'The backend rejected the submitted rule values.';
+  }
+
+  return detail || 'The default attendance rule could not be saved.';
 }
 
 function reviewStatusLabel(status: string) {

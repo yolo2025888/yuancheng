@@ -20,7 +20,7 @@ internal static class LauncherBackendConfigLoader
             var root = JsonNode.Parse(File.ReadAllText(serviceSettingsPath))?.AsObject();
             var service = root?["AgentService"]?.AsObject();
             var apiBaseUrlValue = service?["ApiBaseUrl"]?.GetValue<string>();
-            var apiToken = service?["ApiToken"]?.GetValue<string>();
+            var apiToken = service?["ApiToken"]?.GetValue<string>()?.Trim();
 
             if (!Uri.TryCreate(apiBaseUrlValue, UriKind.Absolute, out var apiBaseUrl))
             {
@@ -34,6 +34,8 @@ internal static class LauncherBackendConfigLoader
                 return null;
             }
 
+            // Launcher forwards already issued scoped bearer tokens as-is. It does
+            // not derive a per-device token from a raw signing secret.
             return new LauncherBackendConfig(apiBaseUrl, apiToken);
         }
         catch (Exception ex) when (ex is IOException or JsonException or InvalidOperationException)

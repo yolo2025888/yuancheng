@@ -2,8 +2,9 @@
   "AgentService": {
     "_comment": "Keep this service non-interactive. It uploads helper snapshots and must not capture raw input or private content on its own.",
     "_contractNote": "SessionHelperPipeName must match SessionHelper:PipeName. DryRun=true is the safest default for local contract and deployment testing.",
+    "_tokenNote": "Use an issued device-scoped v2:<device_id>:<secret> token for production. Raw signing secrets and legacy v1 tokens are development/test compatibility paths only.",
     "ApiBaseUrl": "https://backend.example.internal",
-    "ApiToken": "replace-with-device-or-agent-token",
+    "ApiToken": "v2:replace-with-issued-device-token",
     "DryRun": true,
     "EmployeeId": null,
     "DeviceIdPath": "C:\\ProgramData\\EmployeeBehaviorAgent\\device-id.json",

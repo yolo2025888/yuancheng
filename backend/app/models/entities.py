@@ -63,6 +63,11 @@ class Device(TimestampedUUIDModel, table=True):
         default=None,
         sa_column=Column(JSON, nullable=True),
     )
+    agent_token_hash: str | None = Field(default=None)
+    agent_token_revoked_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), nullable=True),
+    )
     status: str = Field(default="offline", index=True)
 
 

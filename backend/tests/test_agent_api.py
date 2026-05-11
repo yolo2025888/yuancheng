@@ -12,7 +12,13 @@ from sqlmodel import Session, select
 
 from app.core.config import Settings
 from app.models import BehaviorEvent, Device, Employee, Policy, Screenshot
-from app.services.agent_auth import authenticate_agent_token, create_scoped_agent_token
+from app.services.agent_auth import (
+    authenticate_agent_token,
+    create_device_agent_token,
+    create_scoped_agent_token,
+    generate_device_agent_secret,
+    hash_device_agent_secret,
+)
 from app.services.storage import LocalScreenshotStorage
 
 ONE_PIXEL_PNG = base64.b64decode(
@@ -113,14 +119,106 @@ def test_agent_can_fetch_default_attendance_rules(client: TestClient, agent_head
     assert employee_response.json() == response.json()
 
 
+def test_agent_attendance_uses_persisted_default_rules(
+    client: TestClient,
+    seeded_device: dict[str, str],
+    agent_headers: dict[str, str],
+    auth_headers,
+) -> None:
+    update_response = client.put(
+        "/api/attendance/rules/default",
+        headers=auth_headers(
+            username="attendance.rule.compliance",
+            password="compliance-password",
+            role_name="Compliance",
+        ),
+        json={
+            "name": "Later core hours",
+            "clock_in_late_after": "10:00",
+            "clock_out_early_before": "17:30",
+        },
+    )
+    assert update_response.status_code == 200
+
+    rules_response = client.get("/api/agent/attendance/rules", headers=agent_headers)
+    assert rules_response.status_code == 200
+    assert rules_response.json() == {
+        "clock_in_late_after": "10:00",
+        "clock_out_early_before": "17:30",
+    }
+
+    normal_clock_in_response = client.post(
+        "/api/agent/attendance",
+        headers=agent_headers,
+        json={
+            "employee_no": "E-001",
+            "user_name": "Alice",
+            "machine_name": "DEV-PC-001",
+            "event_type": "clock_in",
+            "occurred_at": "2026-05-11T09:45:00Z",
+            "source": "launcher",
+        },
+    )
+    late_clock_in_response = client.post(
+        "/api/agent/attendance",
+        headers=agent_headers,
+        json={
+            "employee_no": "E-001",
+            "user_name": "Alice",
+            "machine_name": "DEV-PC-001",
+            "event_type": "clock_in",
+            "occurred_at": "2026-05-12T10:10:00Z",
+            "source": "launcher",
+        },
+    )
+    early_clock_out_response = client.post(
+        "/api/agent/attendance",
+        headers=agent_headers,
+        json={
+            "employee_no": "E-001",
+            "user_name": "Alice",
+            "machine_name": "DEV-PC-001",
+            "event_type": "clock_out",
+            "occurred_at": "2026-05-13T17:20:00Z",
+            "source": "launcher",
+        },
+    )
+
+    assert normal_clock_in_response.status_code == 201
+    assert normal_clock_in_response.json()["anomaly_status"] == "normal"
+    assert normal_clock_in_response.json()["review_status"] == "reviewed"
+
+    assert late_clock_in_response.status_code == 201
+    assert late_clock_in_response.json()["anomaly_status"] == "late"
+    assert late_clock_in_response.json()["anomaly_reasons"] == ["Clock-in after 10:00"]
+
+    assert early_clock_out_response.status_code == 201
+    assert early_clock_out_response.json()["anomaly_status"] == "early_leave"
+    assert early_clock_out_response.json()["anomaly_reasons"] == ["Clock-out before 17:30"]
+
+
 def test_scoped_agent_token_is_bound_to_device(client: TestClient, seeded_device: dict[str, str]) -> None:
-    matching_token = create_scoped_agent_token(seeded_device["device_id"], client.app.state.settings)
     mismatch_device_id = uuid4()
-    mismatch_token = create_scoped_agent_token(mismatch_device_id, client.app.state.settings)
+    mismatch_secret = generate_device_agent_secret()
+    mismatch_token = create_device_agent_token(mismatch_device_id, mismatch_secret)
+    with Session(client.app.state.engine) as session:
+        session.add(
+            Device(
+                id=mismatch_device_id,
+                employee_id=None,
+                hostname="DEV-PC-OTHER",
+                os_type="windows",
+                agent_version="0.1.0",
+                screen_count=1,
+                agent_token_hash=hash_device_agent_secret(mismatch_secret),
+                status="online",
+            )
+        )
+        session.commit()
 
     matching_response = client.post(
         "/api/agent/heartbeat",
-        headers={"Authorization": f"Bearer {matching_token}"},
+        headers={"Authorization": f"Bearer {seeded_device['agent_token']}"},
         json={
             "device_id": seeded_device["device_id"],
             "employee_id": seeded_device["employee_id"],
@@ -150,16 +248,66 @@ def test_scoped_agent_token_is_bound_to_device(client: TestClient, seeded_device
     assert mismatch_response.json()["detail"] == "Agent token/device mismatch"
 
 
-def test_global_agent_token_is_rejected_outside_dev_and_test() -> None:
+def test_global_and_v1_agent_tokens_are_rejected_outside_dev_and_test(
+    client: TestClient,
+    seeded_device: dict[str, str],
+) -> None:
     settings = Settings(
         environment="production",
         auth_secret="production-secret-with-enough-entropy-2026",
         agent_api_token="production-agent-token-with-enough-entropy",
     )
-    scoped = create_scoped_agent_token(uuid4(), settings)
+    legacy_scoped = create_scoped_agent_token(seeded_device["device_id"], settings)
 
-    assert authenticate_agent_token(settings.agent_api_token, settings) is None
-    assert authenticate_agent_token(scoped, settings) is not None
+    with Session(client.app.state.engine) as session:
+        assert authenticate_agent_token(settings.agent_api_token, settings, session) is None
+        assert authenticate_agent_token(legacy_scoped, settings, session) is None
+        assert authenticate_agent_token(seeded_device["agent_token"], settings, session) is not None
+
+
+def test_v2_agent_token_rejects_missing_hash_and_revoked_device(
+    client: TestClient,
+    seeded_device: dict[str, str],
+) -> None:
+    no_hash_device_id = uuid4()
+    no_hash_secret = generate_device_agent_secret()
+    with Session(client.app.state.engine) as session:
+        session.add(
+            Device(
+                id=no_hash_device_id,
+                employee_id=None,
+                hostname="NO-HASH-PC",
+                os_type="windows",
+                agent_version="0.1.0",
+                screen_count=1,
+                status="online",
+            )
+        )
+        session.commit()
+
+    missing_hash_response = client.get(
+        "/api/agent/policy",
+        params={"device_id": str(no_hash_device_id)},
+        headers={"Authorization": f"Bearer {create_device_agent_token(no_hash_device_id, no_hash_secret)}"},
+    )
+
+    with Session(client.app.state.engine) as session:
+        device = session.get(Device, UUID(seeded_device["device_id"]))
+        assert device is not None
+        device.agent_token_revoked_at = datetime.now(timezone.utc)
+        session.add(device)
+        session.commit()
+
+    revoked_response = client.get(
+        "/api/agent/policy",
+        params={"device_id": seeded_device["device_id"]},
+        headers={"Authorization": f"Bearer {seeded_device['agent_token']}"},
+    )
+
+    assert missing_hash_response.status_code == 401
+    assert missing_hash_response.json()["detail"] == "Invalid agent token"
+    assert revoked_response.status_code == 401
+    assert revoked_response.json()["detail"] == "Invalid agent token"
 
 
 def test_heartbeat_returns_policy(client: TestClient, seeded_device: dict[str, str], agent_headers: dict[str, str]) -> None:
@@ -416,14 +564,9 @@ def test_screenshot_complete_scoped_token_requires_bound_device_id(
     assert metadata_response.status_code == 201
     screenshot_id = metadata_response.json()["screenshot_id"]
 
-    scoped_headers = {
-        "Authorization": (
-            f"Bearer {create_scoped_agent_token(seeded_device['device_id'], client.app.state.settings)}"
-        )
-    }
     missing_device_response = client.post(
         f"/api/agent/screenshots/{screenshot_id}/complete",
-        headers=scoped_headers,
+        headers=agent_headers,
         json={
             "image_uri": "screenshots/emp/dev/2026/05/11/missing-device.jpg",
             "thumb_uri": "thumbnails/emp/dev/2026/05/11/missing-device.jpg",
@@ -431,8 +574,25 @@ def test_screenshot_complete_scoped_token_requires_bound_device_id(
         },
     )
 
+    mismatch_device_id = uuid4()
+    mismatch_secret = generate_device_agent_secret()
+    with Session(client.app.state.engine) as session:
+        session.add(
+            Device(
+                id=mismatch_device_id,
+                employee_id=None,
+                hostname="SCREENSHOT-PC-OTHER",
+                os_type="windows",
+                agent_version="0.1.0",
+                screen_count=1,
+                agent_token_hash=hash_device_agent_secret(mismatch_secret),
+                status="online",
+            )
+        )
+        session.commit()
+
     mismatched_headers = {
-        "Authorization": f"Bearer {create_scoped_agent_token(uuid4(), client.app.state.settings)}"
+        "Authorization": f"Bearer {create_device_agent_token(mismatch_device_id, mismatch_secret)}"
     }
     mismatched_device_response = client.post(
         f"/api/agent/screenshots/{screenshot_id}/complete",
@@ -469,7 +629,8 @@ def test_screenshot_requires_known_device(client: TestClient, agent_headers: dic
         },
     )
 
-    assert response.status_code == 404
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Agent token/device mismatch"
 
 
 def test_screenshot_direct_upload_requires_known_device(client: TestClient, agent_headers: dict[str, str]) -> None:
@@ -491,8 +652,8 @@ def test_screenshot_direct_upload_requires_known_device(client: TestClient, agen
         files={"file": ("screen.png", ONE_PIXEL_PNG, "image/png")},
     )
 
-    assert response.status_code == 404
-    assert response.json()["detail"] == "Device not found"
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Agent token/device mismatch"
 
 
 def test_screenshot_direct_upload_marks_record_failed_when_storage_rejects_image(

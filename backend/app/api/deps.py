@@ -67,6 +67,7 @@ def require_permissions(*permission_keys: str):
 
 def require_agent_token(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    session: Session = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> AgentPrincipal:
     configured_token = settings.agent_api_token.strip()
@@ -74,7 +75,7 @@ def require_agent_token(
     if credentials is None or credentials.scheme.casefold() != "bearer" or not configured_token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid agent token")
 
-    principal = authenticate_agent_token(supplied_token, settings)
+    principal = authenticate_agent_token(supplied_token, settings, session)
     if principal is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid agent token")
     return principal

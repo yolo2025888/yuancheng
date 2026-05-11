@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
@@ -14,7 +14,10 @@ from app.schemas.admin import (
     AttendanceRecordItem,
     AttendanceReviewRequest,
     AttendanceRuleSummary,
+    AttendanceRuleUpdateRequest,
     AuditLogListResponse,
+    DeviceAgentTokenIssueResponse,
+    DeviceAgentTokenRevokeResponse,
     DashboardSummaryResponse,
     DeviceListResponse,
     EmployeeRiskScoreListResponse,
@@ -26,9 +29,15 @@ from app.schemas.admin import (
     PolicyListResponse,
     PolicyUpdateRequest,
 )
+from app.models import Device
 from app.services.queries import QueryService
-from app.services.audit import AuditContext
-from app.services.agent_auth import AgentPrincipal
+from app.services.audit import AuditContext, AuditService
+from app.services.agent_auth import (
+    AgentPrincipal,
+    create_device_agent_token,
+    generate_device_agent_secret,
+    hash_device_agent_secret,
+)
 from app.services.attendance import AttendanceService
 from app.services.attendance_rules import AttendanceRuleService, format_rule_time
 from app.services.employee_admin import EmployeeAdminService
@@ -51,6 +60,66 @@ def list_devices(
     _: object = Depends(require_permissions("directory.view")),
 ) -> DeviceListResponse:
     return QueryService(session).list_devices()
+
+
+@router.post("/devices/{device_id}/agent-token", response_model=DeviceAgentTokenIssueResponse)
+def issue_device_agent_token(
+    device_id: UUID,
+    session: Session = Depends(get_session),
+    audit_context: AuditContext = Depends(get_audit_context),
+    _: object = Depends(require_permissions("directory.manage")),
+) -> DeviceAgentTokenIssueResponse:
+    device = session.get(Device, device_id)
+    if device is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device not found")
+
+    issued_at = datetime.now(timezone.utc)
+    secret = generate_device_agent_secret()
+    device.agent_token_hash = hash_device_agent_secret(secret)
+    device.agent_token_revoked_at = None
+    device.updated_at = issued_at
+    session.add(device)
+    AuditService(session).log(
+        action="device.agent_token.issued",
+        target_type="device",
+        target_id=device.id,
+        reason="Issued device-scoped agent token",
+        context=audit_context,
+    )
+    session.commit()
+
+    return DeviceAgentTokenIssueResponse(
+        device_id=device.id,
+        token=create_device_agent_token(device.id, secret),
+        issued_at=issued_at,
+    )
+
+
+@router.post("/devices/{device_id}/agent-token/revoke", response_model=DeviceAgentTokenRevokeResponse)
+def revoke_device_agent_token(
+    device_id: UUID,
+    session: Session = Depends(get_session),
+    audit_context: AuditContext = Depends(get_audit_context),
+    _: object = Depends(require_permissions("directory.manage")),
+) -> DeviceAgentTokenRevokeResponse:
+    device = session.get(Device, device_id)
+    if device is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device not found")
+
+    revoked_at = datetime.now(timezone.utc)
+    device.agent_token_revoked_at = revoked_at
+    device.updated_at = revoked_at
+    session.add(device)
+    AuditService(session).log(
+        action="device.agent_token.revoked",
+        target_type="device",
+        target_id=device.id,
+        reason="Revoked device-scoped agent token",
+        context=audit_context,
+    )
+    session.commit()
+
+    return DeviceAgentTokenRevokeResponse(device_id=device.id, revoked_at=revoked_at)
 
 
 @router.get("/dashboard/summary", response_model=DashboardSummaryResponse)
@@ -121,10 +190,27 @@ def list_attendance(
 
 @router.get("/attendance/rules/default", response_model=AttendanceRuleSummary)
 def get_default_attendance_rules(
+    session: Session = Depends(get_session),
     _: object = Depends(require_permissions("attendance.view")),
 ) -> AttendanceRuleSummary:
-    rules = AttendanceRuleService().get_rules()
+    rules = AttendanceRuleService(session).get_rules()
     return AttendanceRuleSummary(
+        name=rules.name,
+        clock_in_late_after=format_rule_time(rules.clock_in_late_after),
+        clock_out_early_before=format_rule_time(rules.clock_out_early_before),
+    )
+
+
+@router.put("/attendance/rules/default", response_model=AttendanceRuleSummary)
+def update_default_attendance_rules(
+    payload: AttendanceRuleUpdateRequest,
+    session: Session = Depends(get_session),
+    audit_context: AuditContext = Depends(get_audit_context),
+    _: object = Depends(require_permissions("attendance.manage")),
+) -> AttendanceRuleSummary:
+    rules = AttendanceRuleService(session).update_default_rules(payload, audit_context=audit_context)
+    return AttendanceRuleSummary(
+        name=rules.name,
         clock_in_late_after=format_rule_time(rules.clock_in_late_after),
         clock_out_early_before=format_rule_time(rules.clock_out_early_before),
     )

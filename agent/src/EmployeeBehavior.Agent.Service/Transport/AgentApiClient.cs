@@ -265,19 +265,49 @@ public sealed class AgentApiClient : IAgentApiClient
     private HttpRequestMessage CreateAuthorizedRequest(HttpMethod method, string requestUri, string deviceId)
     {
         var request = new HttpRequestMessage(method, requestUri);
-        if (!string.IsNullOrWhiteSpace(_options.ApiToken) && !string.IsNullOrWhiteSpace(deviceId))
+        var bearerToken = ResolveBearerToken(deviceId);
+        if (!string.IsNullOrWhiteSpace(bearerToken))
         {
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", BuildScopedAgentToken(deviceId));
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearerToken);
         }
         return request;
     }
 
-    private string BuildScopedAgentToken(string deviceId)
+    private string? ResolveBearerToken(string deviceId)
+    {
+        var apiToken = _options.ApiToken?.Trim();
+        if (string.IsNullOrWhiteSpace(apiToken))
+        {
+            return null;
+        }
+
+        if (IsScopedAgentToken(apiToken))
+        {
+            return apiToken;
+        }
+
+        if (string.IsNullOrWhiteSpace(deviceId))
+        {
+            return null;
+        }
+
+        // Raw signing-secret support remains only as a transitional/dev fallback
+        // until every deployment is provisioned with an issued device-scoped token.
+        return BuildScopedAgentToken(apiToken, deviceId);
+    }
+
+    private static bool IsScopedAgentToken(string token)
+    {
+        return token.StartsWith("v1:", StringComparison.OrdinalIgnoreCase) ||
+               token.StartsWith("v2:", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string BuildScopedAgentToken(string apiToken, string deviceId)
     {
         var normalizedDeviceId = Guid.TryParse(deviceId, out var parsed)
             ? parsed.ToString("D")
             : deviceId.Trim().ToLowerInvariant();
-        using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(_options.ApiToken));
+        using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(apiToken));
         var signature = hmac.ComputeHash(Encoding.ASCII.GetBytes(normalizedDeviceId));
         var encodedSignature = Convert.ToBase64String(signature)
             .TrimEnd('=')

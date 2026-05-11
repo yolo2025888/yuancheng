@@ -11,7 +11,7 @@ from sqlmodel import Session, select
 from app.core.config import Settings
 from app.main import create_app
 from app.models import AuditLog, AttendanceRecord, BehaviorEvent, Device, Employee, Policy, Role, Screenshot, User
-from app.services.agent_auth import create_scoped_agent_token
+from app.services.agent_auth import create_device_agent_token, generate_device_agent_secret, hash_device_agent_secret
 from app.services.auth import hash_password
 
 
@@ -170,6 +170,78 @@ def test_admin_list_apis_return_employees_devices_and_policies(
     assert policies_payload["items"][0]["is_active"] is True
     assert policies_payload["items"][0]["rules_json"] == {}
     assert policies_payload["items"][1]["version"] == "0.0.1"
+
+
+def test_device_agent_token_can_be_issued_used_and_revoked(
+    client: TestClient,
+    seeded_device: dict[str, str],
+    auth_headers,
+) -> None:
+    headers = auth_headers(bootstrap=True)
+    blocked_headers = auth_headers(
+        username="device.token.blocked",
+        password="blocked-password",
+        role_name="No Directory",
+    )
+
+    blocked_response = client.post(
+        f"/api/devices/{seeded_device['device_id']}/agent-token",
+        headers=blocked_headers,
+    )
+    issue_response = client.post(
+        f"/api/devices/{seeded_device['device_id']}/agent-token",
+        headers=headers,
+    )
+
+    assert blocked_response.status_code == 403
+    assert issue_response.status_code == 200
+    issued = issue_response.json()
+    issued_token = issued["token"]
+    assert issued["device_id"] == seeded_device["device_id"]
+    assert issued_token.startswith(f"v2:{seeded_device['device_id']}:")
+
+    with Session(client.app.state.engine) as session:
+        device = session.get(Device, UUID(seeded_device["device_id"]))
+        assert device is not None
+        assert device.agent_token_hash is not None
+        assert issued_token.split(":", maxsplit=2)[2] not in device.agent_token_hash
+        assert device.agent_token_revoked_at is None
+        issued_audit = session.exec(
+            select(AuditLog).where(AuditLog.action == "device.agent_token.issued")
+        ).first()
+        assert issued_audit is not None
+        assert issued_audit.target_id == device.id
+
+    policy_response = client.get(
+        "/api/agent/policy",
+        headers={"Authorization": f"Bearer {issued_token}"},
+        params={"device_id": seeded_device["device_id"]},
+    )
+    revoke_response = client.post(
+        f"/api/devices/{seeded_device['device_id']}/agent-token/revoke",
+        headers=headers,
+    )
+    revoked_policy_response = client.get(
+        "/api/agent/policy",
+        headers={"Authorization": f"Bearer {issued_token}"},
+        params={"device_id": seeded_device["device_id"]},
+    )
+    devices_response = client.get("/api/devices", headers=headers)
+
+    assert policy_response.status_code == 200
+    assert revoke_response.status_code == 200
+    assert revoked_policy_response.status_code == 401
+    assert revoked_policy_response.json()["detail"] == "Invalid agent token"
+    device_item = devices_response.json()["items"][0]
+    assert device_item["has_agent_token"] is True
+    assert device_item["agent_token_revoked_at"] is not None
+
+    with Session(client.app.state.engine) as session:
+        revoked_audit = session.exec(
+            select(AuditLog).where(AuditLog.action == "device.agent_token.revoked")
+        ).first()
+        assert revoked_audit is not None
+        assert revoked_audit.target_id == UUID(seeded_device["device_id"])
 
 
 def test_policy_crud_and_activation_write_audit_logs(client: TestClient, auth_headers) -> None:
@@ -693,6 +765,7 @@ def test_agent_attendance_records_are_token_gated_listed_and_reviewed(
     assert created["employee_id"] == seeded_device["employee_id"]
     assert created["device_id"] == seeded_device["device_id"]
     assert created["employee_no"] == "E-001"
+    assert created["employee_name"] == "Alice"
     assert created["anomaly_status"] == "late"
     assert created["review_status"] == "pending"
     assert created["anomaly_reasons"] == ["Clock-in after 09:30"]
@@ -795,6 +868,50 @@ def test_agent_attendance_records_are_token_gated_listed_and_reviewed(
         assert attendance_record.reviewed_by == audit_log.actor_id
 
 
+def test_attendance_list_resolves_employee_by_employee_no_when_id_is_missing(
+    client: TestClient,
+    seeded_device: dict[str, str],
+    auth_headers,
+) -> None:
+    _ = seeded_device
+    occurred_at = datetime(2026, 5, 12, 9, 40, tzinfo=timezone.utc)
+    record_id = uuid4()
+
+    with Session(client.app.state.engine) as session:
+        session.add(
+            AttendanceRecord(
+                id=record_id,
+                employee_no="E-001",
+                user_name="Alice",
+                machine_name="DEV-PC-001",
+                event_type="clock_in",
+                occurred_at=occurred_at,
+                work_date=occurred_at.date(),
+                anomaly_status="late",
+                anomaly_reasons_json=["Clock-in after 09:30"],
+                source="launcher",
+            )
+        )
+        session.commit()
+
+    headers = auth_headers(
+        username="attendance.lookup",
+        password="manager-password",
+        role_name="Manager",
+    )
+    response = client.get(
+        "/api/attendance",
+        headers=headers,
+        params={"employee_no": "E-001"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [item["id"] for item in payload["items"]] == [str(record_id)]
+    assert payload["items"][0]["employee_name"] == "Alice"
+    assert payload["items"][0]["department"] == "Engineering"
+
+
 def test_attendance_rules_endpoint_uses_view_permission(client: TestClient, auth_headers) -> None:
     manager_headers = auth_headers(
         username="attendance.rule.viewer",
@@ -820,15 +937,84 @@ def test_attendance_rules_endpoint_uses_view_permission(client: TestClient, auth
     assert blocked_response.status_code == 403
 
 
+def test_attendance_rules_can_be_updated_with_manage_permission(client: TestClient, auth_headers) -> None:
+    manager_headers = auth_headers(
+        username="attendance.rule.manager.blocked",
+        password="manager-password",
+        role_name="Manager",
+    )
+    compliance_headers = auth_headers(
+        username="attendance.rule.manager.allowed",
+        password="compliance-password",
+        role_name="Compliance",
+    )
+
+    blocked_response = client.put(
+        "/api/attendance/rules/default",
+        headers=manager_headers,
+        json={
+            "name": "Flexible summer schedule",
+            "clock_in_late_after": "10:00",
+            "clock_out_early_before": "17:30",
+        },
+    )
+    response = client.put(
+        "/api/attendance/rules/default",
+        headers=compliance_headers,
+        json={
+            "name": "Flexible summer schedule",
+            "clock_in_late_after": "10:00",
+            "clock_out_early_before": "17:30",
+        },
+    )
+
+    assert blocked_response.status_code == 403
+    assert response.status_code == 200
+    assert response.json() == {
+        "name": "Flexible summer schedule",
+        "clock_in_late_after": "10:00",
+        "clock_out_early_before": "17:30",
+        "timezone": "Local time",
+    }
+
+    get_response = client.get("/api/attendance/rules/default", headers=manager_headers)
+    assert get_response.status_code == 200
+    assert get_response.json() == response.json()
+
+    with Session(client.app.state.engine) as session:
+        persisted_policy = session.exec(select(Policy).where(Policy.is_active.is_(True))).first()
+        assert persisted_policy is not None
+        assert persisted_policy.rules_json["attendance_rule"] == {
+            "name": "Flexible summer schedule",
+            "clock_in_late_after": "10:00",
+            "clock_out_early_before": "17:30",
+        }
+
+
+def test_attendance_rules_update_rejects_invalid_time(client: TestClient, auth_headers) -> None:
+    headers = auth_headers(
+        username="attendance.rule.invalid",
+        password="compliance-password",
+        role_name="Compliance",
+    )
+
+    response = client.put(
+        "/api/attendance/rules/default",
+        headers=headers,
+        json={
+            "clock_in_late_after": "24:00",
+            "clock_out_early_before": "17:30",
+        },
+    )
+
+    assert response.status_code == 422
+
+
 def test_agent_attendance_scoped_token_uses_bound_device_for_early_leave(
     client: TestClient,
     seeded_device: dict[str, str],
 ) -> None:
-    scoped_headers = {
-        "Authorization": (
-            f"Bearer {create_scoped_agent_token(seeded_device['device_id'], client.app.state.settings)}"
-        )
-    }
+    scoped_headers = {"Authorization": f"Bearer {seeded_device['agent_token']}"}
     forged_device_id = str(uuid4())
 
     response = client.post(
@@ -858,6 +1044,7 @@ def test_agent_attendance_scoped_token_can_create_unmatched_employee_record(
     client: TestClient,
 ) -> None:
     orphan_device_id = uuid4()
+    orphan_secret = generate_device_agent_secret()
     with Session(client.app.state.engine) as session:
         session.add(
             Device(
@@ -868,13 +1055,14 @@ def test_agent_attendance_scoped_token_can_create_unmatched_employee_record(
                 agent_version="0.1.0",
                 screen_count=1,
                 last_heartbeat_at=datetime.now(timezone.utc),
+                agent_token_hash=hash_device_agent_secret(orphan_secret),
                 status="online",
             )
         )
         session.commit()
 
     scoped_headers = {
-        "Authorization": f"Bearer {create_scoped_agent_token(orphan_device_id, client.app.state.settings)}"
+        "Authorization": f"Bearer {create_device_agent_token(orphan_device_id, orphan_secret)}"
     }
     forged_device_id = str(uuid4())
     response = client.post(

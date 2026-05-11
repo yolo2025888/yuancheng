@@ -99,8 +99,9 @@ Copy-Item .\agent\src\EmployeeBehavior.Agent.Service\appsettings.json.example .\
 `AgentService` notes:
 
 - Keep `DryRun=true` for local contract verification before pointing at a real backend.
-- `ApiToken` is the backend agent signing secret for the service. The service derives `v1:<device_id>:<signature>` bearer tokens from the local device id; production backends reject the raw secret itself.
-- Launcher-only deployments may use an already issued device-scoped `v1:<device_id>:<signature>` token in the same field.
+- `ApiToken` should be an issued device-scoped `v2:<device_id>:<secret>` bearer token. If the value starts with `v2:`, the service uses it directly as `Authorization: Bearer ...`.
+- A raw backend signing secret and legacy `v1:<device_id>:<signature>` tokens are development/test compatibility paths only; production backends reject both.
+- The launcher forwards `ApiToken` as Bearer unchanged, so launcher-backed attendance/profile calls must be configured with an issued `v2:...` token.
 - `SessionHelperRequestTimeoutSeconds` must be long enough to cover multi-screen capture on slower endpoints.
 - `UploadBatchSize` affects only upload concurrency, not collection semantics.
 

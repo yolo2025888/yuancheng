@@ -21,7 +21,7 @@ class AttendanceService:
         device = self._resolve_device(payload)
         if employee is None and device is not None and device.employee_id is not None:
             employee = self.session.get(Employee, device.employee_id)
-        rules = AttendanceRuleService().get_rules(employee_no=payload.employee_no)
+        rules = AttendanceRuleService(self.session).get_rules(employee_no=payload.employee_no)
         anomaly_status, anomaly_reasons = evaluate_attendance_anomaly(payload.event_type, payload.occurred_at, rules)
         if self._has_existing_clock_record(employee, payload):
             anomaly_status = f"duplicate_{payload.event_type}"

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 from datetime import date, datetime
+import re
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -83,6 +84,8 @@ class DeviceItem(BaseModel):
     last_foreground_window: SafeForegroundWindow | None = None
     last_session_state: SafeSessionState | None = None
     last_input_activity: SafeInputActivity | None = None
+    has_agent_token: bool = False
+    agent_token_revoked_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -90,6 +93,17 @@ class DeviceItem(BaseModel):
 class DeviceListResponse(BaseModel):
     items: list[DeviceItem]
     total: int
+
+
+class DeviceAgentTokenIssueResponse(BaseModel):
+    device_id: UUID
+    token: str
+    issued_at: datetime
+
+
+class DeviceAgentTokenRevokeResponse(BaseModel):
+    device_id: UUID
+    revoked_at: datetime
 
 
 class PolicyItem(PolicySummary):
@@ -176,6 +190,38 @@ class AttendanceRuleSummary(BaseModel):
     clock_in_late_after: str
     clock_out_early_before: str
     timezone: str = "Local time"
+
+
+class AttendanceRuleUpdateRequest(BaseModel):
+    name: str | None = Field(default=None, max_length=120)
+    clock_in_late_after: str | None = None
+    clock_out_early_before: str | None = None
+
+    @field_validator("name")
+    @classmethod
+    def strip_optional_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("name must not be blank")
+        return stripped
+
+    @field_validator("clock_in_late_after", "clock_out_early_before")
+    @classmethod
+    def validate_optional_rule_time(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("time must not be blank")
+        if not re.fullmatch(r"\d{2}:\d{2}", stripped):
+            raise ValueError("time must use HH:MM format")
+        try:
+            parsed = datetime.strptime(stripped, "%H:%M")
+        except ValueError as exc:
+            raise ValueError("time must use HH:MM format") from exc
+        return parsed.strftime("%H:%M")
 
 
 class AttendanceReviewRequest(BaseModel):

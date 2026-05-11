@@ -18,6 +18,7 @@ import type {
   AccessMatrixRecord,
   AttendanceRecord,
   AttendanceRuleSummary,
+  AttendanceRuleUpdateInput,
   AttendanceReviewStatus,
   AuthIdentity,
   AuthSessionSeed,
@@ -80,6 +81,11 @@ type PolicyListData = ApiResult<PolicyRecord[]>;
 type AuditLogListData = ApiResult<AuditLogRecord[]>;
 type AttendanceListData = ApiResult<AttendanceRecord[]>;
 type AttendanceRuleSummaryData = ApiResult<AttendanceRuleSummary>;
+type AttendanceRuleMutationResult = {
+  apiStatus: ApiStatus;
+  data?: AttendanceRuleSummary;
+  errorCode?: 'forbidden' | 'not_found' | 'invalid' | 'unavailable';
+};
 type AttendanceReviewResult = { apiStatus: ApiStatus; records?: AttendanceRecord[] };
 type DashboardSummaryData = ApiResult<{
   kpis: KpiMetric[];
@@ -884,6 +890,79 @@ export const adminApi = {
         `Using default attendance thresholds: ${getErrorMessage(lastError)}`
       )
     };
+  },
+
+  async updateAttendanceRule(rule: AttendanceRuleUpdateInput): Promise<AttendanceRuleMutationResult> {
+    const endpoint = '/api/attendance/rules/default';
+
+    try {
+      const payload = await apiClient<unknown>(endpoint, {
+        method: 'PUT',
+        body: {
+          ...(rule.name ? { name: rule.name } : {}),
+          clock_in_late_after: normalizeTimeValue(rule.clockInLateAfter),
+          clock_out_early_before: normalizeTimeValue(rule.clockOutEarlyBefore)
+        }
+      });
+      const summary = mapAttendanceRuleSummary(payload);
+
+      return {
+        data: summary,
+        apiStatus: liveStatus(endpoint, `Updated ${summary.name}`)
+      };
+    } catch (error) {
+      const status = readErrorStatus(error);
+
+      if (status === 401 || status === 403) {
+        return {
+          apiStatus: {
+            source: 'mock',
+            state: 'unavailable',
+            label: 'Access denied',
+            detail: `Attendance rule update denied: ${getErrorMessage(error)}`,
+            endpoint
+          },
+          errorCode: 'forbidden'
+        };
+      }
+
+      if (status === 404) {
+        return {
+          apiStatus: {
+            source: 'mock',
+            state: 'unavailable',
+            label: 'Endpoint unavailable',
+            detail: 'Default attendance rule update API is not available on this backend.',
+            endpoint
+          },
+          errorCode: 'not_found'
+        };
+      }
+
+      if (status === 400 || status === 422) {
+        return {
+          apiStatus: {
+            source: 'mock',
+            state: 'unavailable',
+            label: 'Validation failed',
+            detail: `Attendance rule update rejected: ${getErrorMessage(error)}`,
+            endpoint
+          },
+          errorCode: 'invalid'
+        };
+      }
+
+      return {
+        apiStatus: {
+          source: 'mock',
+          state: 'unavailable',
+          label: 'Save failed',
+          detail: `Attendance rule was not saved: ${getErrorMessage(error)}`,
+          endpoint
+        },
+        errorCode: 'unavailable'
+      };
+    }
   },
 
   async reviewAttendance(

@@ -1,4 +1,5 @@
 using System.Drawing;
+using System.Text.Json;
 
 namespace EmployeeBehavior.Agent.Launcher;
 
@@ -129,7 +130,7 @@ internal sealed class LauncherForm : Form
 
         _ruleSummaryLabel = CreateLabel(string.Empty, 10, FontStyle.Regular);
         _ruleSummaryLabel.ForeColor = Color.FromArgb(74, 85, 104);
-        _ruleSummaryLabel.Height = 56;
+        _ruleSummaryLabel.Height = 78;
         _ruleSummaryLabel.Dock = DockStyle.Top;
 
         _clockInLabel = CreateLabel(string.Empty, 13, FontStyle.Bold);
@@ -204,6 +205,7 @@ internal sealed class LauncherForm : Form
 
         await _attendanceStore.AppendAsync("clock_in", _currentEmployeeProfile, _clockInAt.Value);
         ShowAttendance(processStatus);
+        _ = RefreshRuleSummaryAsync();
         _ = ReplayPendingAsync("clock-in");
     }
 
@@ -244,8 +246,12 @@ internal sealed class LauncherForm : Form
 
     private static string BuildRuleSummaryText(EmployeeProfile profile)
     {
-        var ruleSummary = string.IsNullOrWhiteSpace(profile.RuleSummary) ? "rules unavailable" : profile.RuleSummary;
-        return $"Profile: {profile.Source} - {profile.Message}{Environment.NewLine}Rules: {ruleSummary}";
+        var ruleSummary = string.IsNullOrWhiteSpace(profile.RuleSummary) ? EmployeeProfile.DefaultRuleSummary : profile.RuleSummary;
+        var ruleStatus = string.IsNullOrWhiteSpace(profile.RuleStatus) ? string.Empty : $"{Environment.NewLine}Rule status: {profile.RuleStatus}";
+        return
+            $"Profile: {profile.Source} - {profile.Message}{Environment.NewLine}" +
+            $"Rule source: {profile.RuleSource}{Environment.NewLine}" +
+            $"Rules: {ruleSummary}{ruleStatus}";
     }
 
     private void RefreshDuration()
@@ -262,6 +268,29 @@ internal sealed class LauncherForm : Form
         if (_clockOutAt is null)
         {
             _agentStatusLabel.Text = BuildAgentStatusText(_agentProcessManager.GetStatus());
+        }
+    }
+
+    private async Task RefreshRuleSummaryAsync()
+    {
+        var profile = _currentEmployeeProfile;
+        if (profile is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var refreshed = await _employeeProfileResolver.ResolveRuleSummaryAsync(profile);
+            _currentEmployeeProfile = refreshed;
+            _ruleSummaryLabel.Text = BuildRuleSummaryText(refreshed);
+        }
+        catch (Exception ex) when (
+            ex is IOException or HttpRequestException or JsonException or InvalidOperationException or TaskCanceledException)
+        {
+            var fallbackProfile = profile.WithLocalDefaultRules($"{ex.GetType().Name}: {ex.Message}");
+            _currentEmployeeProfile = fallbackProfile;
+            _ruleSummaryLabel.Text = BuildRuleSummaryText(fallbackProfile);
         }
     }
 
