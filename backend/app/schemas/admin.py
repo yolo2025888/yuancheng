@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
-from datetime import datetime
+from datetime import date, datetime
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -145,6 +145,48 @@ class AuditLogListResponse(BaseModel):
     total: int
 
 
+class AttendanceClockRequest(BaseModel):
+    user_name: str = Field(min_length=1, max_length=120)
+    employee_no: str | None = Field(default=None, max_length=64)
+    machine_name: str | None = Field(default=None, max_length=160)
+    event_type: str = Field(pattern="^(clock_in|clock_out)$")
+    occurred_at: datetime
+    source: str = Field(default="launcher", max_length=64)
+
+
+class AttendanceReviewRequest(BaseModel):
+    review_status: str = Field(pattern="^(pending|reviewed|confirmed|ignored)$")
+    review_note: str | None = None
+
+
+class AttendanceRecordItem(BaseModel):
+    id: UUID
+    employee_id: UUID | None = None
+    device_id: UUID | None = None
+    employee_no: str | None = None
+    employee_name: str | None = None
+    department: str | None = None
+    user_name: str
+    machine_name: str | None = None
+    event_type: str
+    occurred_at: datetime
+    work_date: date | None = None
+    anomaly_status: str
+    anomaly_reasons: list[str] = Field(default_factory=list)
+    review_status: str
+    review_note: str | None = None
+    reviewed_at: datetime | None = None
+    source: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class AttendanceListResponse(BaseModel):
+    items: list[AttendanceRecordItem]
+    total: int
+    generated_at: datetime
+
+
 class RiskFactorItem(BaseModel):
     code: str
     label: str
@@ -239,3 +281,10 @@ class AccessMatrixResponse(BaseModel):
     capabilities: list[AccessCapabilityItem]
     roles: list[AccessRoleMatrixItem]
     unassigned_users: list[AccessRoleUserItem] = Field(default_factory=list)
+
+
+class EmployeeImportResponse(BaseModel):
+    total_rows: int
+    created_count: int
+    updated_count: int
+    skipped_count: int

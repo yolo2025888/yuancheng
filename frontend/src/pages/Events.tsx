@@ -1,6 +1,7 @@
 import { Button, Card, Space, Table, Tag, Typography, message } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
+import { useAuth } from '../auth/AuthContext';
 import { ApiStatusNotice } from '../components/ApiStatusNotice';
 import { ChangeMetricsSummary } from '../components/ChangeMetricsSummary';
 import { PageSection } from '../components/PageSection';
@@ -11,6 +12,7 @@ import type { ApiStatus, EventRecord, EventStatus } from '../types/models';
 const REVIEW_ACTIONS: EventStatus[] = ['reviewing', 'reviewed', 'confirmed', 'ignored', 'closed'];
 
 export function EventsPage() {
+  const { canAccess, permissionsResolved } = useAuth();
   const [rows, setRows] = useState<EventRecord[]>([]);
   const [apiStatus, setApiStatus] = useState<ApiStatus | null>(null);
   const [loading, setLoading] = useState(false);
@@ -33,6 +35,7 @@ export function EventsPage() {
     () => rows.filter((row) => row.status === 'new' || row.status === 'reviewing').length,
     [rows]
   );
+  const canReviewEvents = !permissionsResolved || canAccess('events.review');
 
   const handleReviewAction = useCallback(
     async (record: EventRecord, nextStatus: EventStatus) => {
@@ -170,7 +173,7 @@ export function EventsPage() {
                       size="small"
                       type={record.status === status ? 'primary' : 'default'}
                       loading={pendingIds[record.id] && record.status === status}
-                      disabled={Boolean(pendingIds[record.id])}
+                      disabled={Boolean(pendingIds[record.id]) || !canReviewEvents}
                       onClick={() => void handleReviewAction(record, status)}
                     >
                       {status}
@@ -182,6 +185,11 @@ export function EventsPage() {
           ]}
         />
       </Card>
+      {!canReviewEvents ? (
+        <Typography.Text type="secondary">
+          Review actions are disabled because the current auth profile does not include `events.review`.
+        </Typography.Text>
+      ) : null}
     </Space>
   );
 }

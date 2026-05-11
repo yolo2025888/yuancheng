@@ -42,9 +42,17 @@ def solid_png_bytes(*, red: int, green: int, blue: int, width: int = 8, height: 
     )
 
 
-def test_heartbeat_returns_policy(client: TestClient, seeded_device: dict[str, str]) -> None:
+def test_agent_endpoints_require_bearer_token(client: TestClient, seeded_device: dict[str, str]) -> None:
+    response = client.get("/api/agent/policy", params={"device_id": seeded_device["device_id"]})
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid agent token"
+
+
+def test_heartbeat_returns_policy(client: TestClient, seeded_device: dict[str, str], agent_headers: dict[str, str]) -> None:
     response = client.post(
         "/api/agent/heartbeat",
+        headers=agent_headers,
         json={
             "device_id": seeded_device["device_id"],
             "employee_id": seeded_device["employee_id"],
@@ -65,6 +73,7 @@ def test_heartbeat_returns_policy(client: TestClient, seeded_device: dict[str, s
 def test_agent_policy_endpoint_resolves_role_targeted_policy(
     client: TestClient,
     seeded_device: dict[str, str],
+    agent_headers: dict[str, str],
 ) -> None:
     app = client.app
     employee_id = UUID(seeded_device["employee_id"])
@@ -99,7 +108,7 @@ def test_agent_policy_endpoint_resolves_role_targeted_policy(
         )
         session.commit()
 
-    response = client.get("/api/agent/policy", params={"device_id": seeded_device["device_id"]})
+    response = client.get("/api/agent/policy", params={"device_id": seeded_device["device_id"]}, headers=agent_headers)
 
     assert response.status_code == 200
     payload = response.json()
@@ -111,9 +120,14 @@ def test_agent_policy_endpoint_resolves_role_targeted_policy(
     }
 
 
-def test_heartbeat_persists_safe_nested_metadata(client: TestClient, seeded_device: dict[str, str]) -> None:
+def test_heartbeat_persists_safe_nested_metadata(
+    client: TestClient,
+    seeded_device: dict[str, str],
+    agent_headers: dict[str, str],
+) -> None:
     response = client.post(
         "/api/agent/heartbeat",
+        headers=agent_headers,
         json={
             "device_id": seeded_device["device_id"],
             "employee_id": seeded_device["employee_id"],
@@ -194,9 +208,14 @@ def test_heartbeat_persists_safe_nested_metadata(client: TestClient, seeded_devi
         assert "status_detail" not in device.last_session_state_json
 
 
-def test_screenshot_metadata_and_complete_flow(client: TestClient, seeded_device: dict[str, str]) -> None:
+def test_screenshot_metadata_and_complete_flow(
+    client: TestClient,
+    seeded_device: dict[str, str],
+    agent_headers: dict[str, str],
+) -> None:
     metadata_response = client.post(
         "/api/agent/screenshots",
+        headers=agent_headers,
         json={
             "device_id": seeded_device["device_id"],
             "captured_at": datetime(2026, 5, 11, 10, 0, tzinfo=timezone.utc).isoformat(),
@@ -218,6 +237,7 @@ def test_screenshot_metadata_and_complete_flow(client: TestClient, seeded_device
 
     complete_response = client.post(
         f"/api/agent/screenshots/{screenshot_id}/complete",
+        headers=agent_headers,
         json={
             "image_uri": "screenshots/emp/dev/2026/05/11/example.jpg",
             "thumb_uri": "thumbnails/emp/dev/2026/05/11/example.jpg",
@@ -229,9 +249,10 @@ def test_screenshot_metadata_and_complete_flow(client: TestClient, seeded_device
     assert complete_response.json()["upload_status"] == "completed"
 
 
-def test_screenshot_requires_known_device(client: TestClient) -> None:
+def test_screenshot_requires_known_device(client: TestClient, agent_headers: dict[str, str]) -> None:
     response = client.post(
         "/api/agent/screenshots",
+        headers=agent_headers,
         json={
             "device_id": str(uuid4()),
             "captured_at": datetime(2026, 5, 11, 10, 0, tzinfo=timezone.utc).isoformat(),
@@ -252,9 +273,12 @@ def test_screenshot_requires_known_device(client: TestClient) -> None:
 def test_screenshot_direct_upload_persists_image_and_thumb(
     client: TestClient,
     seeded_device: dict[str, str],
+    agent_headers: dict[str, str],
+    auth_headers,
 ) -> None:
     response = client.post(
         "/api/agent/screenshots/upload",
+        headers=agent_headers,
         data={
             "device_id": seeded_device["device_id"],
             "captured_at": datetime(2026, 5, 11, 11, 0, tzinfo=timezone.utc).isoformat(),
@@ -283,13 +307,36 @@ def test_screenshot_direct_upload_persists_image_and_thumb(
     assert (storage_base / payload["image_uri"]).exists()
     assert (storage_base / payload["thumb_uri"]).exists()
 
+    raw_storage_response = client.get(f"/{payload['image_uri']}")
+    assert raw_storage_response.status_code == 404
+
+    protected_image_response = client.get(f"/api/screenshots/{payload['screenshot_id']}/image")
+    assert protected_image_response.status_code == 401
+
+    admin_headers = auth_headers(bootstrap=True)
+    protected_image_response = client.get(
+        f"/api/screenshots/{payload['screenshot_id']}/image",
+        headers=admin_headers,
+    )
+    protected_thumb_response = client.get(
+        f"/api/screenshots/{payload['screenshot_id']}/thumbnail",
+        headers=admin_headers,
+    )
+    assert protected_image_response.status_code == 200
+    assert protected_image_response.content == ONE_PIXEL_PNG
+    assert protected_thumb_response.status_code == 200
+
 
 def test_screenshot_upload_persists_extended_telemetry_fields(
     client: TestClient,
     seeded_device: dict[str, str],
+    auth_headers,
+    agent_headers: dict[str, str],
 ) -> None:
+    headers = auth_headers(bootstrap=True)
     response = client.post(
         "/api/agent/screenshots/upload",
+        headers=agent_headers,
         data={
             "device_id": seeded_device["device_id"],
             "captured_at": datetime(2026, 5, 11, 11, 30, tzinfo=timezone.utc).isoformat(),
@@ -317,7 +364,7 @@ def test_screenshot_upload_persists_extended_telemetry_fields(
     assert response.status_code == 201
     screenshot_id = response.json()["screenshot_id"]
 
-    detail_response = client.get(f"/api/screenshots/{screenshot_id}")
+    detail_response = client.get(f"/api/screenshots/{screenshot_id}", headers=headers)
     assert detail_response.status_code == 200
     detail_payload = detail_response.json()
     assert detail_payload["mouse_wheel_count"] == 4
@@ -341,7 +388,10 @@ def test_screenshot_upload_persists_extended_telemetry_fields(
 def test_repeated_same_uploads_trigger_no_change_event_and_changed_upload_closes_it(
     client: TestClient,
     seeded_device: dict[str, str],
+    auth_headers,
+    agent_headers: dict[str, str],
 ) -> None:
+    headers = auth_headers(bootstrap=True)
     app = client.app
     with Session(app.state.engine) as session:
         policy = session.exec(select(Policy).where(Policy.is_active.is_(True))).first()
@@ -356,6 +406,7 @@ def test_repeated_same_uploads_trigger_no_change_event_and_changed_upload_closes
     for minute in range(3):
         response = client.post(
             "/api/agent/screenshots/upload",
+            headers=agent_headers,
             data={
                 "device_id": seeded_device["device_id"],
                 "captured_at": datetime(2026, 5, 11, 12, minute, tzinfo=timezone.utc).isoformat(),
@@ -381,6 +432,7 @@ def test_repeated_same_uploads_trigger_no_change_event_and_changed_upload_closes
             "employee_id": seeded_device["employee_id"],
             "event_type": "no_change_streak_triggered",
         },
+        headers=headers,
     )
     assert events_response.status_code == 200
     events_payload = events_response.json()
@@ -396,6 +448,7 @@ def test_repeated_same_uploads_trigger_no_change_event_and_changed_upload_closes
             "device_id": seeded_device["device_id"],
             "limit": 1,
         },
+        headers=headers,
     )
     assert screenshots_response.status_code == 200
     screenshot_payload = screenshots_response.json()["items"][0]
@@ -405,6 +458,7 @@ def test_repeated_same_uploads_trigger_no_change_event_and_changed_upload_closes
 
     changed_response = client.post(
         "/api/agent/screenshots/upload",
+        headers=agent_headers,
         data={
             "device_id": seeded_device["device_id"],
             "captured_at": datetime(2026, 5, 11, 12, 3, tzinfo=timezone.utc).isoformat(),
@@ -430,6 +484,7 @@ def test_repeated_same_uploads_trigger_no_change_event_and_changed_upload_closes
             "employee_id": seeded_device["employee_id"],
             "event_type": "no_change_streak_triggered",
         },
+        headers=headers,
     )
     assert events_response.status_code == 200
     updated_event = events_response.json()["items"][0]
@@ -437,7 +492,10 @@ def test_repeated_same_uploads_trigger_no_change_event_and_changed_upload_closes
     assert updated_event["related_diff"]["is_effective_change"] is True
     assert updated_event["related_diff"]["change_level"] == "major"
 
-    detail_response = client.get(f"/api/screenshots/{changed_response.json()['screenshot_id']}")
+    detail_response = client.get(
+        f"/api/screenshots/{changed_response.json()['screenshot_id']}",
+        headers=headers,
+    )
     assert detail_response.status_code == 200
     detail_payload = detail_response.json()
     assert detail_payload["diff"]["is_effective_change"] is True

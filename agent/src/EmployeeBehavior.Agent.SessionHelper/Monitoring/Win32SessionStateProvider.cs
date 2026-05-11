@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
 using EmployeeBehavior.Agent.Contracts.Models;
@@ -22,7 +23,7 @@ public sealed class Win32SessionStateProvider : ISessionStateProvider
 
     public Task<SessionStateSnapshot> GetCurrentAsync(CancellationToken cancellationToken)
     {
-        var sessionId = Environment.SessionId;
+        var sessionId = Process.GetCurrentProcess().SessionId;
         var activeConsoleSessionId = unchecked((int)WTSGetActiveConsoleSessionId());
         var stateValue = WtsConnectStateClass.WTSDown;
         var connectState = TryQuerySessionState(sessionId, out stateValue)

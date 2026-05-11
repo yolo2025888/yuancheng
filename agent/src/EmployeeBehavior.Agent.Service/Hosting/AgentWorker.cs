@@ -64,30 +64,41 @@ public sealed class AgentWorker : BackgroundService
 
         do
         {
-            var snapshot = await _sessionHelperClient.CaptureSnapshotAsync(cancellationToken);
-            var policy = _policyCache.Current;
-
-            var request = new HeartbeatRequest
+            try
             {
-                DeviceId = deviceId,
-                EmployeeId = string.IsNullOrWhiteSpace(_options.EmployeeId) ? null : _options.EmployeeId,
-                Hostname = Environment.MachineName,
-                OsType = Environment.OSVersion.VersionString,
-                AgentVersion = GetAgentVersion(),
-                ScreenCount = Math.Max(1, snapshot?.Screens.Count ?? 1),
-                Status = "online",
-                SentAtUtc = DateTimeOffset.UtcNow,
-                CurrentPolicyVersion = policy.Version,
-                SessionState = snapshot?.SessionState,
-                ForegroundWindow = snapshot?.ForegroundWindow,
-                InputActivity = snapshot?.InputActivity
-            };
+                var snapshot = await _sessionHelperClient.CaptureSnapshotAsync(cancellationToken);
+                var policy = _policyCache.Current;
 
-            var response = await _agentApiClient.SendHeartbeatAsync(request, cancellationToken);
-            _logger.LogInformation(
-                "Heartbeat sent for device {DeviceId}. Server policy version: {PolicyVersion}.",
-                deviceId,
-                response.PolicyVersion);
+                var request = new HeartbeatRequest
+                {
+                    DeviceId = deviceId,
+                    EmployeeId = string.IsNullOrWhiteSpace(_options.EmployeeId) ? null : _options.EmployeeId,
+                    Hostname = Environment.MachineName,
+                    OsType = Environment.OSVersion.VersionString,
+                    AgentVersion = GetAgentVersion(),
+                    ScreenCount = Math.Max(1, snapshot?.Screens.Count ?? 1),
+                    Status = "online",
+                    SentAtUtc = DateTimeOffset.UtcNow,
+                    CurrentPolicyVersion = policy.Version,
+                    SessionState = snapshot?.SessionState,
+                    ForegroundWindow = snapshot?.ForegroundWindow,
+                    InputActivity = snapshot?.InputActivity
+                };
+
+                var response = await _agentApiClient.SendHeartbeatAsync(request, cancellationToken);
+                _logger.LogInformation(
+                    "Heartbeat sent for device {DeviceId}. Server policy version: {PolicyVersion}.",
+                    deviceId,
+                    response.PolicyVersion);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Heartbeat iteration failed for device {DeviceId}.", deviceId);
+            }
         }
         while (await timer.WaitForNextTickAsync(cancellationToken));
     }
@@ -98,13 +109,24 @@ public sealed class AgentWorker : BackgroundService
 
         do
         {
-            var latestPolicy = await _agentApiClient.GetPolicyAsync(deviceId, cancellationToken);
-            _policyCache.Update(latestPolicy);
+            try
+            {
+                var latestPolicy = await _agentApiClient.GetPolicyAsync(deviceId, cancellationToken);
+                _policyCache.Update(latestPolicy);
 
-            _logger.LogInformation(
-                "Policy refreshed. Version={Version}, ScreenshotInterval={Interval}s.",
-                latestPolicy.Version,
-                latestPolicy.ScreenshotIntervalSeconds);
+                _logger.LogInformation(
+                    "Policy refreshed. Version={Version}, ScreenshotInterval={Interval}s.",
+                    latestPolicy.Version,
+                    latestPolicy.ScreenshotIntervalSeconds);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Policy refresh iteration failed for device {DeviceId}.", deviceId);
+            }
         }
         while (await timer.WaitForNextTickAsync(cancellationToken));
     }
@@ -113,28 +135,41 @@ public sealed class AgentWorker : BackgroundService
     {
         while (!cancellationToken.IsCancellationRequested)
         {
-            var policy = _policyCache.Current;
-            var delay = TimeSpan.FromSeconds(Math.Max(1, policy.ScreenshotIntervalSeconds));
+            var delay = TimeSpan.FromSeconds(Math.Max(1, _policyCache.Current.ScreenshotIntervalSeconds));
 
-            if (policy.CaptureEnabled)
+            try
             {
-                var snapshot = await _sessionHelperClient.CaptureSnapshotAsync(cancellationToken);
-                if (snapshot is not null)
-                {
-                    foreach (var upload in BuildUploads(deviceId, policy.Version, snapshot))
-                    {
-                        await _uploadQueue.EnqueueAsync(upload, cancellationToken);
-                    }
+                var policy = _policyCache.Current;
+                delay = TimeSpan.FromSeconds(Math.Max(1, policy.ScreenshotIntervalSeconds));
 
-                    _logger.LogDebug(
-                        "Captured snapshot at {CapturedAtUtc} with {ScreenCount} screens.",
-                        snapshot.CapturedAtUtc,
-                        snapshot.Screens.Count);
-                }
-                else
+                if (policy.CaptureEnabled)
                 {
-                    _logger.LogDebug("Session Helper snapshot not available. Capture skipped.");
+                    var snapshot = await _sessionHelperClient.CaptureSnapshotAsync(cancellationToken);
+                    if (snapshot is not null)
+                    {
+                        foreach (var upload in BuildUploads(deviceId, policy.Version, snapshot))
+                        {
+                            await _uploadQueue.EnqueueAsync(upload, cancellationToken);
+                        }
+
+                        _logger.LogDebug(
+                            "Captured snapshot at {CapturedAtUtc} with {ScreenCount} screens.",
+                            snapshot.CapturedAtUtc,
+                            snapshot.Screens.Count);
+                    }
+                    else
+                    {
+                        _logger.LogDebug("Session Helper snapshot not available. Capture skipped.");
+                    }
                 }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Capture iteration failed for device {DeviceId}.", deviceId);
             }
 
             await Task.Delay(delay, cancellationToken);
@@ -145,32 +180,78 @@ public sealed class AgentWorker : BackgroundService
     {
         while (!cancellationToken.IsCancellationRequested)
         {
-            var batch = await _uploadQueue.DequeueBatchAsync(_options.UploadBatchSize, cancellationToken);
-            if (batch.Count == 0)
+            try
             {
-                await Task.Delay(TimeSpan.FromSeconds(_options.UploadPollIntervalSeconds), cancellationToken);
-                continue;
-            }
-
-            foreach (var item in batch)
-            {
-                var uploadRequest = await ResolveUploadRequestAsync(item.Request, cancellationToken);
-                if (uploadRequest.ImageBytes.Length == 0)
+                var lease = await _uploadQueue.LeaseBatchAsync(_options.UploadBatchSize, cancellationToken);
+                if (lease.Items.Count == 0)
                 {
-                    _logger.LogWarning(
-                        "Skipping screenshot {LocalId} for display {DisplayName} because the payload is empty.",
-                        item.LocalId,
-                        item.Request.DisplayName);
+                    await Task.Delay(TimeSpan.FromSeconds(_options.UploadPollIntervalSeconds), cancellationToken);
                     continue;
                 }
 
-                var response = await _agentApiClient.UploadScreenshotAsync(uploadRequest, cancellationToken);
+                var completedIds = new List<Guid>(lease.Items.Count);
+                var releasedIds = new List<Guid>(lease.Items.Count);
 
-                _logger.LogInformation(
-                    "Uploaded screenshot {ScreenshotId} for display {DisplayName}. Status={Status}.",
-                    response.ScreenshotId,
-                    uploadRequest.DisplayName,
-                    response.Status);
+                foreach (var item in lease.Items)
+                {
+                    try
+                    {
+                        var uploadRequest = await ResolveUploadRequestAsync(item.Request, cancellationToken);
+                        if (uploadRequest.ImageBytes.Length == 0)
+                        {
+                            _logger.LogWarning(
+                                "Skipping screenshot {LocalId} for display {DisplayName} because the payload is empty.",
+                                item.LocalId,
+                                item.Request.DisplayName);
+                            CleanupUploadTempFiles(item.Request);
+                            completedIds.Add(item.LocalId);
+                            continue;
+                        }
+
+                        var response = await _agentApiClient.UploadScreenshotAsync(uploadRequest, cancellationToken);
+
+                        _logger.LogInformation(
+                            "Uploaded screenshot {ScreenshotId} for display {DisplayName}. Status={Status}.",
+                            response.ScreenshotId,
+                            uploadRequest.DisplayName,
+                            response.Status);
+
+                        CleanupUploadTempFiles(item.Request);
+                        completedIds.Add(item.LocalId);
+                    }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        throw;
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(
+                            ex,
+                            "Upload failed for queued screenshot {LocalId} ({DisplayName}). The item will remain queued for retry.",
+                            item.LocalId,
+                            item.Request.DisplayName);
+                        releasedIds.Add(item.LocalId);
+                    }
+                }
+
+                if (completedIds.Count > 0)
+                {
+                    await _uploadQueue.CompleteAsync(lease.LeaseId, completedIds, cancellationToken);
+                }
+
+                if (releasedIds.Count > 0)
+                {
+                    await _uploadQueue.ReleaseAsync(lease.LeaseId, releasedIds, cancellationToken);
+                }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Upload loop iteration failed. Retrying after backoff.");
+                await Task.Delay(TimeSpan.FromSeconds(_options.UploadPollIntervalSeconds), cancellationToken);
             }
         }
     }
@@ -225,11 +306,11 @@ public sealed class AgentWorker : BackgroundService
     {
         var imageBytes = request.ImageBytes.Length > 0
             ? request.ImageBytes
-            : await ReadPayloadBytesAsync(request.ImageTempFilePath, request.DeleteImageTempFileOnRead, cancellationToken);
+            : await ReadPayloadBytesAsync(request.ImageTempFilePath, deleteAfterRead: false, cancellationToken);
 
         var thumbnailBytes = request.ThumbnailBytes.Length > 0
             ? request.ThumbnailBytes
-            : await ReadPayloadBytesAsync(request.ThumbnailTempFilePath, request.DeleteThumbnailTempFileOnRead, cancellationToken);
+            : await ReadPayloadBytesAsync(request.ThumbnailTempFilePath, deleteAfterRead: false, cancellationToken);
 
         return request with
         {
@@ -281,5 +362,28 @@ public sealed class AgentWorker : BackgroundService
     private static string ComputeSha256(byte[] payload)
     {
         return Convert.ToHexString(SHA256.HashData(payload)).ToLowerInvariant();
+    }
+
+    private void CleanupUploadTempFiles(ScreenshotUploadRequest request)
+    {
+        DeleteTempPayloadFile(request.ImageTempFilePath, request.DeleteImageTempFileOnRead);
+        DeleteTempPayloadFile(request.ThumbnailTempFilePath, request.DeleteThumbnailTempFileOnRead);
+    }
+
+    private void DeleteTempPayloadFile(string? tempFilePath, bool deleteAfterRead)
+    {
+        if (!deleteAfterRead || string.IsNullOrWhiteSpace(tempFilePath) || !File.Exists(tempFilePath))
+        {
+            return;
+        }
+
+        try
+        {
+            File.Delete(tempFilePath);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to delete upload temp file {TempFilePath} after a successful upload.", tempFilePath);
+        }
     }
 }

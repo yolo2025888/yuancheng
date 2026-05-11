@@ -99,13 +99,68 @@ Copy-Item .\agent\src\EmployeeBehavior.Agent.Service\appsettings.json.example .\
 `AgentService` notes:
 
 - Keep `DryRun=true` for local contract verification before pointing at a real backend.
+- `ApiToken` must match the backend `EBM_AGENT_API_TOKEN`; the backend rejects `/api/agent/*` calls without that bearer token.
 - `SessionHelperRequestTimeoutSeconds` must be long enough to cover multi-screen capture on slower endpoints.
 - `UploadBatchSize` affects only upload concurrency, not collection semantics.
 
 ## Deployment references
 
 - Operational runbook: [docs/AGENT_DEPLOYMENT_RUNBOOK.md](../docs/AGENT_DEPLOYMENT_RUNBOOK.md)
+- Install script: `agent\scripts\Install-AgentPilot.ps1`
+- Uninstall script: `agent\scripts\Uninstall-AgentPilot.ps1`
 - Non-destructive validator: `agent\scripts\Test-AgentDeployment.ps1`
+
+## Pilot install without local dotnet build
+
+The repo now includes Windows install/uninstall scripts intended for prebuilt publish artifacts. The target device does not need a local .NET SDK if you copy a published service folder and a published helper folder onto the machine first.
+
+Typical pilot install from an elevated PowerShell session:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Install-AgentPilot.ps1 `
+  -ServiceSourceDirectory C:\staging\EmployeeBehaviorAgent\Service `
+  -HelperSourceDirectory C:\staging\EmployeeBehaviorAgent\SessionHelper `
+  -ServiceConfigPath C:\staging\configs\service.appsettings.json `
+  -HelperConfigPath C:\staging\configs\helper.appsettings.json `
+  -HelperTaskUser CONTOSO\pilot.user `
+  -StartService
+```
+
+Safe install behavior:
+
+- Requires elevation and validates the expected EXE paths before changing service/task state.
+- Creates the target install directories plus `C:\ProgramData\EmployeeBehaviorAgent\` and `logs\`.
+- Preserves an existing `device-id.json`.
+- Preserves an existing target `appsettings.json` unless you pass an explicit replacement config path.
+- Supports `-WhatIf` and `-Confirm`.
+
+Typical uninstall that removes registrations but keeps binaries and identity data:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Uninstall-AgentPilot.ps1
+```
+
+Optional cleanup switches are explicit: `-RemoveServiceDirectory`, `-RemoveHelperDirectory`, `-RemoveLogDirectory`, `-RemoveUploadQueue`, and `-RemoveDeviceIdentity`.
+
+## Upload queue persistence
+
+`AgentService` now uses a file-backed JSONL upload queue instead of the old process-memory queue.
+
+- Default path: `AgentService:UploadQueuePath = C:\ProgramData\EmployeeBehaviorAgent\upload-queue.jsonl`
+- Screenshot bytes are copied into protected payload files under a sibling `upload-queue-payloads\` directory; the JSONL queue stores metadata and protected payload paths, not raw screenshot byte arrays.
+- Pending screenshot uploads survive service restarts and most transient API failures.
+- The queue uses short-lived leases so items that were in-flight during a crash become eligible for retry after `AgentService:UploadQueueLeaseDurationSeconds`.
+- The upload loop now logs and retries transient failures instead of exiting the whole service on the first failed upload attempt.
+- On Windows, the queue and payload files are created encrypted before content is written. If Windows EFS protection fails, enqueue fails closed instead of writing live screenshot payloads in plaintext.
+- Pilot installers should still restrict ACLs on `C:\ProgramData\EmployeeBehaviorAgent\` to administrators and the service identity.
+- Temp screenshot payload files are deleted only after a successful upload so transient backend failures do not drop queued screenshots.
+- Malformed JSONL entries are skipped with a warning instead of blocking the whole queue.
+
+Current limitations:
+
+- The queue is designed for a single service instance per device and is not a shared multi-writer store.
+- The JSONL file can grow while the backend is unavailable.
+- If operators manually delete the queue file, `device-id.json`, or payload files referenced by queued items, pending uploads can still be lost.
 
 ## Local run and deployment checks
 
@@ -122,7 +177,8 @@ Recommended deployment and validation sequence:
 2. Run the helper in the signed-in desktop session.
 3. Keep `DryRun=true` and confirm heartbeat plus screenshot upload logs show the expected contract fields without backend dependency.
 4. Switch `DryRun=false`, point `ApiBaseUrl` at the target backend, and repeat heartbeat plus upload checks.
-5. Test console session, locked desktop, and RDP/remote session transitions.
+5. Restart the service once during validation and confirm pending uploads are retried from `UploadQueuePath`.
+6. Test console session, locked desktop, and RDP/remote session transitions.
 
 Recommended validation command before a pilot deployment:
 
@@ -142,3 +198,4 @@ When validating on a Windows machine with the .NET SDK installed, check:
 2. Keyboard, mouse move, mouse click, mouse wheel, and window switch counts reset only when a capture snapshot is consumed.
 3. `SessionHelper` degrades safely when it is not running in the real interactive session.
 4. Backend parsing accepts the nested heartbeat payloads and the mirrored compatibility fields during rollout.
+5. Pending uploads remain queued across service restart until the backend accepts them.

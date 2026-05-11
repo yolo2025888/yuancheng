@@ -1,5 +1,6 @@
 import {
   auditLogs,
+  attendanceRecords,
   dashboardKpis,
   devices,
   employeeHeatmap,
@@ -15,6 +16,9 @@ import {
 import { apiClient, getErrorMessage } from './apiClient';
 import type {
   AccessMatrixRecord,
+  AttendanceRecord,
+  AuthIdentity,
+  AuthSessionSeed,
   ApiResult,
   ApiStatus,
   AuditLogRecord,
@@ -22,6 +26,7 @@ import type {
   ChangeMetrics,
   DeviceRecord,
   EmployeeRecord,
+  EmployeeImportSummary,
   EventRecord,
   EventSeverity,
   EventStatus,
@@ -71,6 +76,7 @@ type EmployeeListData = ApiResult<EmployeeRecord[]>;
 type DeviceListData = ApiResult<DeviceRecord[]>;
 type PolicyListData = ApiResult<PolicyRecord[]>;
 type AuditLogListData = ApiResult<AuditLogRecord[]>;
+type AttendanceListData = ApiResult<AttendanceRecord[]>;
 type DashboardSummaryData = ApiResult<{
   kpis: KpiMetric[];
   workStatusSeries: StatusBucket[];
@@ -78,6 +84,20 @@ type DashboardSummaryData = ApiResult<{
 type RiskScoreListData = ApiResult<RiskScoreRecord[]>;
 type AccessMatrixListData = ApiResult<AccessMatrixRecord[]>;
 type PolicyMutationResult = { apiStatus: ApiStatus; data?: PolicyRecord[] };
+type AuthResult<T> = {
+  data?: T;
+  apiStatus: ApiStatus;
+  unauthorized?: boolean;
+};
+type EmployeeImportMutationResult = {
+  data?: EmployeeImportSummary;
+  apiStatus: ApiStatus;
+};
+type EmployeeExportResult = {
+  blob?: Blob;
+  filename?: string;
+  apiStatus: ApiStatus;
+};
 type PolicyStateAction = 'activate' | 'deactivate' | 'set_active';
 type PolicyMutationAttempt = {
   path: string;
@@ -189,11 +209,31 @@ type AuditLogApiItem = Record<string, unknown> & {
   details_json?: Record<string, unknown>;
 };
 
+type AttendanceApiItem = Record<string, unknown> & {
+  id?: string;
+  employee_name?: string | null;
+  employee_no?: string | null;
+  department?: string | null;
+  user_name?: string;
+  machine_name?: string | null;
+  event_type?: string;
+  occurred_at?: string;
+  work_date?: string | null;
+  anomaly_status?: string;
+  anomaly_reasons?: string[];
+  review_status?: string;
+  review_note?: string | null;
+  source?: string;
+};
+
 type HealthPayload = {
   status: string;
   app_name?: string;
   environment?: string;
 };
+
+type AuthLoginPayload = Record<string, unknown>;
+type AuthMePayload = Record<string, unknown>;
 
 type TimelineQuery = {
   employeeId?: string;
@@ -231,6 +271,80 @@ const unavailableStatus = (endpoint: string, detail: string): ApiStatus => ({
 });
 
 export const adminApi = {
+  async login(identifier: string, password: string): Promise<AuthResult<AuthSessionSeed>> {
+    const endpoint = '/api/auth/login';
+
+    try {
+      const payload = await apiClient<AuthLoginPayload>(endpoint, {
+        method: 'POST',
+        auth: 'omit',
+        body: {
+          username: identifier,
+          identifier,
+          email: identifier,
+          password
+        }
+      });
+      const token = extractAuthToken(payload);
+      const user = mapAuthIdentity(payload, identifier);
+
+      if (!token || !user) {
+        throw new Error('Login response did not contain a usable bearer token and user profile');
+      }
+
+      return {
+        data: {
+          token,
+          user,
+          source: 'live'
+        },
+        apiStatus: liveStatus(endpoint, `Authenticated as ${user.displayName}`)
+      };
+    } catch (error) {
+      const message = getErrorMessage(error);
+      const status = readErrorStatus(error);
+
+      return {
+        apiStatus: unavailableStatus(endpoint, message),
+        unauthorized: status === 401 || status === 403
+      };
+    }
+  },
+
+  async getCurrentUser(): Promise<AuthResult<AuthIdentity>> {
+    const endpoints = ['/api/auth/me', '/api/me'];
+    let lastError: unknown;
+
+    for (const endpoint of endpoints) {
+      try {
+        const payload = await apiClient<AuthMePayload>(endpoint);
+        const user = mapAuthIdentity(payload);
+
+        if (!user) {
+          throw new Error('Current user response did not contain a usable profile');
+        }
+
+        return {
+          data: user,
+          apiStatus: liveStatus(endpoint, `Loaded ${user.displayName}`)
+        };
+      } catch (error) {
+        lastError = error;
+
+        if (readErrorStatus(error) === 401 || readErrorStatus(error) === 403) {
+          return {
+            apiStatus: unavailableStatus(endpoint, getErrorMessage(error)),
+            unauthorized: true
+          };
+        }
+      }
+    }
+
+    return {
+      apiStatus: unavailableStatus(endpoints[0], getErrorMessage(lastError))
+    };
+  },
+
   async getDashboardData(): Promise<DashboardData> {
     const [eventResult, backendHealth] = await Promise.all([this.getEvents(), this.getHealth()]);
     const [summaryResult, riskResult, accessResult] = await Promise.all([
@@ -376,6 +490,57 @@ export const adminApi = {
         apiStatus: fallbackStatus('/api/employees', getErrorMessage(error))
       };
     }
+  },
+
+  async exportEmployees(): Promise<EmployeeExportResult> {
+    const endpoint = '/api/admin/export/employees';
+
+    try {
+      const response = await apiClient<Response>(endpoint, {
+        responseType: 'response'
+      });
+      const blob = await response.blob();
+      const filename = extractDownloadFilename(response.headers.get('content-disposition'));
+
+      return {
+        blob,
+        filename,
+        apiStatus: liveStatus(endpoint, 'Employee CSV export prepared')
+      };
+    } catch (error) {
+      return {
+        apiStatus: unavailableStatus(endpoint, `Employee CSV export unavailable: ${getErrorMessage(error)}`)
+      };
+    }
+  },
+
+  async importEmployees(source: string | Blob): Promise<EmployeeImportMutationResult> {
+    const endpoint = '/api/admin/import/employees';
+    const attempts = buildEmployeeImportAttempts(source);
+    const csvText = typeof source === 'string' ? source : '';
+    let lastError: unknown = new Error('No employee import payload was configured');
+
+    for (const attempt of attempts) {
+      try {
+        const payload = await apiClient<unknown>(endpoint, {
+          method: 'POST',
+          body: attempt.body,
+          headers: attempt.headers
+        });
+        const summary = mapEmployeeImportSummary(payload, csvText);
+
+        return {
+          data: summary,
+          apiStatus: liveStatus(endpoint, summary.detail ?? 'Employee CSV import completed')
+        };
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    return {
+      apiStatus: unavailableStatus(endpoint, `Employee CSV import unavailable: ${getErrorMessage(lastError)}`)
+    };
   },
 
   async getDevices(): Promise<DeviceListData> {
@@ -637,6 +802,29 @@ export const adminApi = {
       return {
         data: auditLogs,
         apiStatus: fallbackStatus('/api/audit-logs', getErrorMessage(error))
+      };
+    }
+  },
+
+  async getAttendance(): Promise<AttendanceListData> {
+    const endpoint = '/api/attendance';
+
+    try {
+      const payload = await apiClient<AttendanceApiItem[] | { items: AttendanceApiItem[] }>(endpoint);
+      const items = extractItems(payload);
+
+      if (!items) {
+        throw new Error('Attendance payload is not an array');
+      }
+
+      return {
+        data: items.map(mapAttendanceRecord),
+        apiStatus: liveStatus(endpoint, `Loaded ${items.length} attendance records`)
+      };
+    } catch (error) {
+      return {
+        data: attendanceRecords,
+        apiStatus: fallbackStatus(endpoint, getErrorMessage(error))
       };
     }
   },
@@ -933,6 +1121,33 @@ function mapAuditLogRecord(item: AuditLogApiItem, index: number): AuditLogRecord
         readString(item, ['result', 'status', 'outcome']),
         readString(details, ['result', 'status', 'outcome'])
       ) ?? 'logged'
+  };
+}
+
+function mapAttendanceRecord(item: AttendanceApiItem, index: number): AttendanceRecord {
+  const eventType = readString(item, ['event_type']) ?? 'clock_in';
+  const anomalyStatus = readString(item, ['anomaly_status']) ?? 'normal';
+  return {
+    key: readString(item, ['id']) ?? String(index),
+    employee:
+      firstString(
+        readString(item, ['employee_name', 'name']),
+        readString(item, ['user_name'])
+      ) ?? 'Unknown employee',
+    employeeNo: readString(item, ['employee_no']) ?? undefined,
+    department: readString(item, ['department']) ?? undefined,
+    userName: readString(item, ['user_name']) ?? '--',
+    machineName: readString(item, ['machine_name']) ?? undefined,
+    eventType,
+    eventLabel: formatLabel(eventType),
+    occurredAt: formatDateTime(readString(item, ['occurred_at'])),
+    workDate: readString(item, ['work_date']) ?? undefined,
+    anomalyStatus,
+    anomalyLabel: formatLabel(anomalyStatus),
+    anomalyReasons: Array.isArray(item.anomaly_reasons) ? item.anomaly_reasons : [],
+    reviewStatus: readString(item, ['review_status']) ?? 'pending',
+    reviewNote: readString(item, ['review_note']) ?? undefined,
+    source: readString(item, ['source']) ?? 'launcher'
   };
 }
 
@@ -1591,6 +1806,209 @@ function extractPermissionActions(items: unknown[]) {
       );
     })
     .map(formatLabel);
+}
+
+function mapAuthIdentity(payload: unknown, fallbackIdentifier?: string): AuthIdentity | null {
+  const root = unwrapPrimaryRecord(payload) ?? asRecord(payload);
+  const record =
+    pickRecords(root, ['user', 'account', 'profile', 'me']) ??
+    pickRecords(asRecord(root?.data), ['user', 'account', 'profile']) ??
+    root;
+
+  if (!record) {
+    return null;
+  }
+
+  const roleRecord =
+    asRecord(record.role) ??
+    asRecord(record.role_info) ??
+    asRecord(record.role_details);
+  const permissionSources = [
+    record.permissions,
+    record.permission_keys,
+    record.permissionKeys,
+    record.grants,
+    roleRecord?.permissions,
+    roleRecord?.permission_keys,
+    roleRecord?.permissionKeys
+  ];
+  const permissionKeys = dedupeLabels(
+    permissionSources.flatMap((source) => extractPermissionKeys(source))
+  ).map((permissionKey) => permissionKey.toLowerCase());
+  const permissionsResolved = permissionSources.some((source) => source !== undefined);
+  const username =
+    firstString(
+      readString(record, ['username', 'login', 'name']),
+      fallbackIdentifier
+    ) ?? 'admin';
+  const displayName =
+    firstString(
+      readString(record, ['display_name', 'displayName', 'full_name', 'name']),
+      readString(roleRecord, ['display_name', 'displayName']),
+      username
+    ) ?? username;
+  const roleName =
+    firstString(
+      readString(record, ['role_name', 'roleName']),
+      readString(roleRecord, ['name', 'label']),
+      typeof record.role === 'string' ? record.role : undefined
+    ) ?? undefined;
+
+  return {
+    id: readString(record, ['id', 'user_id']) ?? undefined,
+    username,
+    displayName,
+    email: readString(record, ['email']) ?? undefined,
+    roleId: readString(record, ['role_id']) ?? readString(roleRecord, ['id']) ?? undefined,
+    roleName,
+    permissionKeys,
+    permissionsResolved
+  };
+}
+
+function extractAuthToken(payload: unknown) {
+  const root = unwrapPrimaryRecord(payload) ?? asRecord(payload);
+  const record =
+    pickRecords(root, ['data', 'session', 'tokens', 'auth']) ??
+    root;
+
+  return firstString(
+    readString(asRecord(payload), ['access_token', 'token', 'bearer_token']),
+    readString(record, ['access_token', 'token', 'bearer_token']),
+    readString(asRecord(record?.access), ['token'])
+  );
+}
+
+function extractPermissionKeys(source: unknown): string[] {
+  if (!source) {
+    return [];
+  }
+
+  if (Array.isArray(source)) {
+    return source.flatMap((item) => {
+      if (typeof item === 'string') {
+        return item.trim() ? [item.trim()] : [];
+      }
+
+      const record = asRecord(item);
+      if (!record) {
+        return [];
+      }
+
+      const nestedActions = readStringArray(record, ['actions', 'verbs']) ?? [];
+      const permission = readString(record, ['key', 'permission', 'name']);
+      const moduleName = readString(record, ['module', 'resource']);
+      const action = readString(record, ['action', 'verb']);
+
+      if (permission) {
+        return [permission];
+      }
+
+      if (moduleName && action) {
+        return [`${moduleName}.${action}`];
+      }
+
+      if (moduleName && nestedActions.length > 0) {
+        return nestedActions.map((value) => `${moduleName}.${value}`);
+      }
+
+      return [];
+    });
+  }
+
+  const record = asRecord(source);
+  if (!record) {
+    return [];
+  }
+
+  return [
+    ...(readStringArray(record, ['permission_keys', 'permissionKeys']) ?? []),
+    ...extractPermissionKeys(record.permissions),
+    ...extractPermissionKeys(record.grants)
+  ];
+}
+
+function buildEmployeeImportAttempts(source: string | Blob) {
+  if (typeof source !== 'string') {
+    const formData = new FormData();
+    formData.append('file', source, source instanceof File ? source.name : 'employees.csv');
+    return [{ body: formData }];
+  }
+
+  const csvText = source;
+  const formData = new FormData();
+  formData.append('file', new Blob([csvText], { type: 'text/csv;charset=utf-8' }), 'employees.csv');
+  formData.append('csv_text', csvText);
+
+  return [
+    {
+      body: formData
+    },
+    {
+      body: {
+        csv_text: csvText
+      }
+    },
+    {
+      body: {
+        csv: csvText
+      }
+    },
+    {
+      body: csvText,
+      headers: {
+        'Content-Type': 'text/csv'
+      }
+    }
+  ];
+}
+
+function mapEmployeeImportSummary(payload: unknown, csvText: string): EmployeeImportSummary {
+  const root = unwrapPrimaryRecord(payload) ?? asRecord(payload) ?? {};
+  const warnings =
+    extractFieldList(
+      extractUnknownItems(root, ['warnings', 'issues', 'errors', 'messages']) ?? [],
+      ['message', 'detail', 'reason']
+    ) ??
+    [];
+  const totalCount =
+    readNumber(root, ['total', 'total_count', 'processed_count']) ??
+    Math.max(csvText.split(/\r?\n/).filter((line) => line.trim()).length - 1, 0);
+  const createdCount = readNumber(root, ['created', 'created_count', 'inserted_count']);
+  const updatedCount = readNumber(root, ['updated', 'updated_count']);
+  const skippedCount = readNumber(root, ['skipped', 'skipped_count', 'error_count']);
+  const detail =
+    firstString(
+      readString(root, ['detail', 'message', 'summary']),
+      `Processed ${totalCount} employee row${totalCount === 1 ? '' : 's'}`
+    ) ?? `Processed ${totalCount} employee rows`;
+
+  return {
+    totalCount,
+    createdCount,
+    updatedCount,
+    skippedCount,
+    warnings,
+    detail
+  };
+}
+
+function extractDownloadFilename(contentDisposition?: string | null) {
+  if (!contentDisposition) {
+    return 'employees-export.csv';
+  }
+
+  const utf8Match = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8Match?.[1]) {
+    return decodeURIComponent(utf8Match[1]);
+  }
+
+  const plainMatch = contentDisposition.match(/filename="?([^";]+)"?/i);
+  return plainMatch?.[1] ?? 'employees-export.csv';
+}
+
+function readErrorStatus(error: unknown) {
+  return error instanceof Error && 'status' in error ? Number((error as { status?: number }).status) : undefined;
 }
 
 function modulesFromPermissionKeys(permissionKeys: string[]) {

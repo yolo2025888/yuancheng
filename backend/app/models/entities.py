@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import Column, DateTime, JSON, Text
+from sqlalchemy import Column, Date, DateTime, JSON, Text
 from sqlmodel import Field, SQLModel
 
 
@@ -136,6 +136,26 @@ class BehaviorEvent(TimestampedUUIDModel, table=True):
     reviewed_by: UUID | None = Field(default=None, foreign_key="users.id")
     reviewed_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True), nullable=True))
     review_note: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
+
+
+class AttendanceRecord(TimestampedUUIDModel, table=True):
+    __tablename__ = "attendance_records"
+
+    employee_id: UUID | None = Field(default=None, foreign_key="employees.id", index=True)
+    device_id: UUID | None = Field(default=None, foreign_key="devices.id", index=True)
+    employee_no: str | None = Field(default=None, index=True)
+    user_name: str = Field(index=True)
+    machine_name: str | None = Field(default=None, index=True)
+    event_type: str = Field(index=True)
+    occurred_at: datetime = Field(sa_column=Column(DateTime(timezone=True), nullable=False, index=True))
+    work_date: date | None = Field(default=None, sa_column=Column(Date, nullable=True, index=True))
+    anomaly_status: str = Field(default="normal", index=True)
+    anomaly_reasons_json: list[str] = Field(default_factory=list, sa_column=Column(JSON, nullable=False))
+    review_status: str = Field(default="pending", index=True)
+    review_note: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
+    reviewed_by: UUID | None = Field(default=None, foreign_key="users.id")
+    reviewed_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True), nullable=True))
+    source: str = Field(default="launcher", index=True)
 
 
 class AuditLog(SQLModel, table=True):

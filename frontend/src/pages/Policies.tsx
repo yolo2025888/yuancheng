@@ -16,6 +16,7 @@ import {
 } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
+import { useAuth } from '../auth/AuthContext';
 import { ApiStatusNotice } from '../components/ApiStatusNotice';
 import { PageSection } from '../components/PageSection';
 import { StatusTag } from '../components/StatusTag';
@@ -34,6 +35,7 @@ const STATE_ACTION_LABELS: Record<PolicyStateAction, string> = {
 };
 
 export function PoliciesPage() {
+  const { canAccess, permissionsResolved } = useAuth();
   const [rows, setRows] = useState<PolicyRecord[]>([]);
   const [apiStatus, setApiStatus] = useState<ApiStatus | null>(null);
   const [loading, setLoading] = useState(false);
@@ -80,6 +82,7 @@ export function PoliciesPage() {
       assignedEmployees
     };
   }, [rows]);
+  const canManagePolicies = !permissionsResolved || canAccess('policies.manage');
 
   const handleCreateNew = useCallback(() => {
     setSelectedKey(NEW_POLICY_KEY);
@@ -176,7 +179,7 @@ export function PoliciesPage() {
             bordered={false}
             className="panel-card"
             extra={
-              <Button size="small" type="primary" onClick={handleCreateNew}>
+              <Button size="small" type="primary" onClick={handleCreateNew} disabled={!canManagePolicies}>
                 New policy
               </Button>
             }
@@ -246,7 +249,7 @@ export function PoliciesPage() {
                   fixed: 'right',
                   render: (_value: unknown, record: PolicyRecord) => (
                     <Space size={[6, 6]} wrap>
-                      <Button size="small" onClick={() => setSelectedKey(record.key)}>
+                      <Button size="small" onClick={() => setSelectedKey(record.key)} disabled={!canManagePolicies}>
                         Edit
                       </Button>
                       {record.status !== 'active' ? (
@@ -254,6 +257,7 @@ export function PoliciesPage() {
                           <Button
                             size="small"
                             loading={pendingActions[record.key] === 'activate'}
+                            disabled={!canManagePolicies}
                             onClick={() => void handleStateAction(record, 'activate')}
                           >
                             Activate
@@ -262,6 +266,7 @@ export function PoliciesPage() {
                             size="small"
                             type="primary"
                             loading={pendingActions[record.key] === 'set_active'}
+                            disabled={!canManagePolicies}
                             onClick={() => void handleStateAction(record, 'set_active')}
                           >
                             Set active
@@ -272,6 +277,7 @@ export function PoliciesPage() {
                           size="small"
                           danger
                           loading={pendingActions[record.key] === 'deactivate'}
+                          disabled={!canManagePolicies}
                           onClick={() => void handleStateAction(record, 'deactivate')}
                         >
                           Deactivate
@@ -291,15 +297,30 @@ export function PoliciesPage() {
             title={editorTitle}
             extra={
               <Space size={8}>
-                <Button size="small" onClick={handleCreateNew}>
+                <Button size="small" onClick={handleCreateNew} disabled={!canManagePolicies}>
                   Reset
                 </Button>
-                <Button size="small" type="primary" loading={saving} onClick={() => void handleSave()}>
+                <Button
+                  size="small"
+                  type="primary"
+                  loading={saving}
+                  disabled={!canManagePolicies}
+                  onClick={() => void handleSave()}
+                >
                   Save
                 </Button>
               </Space>
             }
           >
+            {!canManagePolicies ? (
+              <Alert
+                type="warning"
+                showIcon
+                className="embedded-alert"
+                message="Policy management is disabled for the current role."
+                description="Permission data from the auth profile does not include `policies.manage`."
+              />
+            ) : null}
             {apiStatus?.source === 'mock' ? (
               <Alert
                 type="warning"
@@ -315,10 +336,10 @@ export function PoliciesPage() {
                 name="name"
                 rules={[{ required: true, whitespace: true, message: 'Policy name is required.' }]}
               >
-                <Input placeholder="Engineering standard" />
+                <Input placeholder="Engineering standard" disabled={!canManagePolicies} />
               </Form.Item>
               <Form.Item label="Version" name="version">
-                <Input placeholder="2026.05" />
+                <Input placeholder="2026.05" disabled={!canManagePolicies} />
               </Form.Item>
               <Row gutter={12}>
                 <Col span={8}>
@@ -327,7 +348,7 @@ export function PoliciesPage() {
                     name="screenshotIntervalSeconds"
                     rules={[{ required: true, message: 'Required.' }]}
                   >
-                    <InputNumber min={1} max={3600} className="full-width" />
+                    <InputNumber min={1} max={3600} className="full-width" disabled={!canManagePolicies} />
                   </Form.Item>
                 </Col>
                 <Col span={8}>
@@ -336,7 +357,7 @@ export function PoliciesPage() {
                     name="noChangeThresholdFrames"
                     rules={[{ required: true, message: 'Required.' }]}
                   >
-                    <InputNumber min={1} max={240} className="full-width" />
+                    <InputNumber min={1} max={240} className="full-width" disabled={!canManagePolicies} />
                   </Form.Item>
                 </Col>
                 <Col span={8}>
@@ -345,18 +366,33 @@ export function PoliciesPage() {
                     name="retentionDays"
                     rules={[{ required: true, message: 'Required.' }]}
                   >
-                    <InputNumber min={1} max={365} className="full-width" />
+                    <InputNumber min={1} max={365} className="full-width" disabled={!canManagePolicies} />
                   </Form.Item>
                 </Col>
               </Row>
               <Form.Item label="Target roles" name="roles">
-                <Select mode="tags" placeholder="Add one or more roles" tokenSeparators={[',']} />
+                <Select
+                  mode="tags"
+                  placeholder="Add one or more roles"
+                  tokenSeparators={[',']}
+                  disabled={!canManagePolicies}
+                />
               </Form.Item>
               <Form.Item label="Target departments" name="departments">
-                <Select mode="tags" placeholder="Add one or more departments" tokenSeparators={[',']} />
+                <Select
+                  mode="tags"
+                  placeholder="Add one or more departments"
+                  tokenSeparators={[',']}
+                  disabled={!canManagePolicies}
+                />
               </Form.Item>
               <Form.Item label="Target positions" name="positions">
-                <Select mode="tags" placeholder="Add one or more positions" tokenSeparators={[',']} />
+                <Select
+                  mode="tags"
+                  placeholder="Add one or more positions"
+                  tokenSeparators={[',']}
+                  disabled={!canManagePolicies}
+                />
               </Form.Item>
             </Form>
             <Space direction="vertical" size={4} className="policy-editor-hints">

@@ -23,6 +23,25 @@ body {
   color: #0f172a;
 }
 
+.login-shell {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  padding: 24px;
+}
+
+.login-card {
+  width: min(100%, 520px);
+  border: var(--panel-border);
+  box-shadow: var(--panel-shadow);
+}
+
+.centered-card {
+  display: grid;
+  place-items: center;
+  min-height: 240px;
+}
+
 .app-shell {
   min-height: 100vh;
 }
@@ -96,6 +115,14 @@ body {
   flex-direction: column;
   align-items: flex-end;
   gap: 2px;
+}
+
+.header-user-block {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  max-width: 220px;
 }
 
 .app-content {
@@ -278,7 +305,8 @@ body {
   }
 
   .header-meta,
-  .event-meta {
+  .event-meta,
+  .header-user-block {
     align-items: flex-start;
   }
 }

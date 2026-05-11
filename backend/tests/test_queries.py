@@ -9,7 +9,8 @@ from sqlmodel import Session
 from app.models import BehaviorEvent, ScreenDiff, Screenshot
 
 
-def test_timeline_and_events_queries(client: TestClient, seeded_device: dict[str, str]) -> None:
+def test_timeline_and_events_queries(client: TestClient, seeded_device: dict[str, str], auth_headers) -> None:
+    headers = auth_headers(bootstrap=True)
     app = client.app
     employee_id = UUID(seeded_device["employee_id"])
     device_id = UUID(seeded_device["device_id"])
@@ -69,6 +70,7 @@ def test_timeline_and_events_queries(client: TestClient, seeded_device: dict[str
     timeline_response = client.get(
         f"/api/employees/{seeded_device['employee_id']}/timeline",
         params={"date": "2026-05-11"},
+        headers=headers,
     )
     events_response = client.get(
         "/api/events",
@@ -78,8 +80,9 @@ def test_timeline_and_events_queries(client: TestClient, seeded_device: dict[str
             "from": "2026-05-11T00:00:00Z",
             "to": "2026-05-11T23:59:59Z",
         },
+        headers=headers,
     )
-    event_detail_response = client.get(f"/api/events/{event.id}")
+    event_detail_response = client.get(f"/api/events/{event.id}", headers=headers)
 
     assert timeline_response.status_code == 200
     timeline_payload = timeline_response.json()
@@ -89,7 +92,7 @@ def test_timeline_and_events_queries(client: TestClient, seeded_device: dict[str
     assert timeline_payload["items"][0]["change"]["hash_distance"] == 1.2
     assert timeline_payload["items"][0]["change"]["ssim_score"] == 0.92
     assert timeline_payload["items"][0]["change"]["reason"] is None
-    assert timeline_payload["items"][0]["thumb_uri"] == "thumbnails/example.jpg"
+    assert timeline_payload["items"][0]["thumb_uri"].endswith("/thumbnail")
     assert timeline_payload["items"][0]["image_uri"] is None
     assert timeline_payload["items"][0]["keyboard_count"] == 23
     assert timeline_payload["items"][0]["mouse_count"] == 23
@@ -110,7 +113,8 @@ def test_timeline_and_events_queries(client: TestClient, seeded_device: dict[str
     assert event_detail_payload["related_diff"]["hash_distance"] == 1.2
 
 
-def test_screenshot_list_and_detail_queries(client: TestClient, seeded_device: dict[str, str]) -> None:
+def test_screenshot_list_and_detail_queries(client: TestClient, seeded_device: dict[str, str], auth_headers) -> None:
+    headers = auth_headers(bootstrap=True)
     app = client.app
     employee_id = UUID(seeded_device["employee_id"])
     device_id = UUID(seeded_device["device_id"])
@@ -152,21 +156,22 @@ def test_screenshot_list_and_detail_queries(client: TestClient, seeded_device: d
             "device_id": seeded_device["device_id"],
             "limit": 1,
         },
+        headers=headers,
     )
 
     assert list_response.status_code == 200
     list_payload = list_response.json()
     assert list_payload["total"] == 1
     assert list_payload["items"][0]["screen_index"] == 1
-    assert list_payload["items"][0]["thumb_uri"].endswith("_thumb.jpg")
+    assert list_payload["items"][0]["thumb_uri"].endswith("/thumbnail")
     assert list_payload["items"][0]["diff"] is None
 
     screenshot_id = list_payload["items"][0]["id"]
-    detail_response = client.get(f"/api/screenshots/{screenshot_id}")
+    detail_response = client.get(f"/api/screenshots/{screenshot_id}", headers=headers)
 
     assert detail_response.status_code == 200
     detail_payload = detail_response.json()
     assert detail_payload["employee_id"] == str(employee_id)
     assert detail_payload["device_id"] == str(device_id)
-    assert detail_payload["image_uri"].endswith(".jpg")
+    assert detail_payload["image_uri"].endswith("/image")
     assert detail_payload["risk_events"] == []

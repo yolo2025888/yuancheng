@@ -11,18 +11,82 @@ from sqlmodel import Session, select
 from app.core.config import Settings
 from app.main import create_app
 from app.models import AuditLog, BehaviorEvent, Device, Employee, Policy, Role, Screenshot, User
+from app.services.auth import hash_password
+
+
+def test_attendance_clock_records_are_listed_with_anomaly_status(
+    client: TestClient,
+    seeded_device: dict[str, str],
+    auth_headers,
+    agent_headers: dict[str, str],
+) -> None:
+    headers = auth_headers(bootstrap=True)
+
+    late_response = client.post(
+        "/api/agent/attendance",
+        headers=agent_headers,
+        json={
+            "user_name": "Alice",
+            "employee_no": "E-001",
+            "machine_name": "DEV-PC-001",
+            "event_type": "clock_in",
+            "occurred_at": "2026-05-12T09:47:00+08:00",
+            "source": "launcher",
+        },
+    )
+    normal_response = client.post(
+        "/api/agent/attendance",
+        headers=agent_headers,
+        json={
+            "user_name": "Alice",
+            "employee_no": "E-001",
+            "machine_name": "DEV-PC-001",
+            "event_type": "clock_out",
+            "occurred_at": "2026-05-12T18:12:00+08:00",
+            "source": "launcher",
+        },
+    )
+
+    assert late_response.status_code == 201
+    assert normal_response.status_code == 201
+    assert late_response.json()["anomaly_status"] == "late"
+    assert late_response.json()["review_status"] == "pending"
+    assert normal_response.json()["anomaly_status"] == "normal"
+    assert normal_response.json()["review_status"] == "reviewed"
+
+    list_response = client.get("/api/attendance?work_date=2026-05-12", headers=headers)
+
+    assert list_response.status_code == 200
+    payload = list_response.json()
+    assert payload["total"] == 2
+    assert payload["items"][0]["employee_name"] == "Alice"
+    assert {item["anomaly_status"] for item in payload["items"]} == {"late", "normal"}
+
+    review_response = client.post(
+        f"/api/attendance/{late_response.json()['id']}/review",
+        headers=headers,
+        json={"review_status": "confirmed", "review_note": "Manager approved late arrival reason."},
+    )
+
+    assert review_response.status_code == 200
+    assert review_response.json()["review_status"] == "confirmed"
+    assert review_response.json()["review_note"] == "Manager approved late arrival reason."
 
 
 def test_admin_list_apis_return_employees_devices_and_policies(
     client: TestClient,
     seeded_device: dict[str, str],
+    auth_headers,
+    agent_headers: dict[str, str],
 ) -> None:
+    headers = auth_headers(bootstrap=True)
     app = client.app
     employee_id = UUID(seeded_device["employee_id"])
     device_id = UUID(seeded_device["device_id"])
 
     heartbeat_response = client.post(
         "/api/agent/heartbeat",
+        headers=agent_headers,
         json={
             "device_id": seeded_device["device_id"],
             "employee_id": seeded_device["employee_id"],
@@ -77,9 +141,9 @@ def test_admin_list_apis_return_employees_devices_and_policies(
         session.add(inactive_policy)
         session.commit()
 
-    employees_response = client.get("/api/employees")
-    devices_response = client.get("/api/devices")
-    policies_response = client.get("/api/policies")
+    employees_response = client.get("/api/employees", headers=headers)
+    devices_response = client.get("/api/devices", headers=headers)
+    policies_response = client.get("/api/policies", headers=headers)
 
     assert employees_response.status_code == 200
     employees_payload = employees_response.json()
@@ -107,9 +171,11 @@ def test_admin_list_apis_return_employees_devices_and_policies(
     assert policies_payload["items"][1]["version"] == "0.0.1"
 
 
-def test_policy_crud_and_activation_write_audit_logs(client: TestClient) -> None:
+def test_policy_crud_and_activation_write_audit_logs(client: TestClient, auth_headers) -> None:
+    headers = auth_headers(bootstrap=True)
     create_response = client.post(
         "/api/policies",
+        headers=headers,
         json={
             "name": "engineering-focus",
             "version": "2026.05",
@@ -136,6 +202,7 @@ def test_policy_crud_and_activation_write_audit_logs(client: TestClient) -> None
 
     update_response = client.put(
         f"/api/policies/{created_policy['id']}",
+        headers=headers,
         json={
             "version": "2026.05.1",
             "retention_days": 28,
@@ -157,6 +224,7 @@ def test_policy_crud_and_activation_write_audit_logs(client: TestClient) -> None
 
     activation_response = client.post(
         f"/api/policies/{created_policy['id']}/activation",
+        headers=headers,
         json={"is_active": True},
     )
 
@@ -185,7 +253,7 @@ def test_policy_crud_and_activation_write_audit_logs(client: TestClient) -> None
         assert all(audit.ip_address == "testclient" for audit in audit_logs)
         assert all(audit.user_agent is not None for audit in audit_logs)
 
-    audit_response = client.get("/api/audit-logs")
+    audit_response = client.get("/api/audit-logs", headers=headers)
     assert audit_response.status_code == 200
     audit_payload = audit_response.json()
     assert audit_payload["total"] == 3
@@ -193,7 +261,8 @@ def test_policy_crud_and_activation_write_audit_logs(client: TestClient) -> None
     assert audit_payload["items"][0]["target_type"] == "policy"
 
 
-def test_event_review_updates_status_and_note(client: TestClient, seeded_device: dict[str, str]) -> None:
+def test_event_review_updates_status_and_note(client: TestClient, seeded_device: dict[str, str], auth_headers) -> None:
+    headers = auth_headers(bootstrap=True)
     app = client.app
     event_id = uuid4()
 
@@ -214,6 +283,7 @@ def test_event_review_updates_status_and_note(client: TestClient, seeded_device:
 
     response = client.post(
         f"/api/events/{event_id}/review",
+        headers=headers,
         json={"status": "reviewed", "review_note": "Confirmed benign activity."},
     )
 
@@ -332,7 +402,9 @@ def test_sqlite_schema_ensure_adds_new_columns_to_existing_db(tmp_path: Path) ->
 def test_dashboard_summary_reports_real_counts_and_top_risks(
     client: TestClient,
     seeded_device: dict[str, str],
+    auth_headers,
 ) -> None:
+    headers = auth_headers(bootstrap=True)
     app = client.app
     now = datetime.now(timezone.utc)
     alice_id = UUID(seeded_device["employee_id"])
@@ -415,7 +487,7 @@ def test_dashboard_summary_reports_real_counts_and_top_risks(
         session.add(event)
         session.commit()
 
-    response = client.get("/api/dashboard/summary")
+    response = client.get("/api/dashboard/summary", headers=headers)
 
     assert response.status_code == 200
     payload = response.json()
@@ -444,7 +516,9 @@ def test_dashboard_summary_reports_real_counts_and_top_risks(
 def test_risk_scores_endpoint_returns_transparent_employee_scores(
     client: TestClient,
     seeded_device: dict[str, str],
+    auth_headers,
 ) -> None:
+    headers = auth_headers(bootstrap=True)
     app = client.app
     now = datetime.now(timezone.utc).replace(microsecond=0)
     employee_id = UUID(seeded_device["employee_id"])
@@ -485,7 +559,7 @@ def test_risk_scores_endpoint_returns_transparent_employee_scores(
         session.add(event)
         session.commit()
 
-    response = client.get("/api/risk/scores", params={"limit": 1})
+    response = client.get("/api/risk/scores", params={"limit": 1}, headers=headers)
 
     assert response.status_code == 200
     payload = response.json()
@@ -513,7 +587,10 @@ def test_risk_scores_endpoint_returns_transparent_employee_scores(
     assert all(isinstance(reason, str) and reason for reason in item["reasons"])
 
 
-def test_access_matrix_endpoint_returns_roles_users_and_recommended_planning_matrix(client: TestClient) -> None:
+def test_access_matrix_endpoint_returns_roles_users_and_recommended_planning_matrix(
+    client: TestClient,
+    auth_headers,
+) -> None:
     app = client.app
     admin_role_id = uuid4()
     reviewer_role_id = uuid4()
@@ -541,7 +618,7 @@ def test_access_matrix_endpoint_returns_roles_users_and_recommended_planning_mat
                 username="alice.admin",
                 display_name="Alice Admin",
                 email="alice@example.com",
-                password_hash="secret-1",
+                password_hash=hash_password("secret-1", iterations=client.app.state.settings.password_hash_iterations),
                 role_id=admin_role_id,
                 status="active",
             )
@@ -552,15 +629,16 @@ def test_access_matrix_endpoint_returns_roles_users_and_recommended_planning_mat
                 username="bob.pending",
                 display_name="Bob Pending",
                 email="bob@example.com",
-                password_hash="secret-2",
+                password_hash=hash_password("secret-2", iterations=client.app.state.settings.password_hash_iterations),
                 role_id=None,
                 status="pending",
             )
         )
         session.commit()
 
-    response = client.get("/api/access/matrix")
-    legacy_response = client.get("/api/access-matrix")
+    headers = auth_headers(username="alice.admin", password="secret-1", role_name="Admin", display_name="Alice Admin", email="alice@example.com")
+    response = client.get("/api/access/matrix", headers=headers)
+    legacy_response = client.get("/api/access-matrix", headers=headers)
 
     assert response.status_code == 200
     assert legacy_response.status_code == 200
@@ -588,3 +666,162 @@ def test_access_matrix_endpoint_returns_roles_users_and_recommended_planning_mat
             "status": "pending",
         }
     ]
+
+
+def test_agent_attendance_records_are_token_gated_listed_and_reviewed(
+    client: TestClient,
+    seeded_device: dict[str, str],
+    auth_headers,
+    agent_headers: dict[str, str],
+) -> None:
+    payload = {
+        "employee_no": "E-001",
+        "user_name": "Alice",
+        "machine_name": "DEV-PC-001",
+        "event_type": "clock_in",
+        "occurred_at": "2026-05-11T10:15:00Z",
+        "source": "launcher",
+    }
+
+    unauthenticated_response = client.post("/api/agent/attendance", json=payload)
+    assert unauthenticated_response.status_code == 401
+
+    create_response = client.post("/api/agent/attendance", headers=agent_headers, json=payload)
+    assert create_response.status_code == 201
+    created = create_response.json()
+    assert created["employee_id"] == seeded_device["employee_id"]
+    assert created["employee_no"] == "E-001"
+    assert created["anomaly_status"] == "late"
+    assert created["review_status"] == "pending"
+    assert created["anomaly_reasons"] == ["Clock-in after 09:30"]
+
+    manager_headers = auth_headers(
+        username="attendance.manager",
+        password="manager-password",
+        role_name="Manager",
+    )
+    list_response = client.get(
+        "/api/attendance",
+        headers=manager_headers,
+        params={"anomaly_status": "late"},
+    )
+    assert list_response.status_code == 200
+    assert [item["id"] for item in list_response.json()["items"]] == [created["id"]]
+
+    manager_review_response = client.post(
+        f"/api/attendance/{created['id']}/review",
+        headers=manager_headers,
+        json={"review_status": "confirmed", "review_note": "Manager cannot review."},
+    )
+    assert manager_review_response.status_code == 403
+
+    admin_headers = auth_headers(
+        username="attendance.admin",
+        password="admin-password",
+        role_name="Admin",
+    )
+    review_response = client.post(
+        f"/api/attendance/{created['id']}/review",
+        headers=admin_headers,
+        json={"review_status": "confirmed", "review_note": "Confirmed late clock-in."},
+    )
+    assert review_response.status_code == 200
+    reviewed = review_response.json()
+    assert reviewed["review_status"] == "confirmed"
+    assert reviewed["review_note"] == "Confirmed late clock-in."
+    assert reviewed["reviewed_at"] is not None
+
+    with Session(client.app.state.engine) as session:
+        audit_log = session.exec(
+            select(AuditLog).where(AuditLog.action == "attendance.reviewed").order_by(AuditLog.created_at.desc())
+        ).first()
+        assert audit_log is not None
+        assert audit_log.target_type == "attendance_record"
+
+
+def test_employee_export_returns_csv_and_audits_action(
+    client: TestClient,
+    seeded_device: dict[str, str],
+    auth_headers,
+) -> None:
+    headers = auth_headers(bootstrap=True)
+
+    response = client.get("/api/admin/export/employees", headers=headers)
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/csv")
+    lines = response.text.strip().splitlines()
+    assert lines[0] == "name,employee_no,department,job_role,manager,github,status"
+    assert lines[1] == "Alice,E-001,Engineering,,,,active"
+
+    with Session(client.app.state.engine) as session:
+        audit_logs = session.exec(
+            select(AuditLog).where(AuditLog.action == "employees.exported").order_by(AuditLog.created_at.desc())
+        ).all()
+        assert len(audit_logs) == 1
+        assert audit_logs[0].target_type == "employee_directory"
+
+
+def test_employee_import_upserts_csv_rows_and_audits_action(
+    client: TestClient,
+    seeded_device: dict[str, str],
+    auth_headers,
+) -> None:
+    headers = auth_headers(bootstrap=True)
+    csv_payload = "\n".join(
+        [
+            "name,employee_no,department,job_role,manager,github,status",
+            "Alice Updated,E-001,Platform,Senior Engineer,Dana,alicehub,active",
+            "Bob,E-002,Support,Support Specialist,Morgan,bobhub,inactive",
+        ]
+    )
+
+    response = client.post(
+        "/api/admin/import/employees",
+        headers={**headers, "Content-Type": "text/csv"},
+        content=csv_payload,
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "total_rows": 2,
+        "created_count": 1,
+        "updated_count": 1,
+        "skipped_count": 0,
+    }
+
+    with Session(client.app.state.engine) as session:
+        alice = session.exec(select(Employee).where(Employee.employee_no == "E-001")).first()
+        bob = session.exec(select(Employee).where(Employee.employee_no == "E-002")).first()
+        audit_log = session.exec(
+            select(AuditLog).where(AuditLog.action == "employees.imported").order_by(AuditLog.created_at.desc())
+        ).first()
+
+        assert alice is not None
+        assert alice.name == "Alice Updated"
+        assert alice.department == "Platform"
+        assert alice.job_role == "Senior Engineer"
+        assert alice.manager_name == "Dana"
+        assert alice.github_username == "alicehub"
+
+        assert bob is not None
+        assert bob.name == "Bob"
+        assert bob.status == "inactive"
+        assert audit_log is not None
+        assert audit_log.target_type == "employee_directory"
+
+
+def test_employee_import_rejects_non_utf8_csv_with_400(
+    client: TestClient,
+    auth_headers,
+) -> None:
+    headers = auth_headers(bootstrap=True)
+
+    response = client.post(
+        "/api/admin/import/employees",
+        headers={**headers, "Content-Type": "text/csv"},
+        content=b"name,employee_no\nAlice,\xff\n",
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "CSV payload must be UTF-8 text"

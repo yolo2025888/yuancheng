@@ -4,6 +4,8 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using EmployeeBehavior.Agent.Contracts.Models;
 using EmployeeBehavior.Agent.SessionHelper.Configuration;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace EmployeeBehavior.Agent.SessionHelper.App;

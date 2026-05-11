@@ -6,7 +6,7 @@ import { ApiStatusNotice } from '../components/ApiStatusNotice';
 import { ChangeMetricsSummary } from '../components/ChangeMetricsSummary';
 import { PageSection } from '../components/PageSection';
 import { StatusTag } from '../components/StatusTag';
-import { resolveApiAssetUrl } from '../services/apiClient';
+import { fetchApiAssetObjectUrl, resolveApiAssetUrl } from '../services/apiClient';
 import { adminApi } from '../services/adminApi';
 import type { ScreenshotComparison } from '../types/models';
 
@@ -153,8 +153,46 @@ function ScreenshotPreview({
   placeholderText,
   toneClassName
 }: ScreenshotPreviewProps) {
+  const assetUri = imageUri ?? thumbUri;
+  const shouldFetchWithAuth = Boolean(assetUri?.startsWith('/api/'));
+  const [objectUrl, setObjectUrl] = useState<string | null>(null);
   const [broken, setBroken] = useState(false);
-  const src = resolveApiAssetUrl(imageUri ?? thumbUri);
+  const src = shouldFetchWithAuth ? objectUrl : resolveApiAssetUrl(assetUri);
+
+  useEffect(() => {
+    setBroken(false);
+    setObjectUrl(null);
+
+    if (!assetUri || !shouldFetchWithAuth) {
+      return undefined;
+    }
+
+    let isCurrent = true;
+    let nextObjectUrl: string | null = null;
+
+    fetchApiAssetObjectUrl(assetUri)
+      .then((url) => {
+        if (!isCurrent) {
+          URL.revokeObjectURL(url);
+          return;
+        }
+
+        nextObjectUrl = url;
+        setObjectUrl(url);
+      })
+      .catch(() => {
+        if (isCurrent) {
+          setBroken(true);
+        }
+      });
+
+    return () => {
+      isCurrent = false;
+      if (nextObjectUrl) {
+        URL.revokeObjectURL(nextObjectUrl);
+      }
+    };
+  }, [assetUri, shouldFetchWithAuth]);
 
   if (!src || broken) {
     return (

@@ -2,6 +2,10 @@ using EmployeeBehavior.Agent.SessionHelper.App;
 using EmployeeBehavior.Agent.SessionHelper.Capture;
 using EmployeeBehavior.Agent.SessionHelper.Configuration;
 using EmployeeBehavior.Agent.SessionHelper.Monitoring;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace EmployeeBehavior.Agent.SessionHelper;
@@ -42,7 +46,7 @@ internal static class Program
             options.TimestampFormat = "yyyy-MM-dd HH:mm:ss ";
         });
 
-        await using var host = builder.Build();
+        using var host = builder.Build();
         await host.StartAsync();
 
         var options = host.Services.GetRequiredService<IOptions<SessionHelperOptions>>().Value;

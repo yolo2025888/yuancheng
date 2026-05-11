@@ -30,5 +30,9 @@ public sealed class AgentServiceOptions
 
     public int UploadBatchSize { get; set; } = 2;
 
+    public string UploadQueuePath { get; set; } = @"C:\ProgramData\EmployeeBehaviorAgent\upload-queue.jsonl";
+
+    public int UploadQueueLeaseDurationSeconds { get; set; } = 300;
+
     public AgentPolicy DefaultPolicy { get; set; } = AgentPolicy.CreateDefault();
 }

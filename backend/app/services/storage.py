@@ -67,6 +67,23 @@ class LocalScreenshotStorage:
             thumb_uri=thumb_path.relative_to(self.storage_root.parent).as_posix(),
         )
 
+    def resolve_stored_uri(self, uri: str | None) -> Path | None:
+        if not uri:
+            return None
+
+        relative_path = Path(uri.lstrip("/"))
+        candidate = (self.storage_root.parent / relative_path).resolve()
+        storage_root = self.storage_root.resolve()
+        try:
+            candidate.relative_to(storage_root)
+        except ValueError:
+            return None
+
+        if not candidate.is_file():
+            return None
+
+        return candidate
+
     def _resolve_extension(self, *, filename: str | None, content_type: str | None) -> str:
         file_extension = Path(filename or "").suffix.lower()
         if file_extension in {".png", ".jpg", ".jpeg", ".webp", ".bmp"}:

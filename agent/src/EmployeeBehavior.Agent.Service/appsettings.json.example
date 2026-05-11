@@ -14,7 +14,10 @@
     "PolicyRefreshIntervalSeconds": 300,
     "UploadPollIntervalSeconds": 5,
     "UploadBatchSize": 2,
+    "UploadQueuePath": "C:\\ProgramData\\EmployeeBehaviorAgent\\upload-queue.jsonl",
+    "UploadQueueLeaseDurationSeconds": 300,
     "_deploymentNote": "After local DryRun verification, set DryRun=false and validate heartbeat plus screenshot upload against the target backend.",
+    "_queueNote": "UploadQueuePath is a persistent JSONL queue. Keep it on local disk so pending uploads survive service restarts.",
     "DefaultPolicy": {
       "Version": "bootstrap",
       "CaptureEnabled": true,

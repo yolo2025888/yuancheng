@@ -6,7 +6,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from sqlmodel import Session
 
-from app.api.deps import get_session, get_settings
+from app.api.deps import get_session, get_settings, require_agent_token
 from app.core.config import Settings
 from app.schemas.agent import (
     HeartbeatRequest,
@@ -26,6 +26,7 @@ router = APIRouter(prefix="/api/agent", tags=["agent"])
 @router.post("/heartbeat", response_model=HeartbeatResponse)
 def heartbeat(
     payload: HeartbeatRequest,
+    _: None = Depends(require_agent_token),
     session: Session = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> HeartbeatResponse:
@@ -35,6 +36,7 @@ def heartbeat(
 @router.get("/policy", response_model=PolicyResponse)
 def get_policy(
     device_id: UUID | None = Query(default=None),
+    _: None = Depends(require_agent_token),
     session: Session = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> PolicyResponse:
@@ -48,6 +50,7 @@ def get_policy(
 )
 def create_screenshot(
     payload: ScreenshotMetadataRequest,
+    _: None = Depends(require_agent_token),
     session: Session = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> ScreenshotMetadataResponse:
@@ -85,6 +88,7 @@ async def upload_screenshot(
     session_connect_state: str | None = Form(default=None),
     phash: str | None = Form(default=None),
     file: UploadFile = File(...),
+    _: None = Depends(require_agent_token),
     session: Session = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> ScreenshotUploadResponse:
@@ -130,6 +134,7 @@ async def upload_screenshot(
 def complete_screenshot(
     screenshot_id: str,
     payload: ScreenshotCompleteRequest,
+    _: None = Depends(require_agent_token),
     session: Session = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> ScreenshotCompleteResponse:

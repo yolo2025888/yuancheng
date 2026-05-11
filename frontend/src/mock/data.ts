@@ -1,5 +1,6 @@
 import type {
   AuditLogRecord,
+  AttendanceRecord,
   DeviceRecord,
   EmployeeRecord,
   EventRecord,
@@ -148,6 +149,60 @@ export const realtimeStatus: RealtimeStatusRecord[] = [
     lastScreenshotAt: '14:23:59',
     noChangeCount: 1,
     riskLevel: 'watch'
+  }
+];
+
+export const attendanceRecords: AttendanceRecord[] = [
+  {
+    key: 'att-1',
+    employee: 'Wang Chen',
+    employeeNo: 'E-001',
+    department: 'Platform Engineering',
+    userName: 'Wang Chen',
+    machineName: 'CN-SH-RD-01',
+    eventType: 'clock_in',
+    eventLabel: 'Clock in',
+    occurredAt: '2026-05-12 09:08',
+    workDate: '2026-05-12',
+    anomalyStatus: 'normal',
+    anomalyLabel: 'Normal',
+    anomalyReasons: [],
+    reviewStatus: 'reviewed',
+    source: 'launcher'
+  },
+  {
+    key: 'att-2',
+    employee: 'Zhang Ning',
+    employeeNo: 'E-002',
+    department: 'Frontend Engineering',
+    userName: 'Zhang Ning',
+    machineName: 'CN-SH-FE-03',
+    eventType: 'clock_in',
+    eventLabel: 'Clock in',
+    occurredAt: '2026-05-12 09:47',
+    workDate: '2026-05-12',
+    anomalyStatus: 'late',
+    anomalyLabel: 'Late',
+    anomalyReasons: ['Clock-in after 09:30'],
+    reviewStatus: 'pending',
+    source: 'launcher'
+  },
+  {
+    key: 'att-3',
+    employee: 'Zhou Lan',
+    employeeNo: 'E-003',
+    department: 'SRE',
+    userName: 'Zhou Lan',
+    machineName: 'CN-SH-SRE-07',
+    eventType: 'clock_out',
+    eventLabel: 'Clock out',
+    occurredAt: '2026-05-12 17:22',
+    workDate: '2026-05-12',
+    anomalyStatus: 'early_leave',
+    anomalyLabel: 'Early leave',
+    anomalyReasons: ['Clock-out before 18:00'],
+    reviewStatus: 'pending',
+    source: 'launcher'
   }
 ];
 

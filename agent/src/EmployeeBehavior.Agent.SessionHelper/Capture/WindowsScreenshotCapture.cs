@@ -3,6 +3,7 @@ using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Security.Cryptography;
 using EmployeeBehavior.Agent.Contracts.Models;
+using Microsoft.Extensions.Logging;
 using System.Windows.Forms;
 
 namespace EmployeeBehavior.Agent.SessionHelper.Capture;
@@ -37,7 +38,7 @@ public sealed class WindowsScreenshotCapture : IScreenshotCapture
                         0,
                         0,
                         screen.Bounds.Size,
-                        CopyPixelOperation.SourceCopy | CopyPixelOperation.CaptureBlt);
+                        CopyPixelOperation.SourceCopy);
                 }
 
                 var imageBytes = Encode(bitmap, ImageFormat.Png);

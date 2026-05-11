@@ -1,5 +1,6 @@
 from app.models.entities import (
     AuditLog,
+    AttendanceRecord,
     BehaviorEvent,
     Device,
     Employee,
@@ -12,6 +13,7 @@ from app.models.entities import (
 
 __all__ = [
     "AuditLog",
+    "AttendanceRecord",
     "BehaviorEvent",
     "Device",
     "Employee",

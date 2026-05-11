@@ -47,6 +47,7 @@ frontend/.vite/
 # .NET
 bin/
 obj/
+agent/publish/
 *.user
 *.suo
 *.rsuser

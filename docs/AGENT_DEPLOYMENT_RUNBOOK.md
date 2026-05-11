@@ -40,6 +40,7 @@ Minimum operational prerequisites:
 - Source-based local runs need the .NET 8 SDK.
 - Framework-dependent publishes need the .NET 8 runtime, and the helper also needs the Windows desktop runtime because it uses Windows Forms.
 - If the target device does not have the runtime installed, publish self-contained binaries instead of assuming `dotnet` is present.
+- The install scripts in `agent\scripts\` deploy prebuilt artifacts and do not require a local .NET SDK on the target device.
 
 ## Recommended filesystem layout
 
@@ -56,6 +57,8 @@ C:\Program Files\EmployeeBehaviorAgent\SessionHelper\
 
 C:\ProgramData\EmployeeBehaviorAgent\
   device-id.json
+  upload-queue.jsonl
+  upload-queue-payloads\
   logs\
     service.log
     helper.log
@@ -77,7 +80,7 @@ Start from `agent/src/EmployeeBehavior.Agent.Service/appsettings.json.example` a
 - `ApiBaseUrl`
   Absolute backend base URL, for example `https://monitoring.internal.example`.
 - `ApiToken`
-  Device or agent bearer token issued for this deployment.
+  Device or agent bearer token issued for this deployment. It must match backend `EBM_AGENT_API_TOKEN`; `/api/agent/*` returns `401` without it.
 - `DryRun`
   Keep `true` for initial validation. Switch to `false` only after local and backend checks pass.
 - `EmployeeId`
@@ -98,6 +101,10 @@ Start from `agent/src/EmployeeBehavior.Agent.Service/appsettings.json.example` a
   Current default is `5`.
 - `UploadBatchSize`
   Current default is `2`.
+- `UploadQueuePath`
+  Recommended: `C:\ProgramData\EmployeeBehaviorAgent\upload-queue.jsonl`
+- `UploadQueueLeaseDurationSeconds`
+  Lease expiry for in-flight queue items after service interruption. Current default is `300`.
 - `DefaultPolicy`
   Bootstrap policy used before the backend returns a newer one.
 
@@ -134,6 +141,8 @@ dotnet publish .\agent\src\EmployeeBehavior.Agent.SessionHelper\EmployeeBehavior
 
 If the target device does not already have the required runtime installed, publish self-contained packages for both projects instead.
 
+For pilot deployment, you can build or publish elsewhere, then copy the resulting artifact folders onto the target device and install them with the PowerShell scripts below.
+
 ## Dry-run validation flow
 
 Use `DryRun=true` first. This validates local capture, named-pipe wiring, and contract shape without sending live heartbeat or screenshot payloads to the backend.
@@ -169,26 +178,34 @@ After dry-run passes:
 
 1. Keep the same `device-id.json` path so the device identity remains stable across restarts and upgrades.
 2. Switch `DryRun` to `false`.
-3. Install `EmployeeBehavior.Agent.Service` as a Windows service.
-4. Register `EmployeeBehavior.Agent.SessionHelper` to start at user logon in the real interactive session.
-5. Redirect both process outputs to the recommended `logs\` directory during pilot rollout.
-6. Start the helper, then start the service.
-7. Confirm backend reachability with `/health` and confirm the agent receives `200 OK` from:
+3. Copy the published service and helper artifacts onto the device.
+4. Install `EmployeeBehavior.Agent.Service` as a Windows service and register the helper logon task with:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Install-AgentPilot.ps1 `
+  -ServiceSourceDirectory C:\staging\EmployeeBehaviorAgent\Service `
+  -HelperSourceDirectory C:\staging\EmployeeBehaviorAgent\SessionHelper `
+  -ServiceConfigPath C:\staging\configs\service.appsettings.json `
+  -HelperConfigPath C:\staging\configs\helper.appsettings.json `
+  -HelperTaskUser CONTOSO\pilot.user `
+  -StartService
+```
+
+5. If the installer is being run by an admin on behalf of another user, set `-HelperTaskUser` explicitly to the pilot account instead of relying on the current user default.
+6. Redirect both process outputs to the recommended `logs\` directory during pilot rollout if you wrap the binaries. The current code still emits console logging only.
+7. Start the helper task or have the pilot user sign in so the logon trigger fires.
+8. Confirm backend reachability with `/health` and confirm the agent receives `200 OK` from:
    - `POST /api/agent/heartbeat`
    - `GET /api/agent/policy`
    - `POST /api/agent/screenshots/upload`
+   All three requests must include `Authorization: Bearer <ApiToken>`.
+9. Restart the service once and confirm any queued screenshots retry from `UploadQueuePath`.
 
-Example service registration:
+Helper task notes:
 
-```powershell
-sc.exe create EmployeeBehavior.Agent.Service binPath= "\"C:\Program Files\EmployeeBehaviorAgent\Service\EmployeeBehavior.Agent.Service.exe\"" start= auto
-sc.exe start EmployeeBehavior.Agent.Service
-```
-
-Example helper scheduling approach:
-
-- Use a Scheduled Task that runs at user logon under the intended employee account.
 - The helper must not run in Session 0.
+- `Install-AgentPilot.ps1` supports `-WhatIf` and `-Confirm`.
+- The script preserves `device-id.json` and does not remove old data by default.
 
 ## Health checks
 
@@ -202,21 +219,31 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Test-AgentDe
   -HelperConfigPath .\agent\src\EmployeeBehavior.Agent.SessionHelper\appsettings.json
 ```
 
-2. Device identity:
+2. Backend secret and storage posture:
+   - Production sets `EBM_ENVIRONMENT=production`.
+   - Production sets non-default `EBM_AUTH_SECRET` and `EBM_AGENT_API_TOKEN`.
+   - Screenshot files are not exposed through a public `/storage` mount; admin UI reads them through `/api/screenshots/{id}/image` or `/thumbnail` with `screenshots.view`.
+
+3. Device identity:
    - `DeviceIdPath` parent directory exists and is writable by the service account.
    - `device-id.json` exists after first successful service start.
-3. API reachability:
+4. Upload queue:
+   - `UploadQueuePath` parent directory exists and is writable by the service account.
+   - `upload-queue.jsonl` appears when captures are queued and drains after successful uploads.
+   - `upload-queue-payloads\` contains encrypted pending screenshot payload files while uploads are waiting.
+   - Queue and payload files fail closed if Windows EFS protection cannot be applied.
+5. API reachability:
    - `GET /health` responds from the configured backend host.
    - Service can reach the agent endpoints over the same base URL.
-4. Capture path:
+6. Capture path:
    - Helper is running in the real signed-in session.
    - Named pipe values match.
    - Dry-run uploads log realistic screen counts and metadata.
-5. Session behavior:
+7. Session behavior:
    - `is_locked` changes when the workstation is locked.
    - `is_remote_session` and `is_rdp_session` change as expected during remote access.
    - `idle_seconds` increases when no input is present.
-6. Operational logging:
+8. Operational logging:
    - `service.log` and `helper.log` exist if your wrapper redirects stdout/stderr.
    - If no files exist, do not assume logs are preserved elsewhere.
 
@@ -228,27 +255,38 @@ Upgrade basics:
 
 1. Export or back up both `appsettings.json` files.
 2. Preserve `C:\ProgramData\EmployeeBehaviorAgent\device-id.json`.
-3. Stop the Windows service.
-4. Stop the helper task or log off the test user.
-5. Replace binaries with the new published version.
-6. Re-run `Test-AgentDeployment.ps1`.
-7. Start the helper, then start the service.
-8. Confirm dry-run or live heartbeat/upload logs before widening rollout.
+3. Preserve `C:\ProgramData\EmployeeBehaviorAgent\upload-queue.jsonl` if uploads are still pending.
+4. Stop the Windows service.
+5. Stop the helper task or log off the test user.
+6. Replace binaries with the new published version, or rerun `Install-AgentPilot.ps1` against the new artifact directories.
+7. Re-run `Test-AgentDeployment.ps1`.
+8. Start the helper, then start the service.
+9. Confirm dry-run or live heartbeat/upload logs before widening rollout.
 
 Rollback basics:
 
 1. Stop the service and helper.
 2. Restore the previous binary set and previous config files.
-3. Keep the same `device-id.json` unless the rollout plan explicitly requires re-registration.
+3. Keep the same `device-id.json` and `upload-queue.jsonl` unless the rollback plan explicitly requires queue or identity reset.
 4. Re-run the health checks.
 5. Restart helper and service.
+
+If you need to unregister the pilot installation without deleting identity data or binaries, run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Uninstall-AgentPilot.ps1
+```
+
+Optional destructive cleanup is explicit through `-RemoveServiceDirectory`, `-RemoveHelperDirectory`, `-RemoveLogDirectory`, `-RemoveUploadQueue`, and `-RemoveDeviceIdentity`.
 
 ## Known current limitations
 
 - No built-in file sink or Windows Event Log sink is wired yet.
 - No installer project is present in this repository yet.
 - No self-updater is present yet.
-- The in-memory upload queue is for MVP behavior only; it is not durable across process restarts.
+- The upload queue is durable across restarts, but it is still a local JSONL file intended for one service instance per device.
+- If operators delete the queue file or any future temp payload files referenced by queued entries, pending uploads can still be lost.
+- Queue growth is bounded only by local disk availability while the backend is unavailable.
 
 ## Operator handoff notes
 

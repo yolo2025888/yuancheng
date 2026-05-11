@@ -1,14 +1,20 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from sqlmodel import Session
 
-from app.api.routes import admin_router, agent_router, events_router, health_router, screenshots_router, timeline_router
+from app.api.routes import (
+    admin_router,
+    agent_router,
+    auth_router,
+    events_router,
+    health_router,
+    screenshots_router,
+    timeline_router,
+)
 from app.core.config import Settings, get_settings
 from app.core.db import build_engine, create_database_and_tables
 from app.services.agent import AgentService
@@ -38,13 +44,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_headers=["*"],
     )
 
-    storage_root = Path(app_settings.storage_root_dir)
-    if not storage_root.is_absolute():
-        storage_root = Path(__file__).resolve().parents[1] / storage_root
-    storage_root.mkdir(parents=True, exist_ok=True)
-    app.mount("/storage", StaticFiles(directory=storage_root), name="storage")
-
     app.include_router(health_router)
+    app.include_router(auth_router)
     app.include_router(admin_router)
     app.include_router(agent_router)
     app.include_router(screenshots_router)

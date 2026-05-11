@@ -217,6 +217,8 @@ if ($null -ne $serviceSection) {
         "PolicyRefreshIntervalSeconds",
         "UploadPollIntervalSeconds",
         "UploadBatchSize",
+        "UploadQueuePath",
+        "UploadQueueLeaseDurationSeconds",
         "DefaultPolicy"
     )) {
         if (Test-PropertyExists -InputObject $serviceSection -Name $requiredProperty) {
@@ -254,6 +256,7 @@ if ($null -ne $serviceSection) {
     Test-PositiveInteger -Check "AgentService.PolicyRefreshIntervalSeconds" -Value $serviceSection.PolicyRefreshIntervalSeconds
     Test-PositiveInteger -Check "AgentService.UploadPollIntervalSeconds" -Value $serviceSection.UploadPollIntervalSeconds
     Test-PositiveInteger -Check "AgentService.UploadBatchSize" -Value $serviceSection.UploadBatchSize
+    Test-PositiveInteger -Check "AgentService.UploadQueueLeaseDurationSeconds" -Value $serviceSection.UploadQueueLeaseDurationSeconds
 
     if ($serviceSection.SessionHelperRequestTimeoutSeconds -ge $serviceSection.SessionHelperConnectTimeoutSeconds) {
         Add-CheckResult -Check "Service/helper timeout relationship" -Status "PASS" -Detail "Request timeout is not shorter than connect timeout."
@@ -268,6 +271,14 @@ if ($null -ne $serviceSection) {
     }
     else {
         Add-CheckResult -Check "Device identity path" -Status "WARN" -Detail "DeviceIdPath '$deviceIdPath' is not rooted."
+    }
+
+    $uploadQueuePath = [string]$serviceSection.UploadQueuePath
+    if ([System.IO.Path]::IsPathRooted($uploadQueuePath)) {
+        Add-CheckResult -Check "Upload queue path" -Status "PASS" -Detail "UploadQueuePath '$uploadQueuePath' is rooted."
+    }
+    else {
+        Add-CheckResult -Check "Upload queue path" -Status "WARN" -Detail "UploadQueuePath '$uploadQueuePath' is not rooted."
     }
 
     $deviceIdDirectory = Split-Path -Path $deviceIdPath -Parent
@@ -298,6 +309,17 @@ if ($null -ne $serviceSection) {
     }
     else {
         Add-CheckResult -Check "Device identity file" -Status "WARN" -Detail "Device identity file does not exist yet. It will be created on first successful service start."
+    }
+
+    $uploadQueueDirectory = Split-Path -Path $uploadQueuePath -Parent
+    if ([string]::IsNullOrWhiteSpace($uploadQueueDirectory)) {
+        Add-CheckResult -Check "Upload queue directory" -Status "FAIL" -Detail "Could not resolve the UploadQueuePath parent directory."
+    }
+    elseif (Test-Path -LiteralPath $uploadQueueDirectory) {
+        Add-CheckResult -Check "Upload queue directory" -Status "PASS" -Detail "Directory '$uploadQueueDirectory' exists."
+    }
+    else {
+        Add-CheckResult -Check "Upload queue directory" -Status "WARN" -Detail "Directory '$uploadQueueDirectory' does not exist yet. The service will attempt to create it on first start."
     }
 
     if (Test-PropertyExists -InputObject $serviceSection.DefaultPolicy -Name "ScreenshotIntervalSeconds") {

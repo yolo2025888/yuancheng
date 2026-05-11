@@ -1,5 +1,6 @@
 import {
   AlertOutlined,
+  CalendarOutlined,
   KeyOutlined,
   ClockCircleOutlined,
   DashboardOutlined,
@@ -14,12 +15,14 @@ import { createBrowserRouter } from 'react-router-dom';
 
 import App from './App';
 import { AccessRolesPage } from './pages/AccessRoles';
+import { AttendancePage } from './pages/Attendance';
 import { AuditLogsPage } from './pages/AuditLogs';
 import { DashboardPage } from './pages/Dashboard';
 import { DevicesPage } from './pages/Devices';
 import { EmployeesPage } from './pages/Employees';
 import { EventsPage } from './pages/Events';
 import { GitHubRiskPage } from './pages/GitHubRisk';
+import { LoginPage } from './pages/Login';
 import { PoliciesPage } from './pages/Policies';
 import { RealtimeStatusPage } from './pages/RealtimeStatus';
 import { ScreenshotDetailPage } from './pages/ScreenshotDetail';
@@ -30,6 +33,7 @@ export type NavRoute = {
   label: string;
   path: string;
   icon: JSX.Element;
+  permissionKeys?: string[];
 };
 
 export const navRoutes: NavRoute[] = [
@@ -37,71 +41,93 @@ export const navRoutes: NavRoute[] = [
     key: 'dashboard',
     label: 'Dashboard',
     path: '/',
-    icon: <DashboardOutlined />
+    icon: <DashboardOutlined />,
+    permissionKeys: ['dashboard.view']
   },
   {
     key: 'realtime',
     label: 'Realtime Status',
     path: '/realtime-status',
-    icon: <LaptopOutlined />
+    icon: <LaptopOutlined />,
+    permissionKeys: ['screenshots.view', 'dashboard.view']
   },
   {
     key: 'employees',
     label: 'Employees',
     path: '/employees',
-    icon: <TeamOutlined />
+    icon: <TeamOutlined />,
+    permissionKeys: ['directory.view']
   },
   {
     key: 'devices',
     label: 'Devices',
     path: '/devices',
-    icon: <DeploymentUnitOutlined />
+    icon: <DeploymentUnitOutlined />,
+    permissionKeys: ['directory.view']
   },
   {
     key: 'timeline',
     label: 'Timeline',
     path: '/timeline',
-    icon: <ClockCircleOutlined />
+    icon: <ClockCircleOutlined />,
+    permissionKeys: ['screenshots.view']
   },
   {
     key: 'events',
     label: 'Events',
     path: '/events',
-    icon: <AlertOutlined />
+    icon: <AlertOutlined />,
+    permissionKeys: ['events.review']
+  },
+  {
+    key: 'attendance',
+    label: 'Attendance',
+    path: '/attendance',
+    icon: <CalendarOutlined />,
+    permissionKeys: ['attendance.view']
   },
   {
     key: 'screenshot-detail',
     label: 'Screenshot Detail',
     path: '/screenshot-detail',
-    icon: <UnorderedListOutlined />
+    icon: <UnorderedListOutlined />,
+    permissionKeys: ['screenshots.view']
   },
   {
     key: 'access-roles',
     label: 'Access Roles',
     path: '/access-roles',
-    icon: <KeyOutlined />
+    icon: <KeyOutlined />,
+    permissionKeys: ['access_matrix.view']
   },
   {
     key: 'policies',
     label: 'Policies',
     path: '/policies',
-    icon: <SafetyCertificateOutlined />
+    icon: <SafetyCertificateOutlined />,
+    permissionKeys: ['policies.manage']
   },
   {
     key: 'audit-logs',
     label: 'Audit Logs',
     path: '/audit-logs',
-    icon: <UnorderedListOutlined />
+    icon: <UnorderedListOutlined />,
+    permissionKeys: ['audit_logs.view']
   },
   {
     key: 'github-risk',
     label: 'GitHub Risk',
     path: '/github-risk',
-    icon: <GithubOutlined />
+    icon: <GithubOutlined />,
+    permissionKeys: ['risk_scores.view']
   }
 ];
 
 export const router = createBrowserRouter([
+  {
+    path: '/login',
+    element: <LoginPage />
+  },
   {
     path: '/',
     element: <App />,
@@ -112,6 +138,7 @@ export const router = createBrowserRouter([
       { path: 'devices', element: <DevicesPage /> },
       { path: 'timeline', element: <TimelinePage /> },
       { path: 'events', element: <EventsPage /> },
+      { path: 'attendance', element: <AttendancePage /> },
       { path: 'screenshot-detail', element: <ScreenshotDetailPage /> },
       { path: 'access-roles', element: <AccessRolesPage /> },
       { path: 'policies', element: <PoliciesPage /> },

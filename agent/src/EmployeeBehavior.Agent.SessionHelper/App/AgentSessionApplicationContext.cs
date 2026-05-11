@@ -1,5 +1,6 @@
 using System.Drawing;
 using EmployeeBehavior.Agent.Contracts.Models;
+using Microsoft.Extensions.Logging;
 
 namespace EmployeeBehavior.Agent.SessionHelper.App;
 

@@ -14,9 +14,41 @@ export type ApiStatus = {
   endpoint?: string;
 };
 
+export type AuthStorageMode = 'local' | 'session';
+
+export type AuthIdentity = {
+  id?: string;
+  username: string;
+  displayName: string;
+  email?: string;
+  roleId?: string;
+  roleName?: string;
+  permissionKeys: string[];
+  permissionsResolved: boolean;
+};
+
+export type AuthSessionSeed = {
+  token: string;
+  user: AuthIdentity;
+  source: 'live' | 'local-dev';
+};
+
+export type StoredAuthSession = AuthSessionSeed & {
+  storageMode: AuthStorageMode;
+};
+
 export type ApiResult<T> = {
   data: T;
   apiStatus: ApiStatus;
+};
+
+export type EmployeeImportSummary = {
+  totalCount?: number;
+  createdCount?: number;
+  updatedCount?: number;
+  skippedCount?: number;
+  warnings: string[];
+  detail?: string;
 };
 
 export type BackendHealth = {
@@ -233,6 +265,25 @@ export type AuditLogRecord = {
   reason: string;
   timestamp: string;
   result: string;
+};
+
+export type AttendanceRecord = {
+  key: string;
+  employee: string;
+  employeeNo?: string;
+  department?: string;
+  userName: string;
+  machineName?: string;
+  eventType: 'clock_in' | 'clock_out' | (string & {});
+  eventLabel: string;
+  occurredAt: string;
+  workDate?: string;
+  anomalyStatus: 'normal' | 'late' | 'early_leave' | (string & {});
+  anomalyLabel: string;
+  anomalyReasons: string[];
+  reviewStatus: string;
+  reviewNote?: string;
+  source: string;
 };
 
 export type GitHubRiskRecord = {

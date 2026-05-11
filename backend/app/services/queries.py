@@ -6,12 +6,14 @@ from uuid import UUID
 
 from sqlmodel import Session, select
 
-from app.models import AuditLog, BehaviorEvent, Device, Employee, Policy, Role, ScreenDiff, Screenshot, User
+from app.models import AttendanceRecord, AuditLog, BehaviorEvent, Device, Employee, Policy, Role, ScreenDiff, Screenshot, User
 from app.schemas.admin import (
     AccessCapabilityItem,
     AccessMatrixResponse,
     AccessRoleMatrixItem,
     AccessRoleUserItem,
+    AttendanceListResponse,
+    AttendanceRecordItem,
     AuditLogItem,
     AuditLogListResponse,
     DashboardPolicyCoverage,
@@ -30,6 +32,11 @@ from app.schemas.admin import (
     SafeForegroundWindow,
     SafeInputActivity,
     SafeSessionState,
+)
+from app.services.access_control import (
+    ACCESS_CAPABILITY_DEFINITIONS,
+    ACCESS_ROLE_TEMPLATES,
+    access_template_for_role,
 )
 from app.services.audit import AuditContext, AuditService
 from app.services.policies import PolicyService
@@ -64,86 +71,6 @@ STATUS_MULTIPLIERS = {
 
 STALE_DEVICE_AFTER_SECONDS = 10 * 60
 AGED_DEVICE_AFTER_SECONDS = 30 * 60
-ACCESS_CAPABILITY_DEFINITIONS = (
-    {
-        "key": "dashboard.view",
-        "label": "Dashboard summary",
-        "description": "View aggregate employee, device, and risk summary metrics.",
-    },
-    {
-        "key": "risk_scores.view",
-        "label": "Risk scores",
-        "description": "View employee-level risk scores, labels, and scoring reasons.",
-    },
-    {
-        "key": "events.review",
-        "label": "Event review",
-        "description": "Review behavior events and update their workflow status.",
-    },
-    {
-        "key": "screenshots.view",
-        "label": "Screenshot metadata",
-        "description": "View screenshot and window metadata captured from company-owned devices.",
-    },
-    {
-        "key": "policies.manage",
-        "label": "Policy management",
-        "description": "Create, update, and activate monitoring policy definitions.",
-    },
-    {
-        "key": "audit_logs.view",
-        "label": "Audit logs",
-        "description": "View policy and review audit log entries.",
-    },
-    {
-        "key": "directory.view",
-        "label": "Employee directory",
-        "description": "View employee and company device assignment records.",
-    },
-    {
-        "key": "access_matrix.view",
-        "label": "Access planning",
-        "description": "View the recommended role and permission planning matrix.",
-    },
-)
-ACCESS_ROLE_TEMPLATES = (
-    {
-        "name": "Admin",
-        "description": "Operations owner with full visibility into monitoring, policy, and audit surfaces.",
-        "permission_keys": [definition["key"] for definition in ACCESS_CAPABILITY_DEFINITIONS],
-    },
-    {
-        "name": "Risk Analyst",
-        "description": "Investigates elevated risk signals and reviews event workflows.",
-        "permission_keys": [
-            "dashboard.view",
-            "risk_scores.view",
-            "events.review",
-            "screenshots.view",
-            "directory.view",
-        ],
-    },
-    {
-        "name": "Manager",
-        "description": "Sees aggregate team health and employee risk posture without policy editing access.",
-        "permission_keys": [
-            "dashboard.view",
-            "risk_scores.view",
-            "directory.view",
-        ],
-    },
-    {
-        "name": "Compliance",
-        "description": "Audits policy coverage, review activity, and access planning decisions.",
-        "permission_keys": [
-            "dashboard.view",
-            "audit_logs.view",
-            "policies.manage",
-            "access_matrix.view",
-            "directory.view",
-        ],
-    },
-)
 
 
 def day_bounds(date_value: date) -> tuple[datetime, datetime]:
@@ -238,8 +165,8 @@ class QueryService:
             device_id=screenshot.device_id,
             captured_at=screenshot.captured_at,
             screen_index=screenshot.screen_index,
-            image_uri=screenshot.image_uri,
-            thumb_uri=screenshot.thumb_uri,
+            image_uri=self._secured_screenshot_uri(screenshot.id, "image", screenshot.image_uri),
+            thumb_uri=self._secured_screenshot_uri(screenshot.id, "thumbnail", screenshot.thumb_uri),
             width=screenshot.width,
             height=screenshot.height,
             foreground_process=screenshot.foreground_process,
@@ -340,9 +267,9 @@ class QueryService:
                 TimelineItem(
                     time=ensure_utc(screenshot.captured_at).strftime("%H:%M:%S"),
                     screenshot_id=screenshot.id,
-                    thumbnail_url=screenshot.thumb_uri,
-                    thumb_uri=screenshot.thumb_uri,
-                    image_uri=screenshot.image_uri,
+                    thumbnail_url=self._secured_screenshot_uri(screenshot.id, "thumbnail", screenshot.thumb_uri),
+                    thumb_uri=self._secured_screenshot_uri(screenshot.id, "thumbnail", screenshot.thumb_uri),
+                    image_uri=self._secured_screenshot_uri(screenshot.id, "image", screenshot.image_uri),
                     activity_type="unknown",
                     activity=TimelineActivity(
                         type="unknown",
@@ -366,6 +293,11 @@ class QueryService:
             )
 
         return TimelineResponse(employee_id=employee_id, date=date_value, items=items)
+
+    def _secured_screenshot_uri(self, screenshot_id: UUID, kind: str, stored_uri: str | None) -> str | None:
+        if not stored_uri:
+            return None
+        return f"/api/screenshots/{screenshot_id}/{kind}"
 
     def list_events(
         self,
@@ -473,6 +405,68 @@ class QueryService:
             events=self._relevant_events([screenshot]),
         )
 
+    def _build_attendance_item(
+        self,
+        *,
+        record: AttendanceRecord,
+        employee: Employee | None,
+    ) -> AttendanceRecordItem:
+        return AttendanceRecordItem(
+            id=record.id,
+            employee_id=record.employee_id,
+            device_id=record.device_id,
+            employee_no=record.employee_no or (employee.employee_no if employee is not None else None),
+            employee_name=employee.name if employee is not None else None,
+            department=employee.department if employee is not None else None,
+            user_name=record.user_name,
+            machine_name=record.machine_name,
+            event_type=record.event_type,
+            occurred_at=record.occurred_at,
+            work_date=record.work_date,
+            anomaly_status=record.anomaly_status,
+            anomaly_reasons=record.anomaly_reasons_json,
+            review_status=record.review_status,
+            review_note=record.review_note,
+            reviewed_at=record.reviewed_at,
+            source=record.source,
+            created_at=record.created_at,
+            updated_at=record.updated_at,
+        )
+
+    def list_attendance(
+        self,
+        *,
+        work_date: date | None,
+        anomaly_status: str | None,
+        review_status: str | None,
+        limit: int,
+    ) -> AttendanceListResponse:
+        statement = select(AttendanceRecord).order_by(AttendanceRecord.occurred_at.desc())
+        if work_date is not None:
+            statement = statement.where(AttendanceRecord.work_date == work_date)
+        if anomaly_status is not None:
+            statement = statement.where(AttendanceRecord.anomaly_status == anomaly_status)
+        if review_status is not None:
+            statement = statement.where(AttendanceRecord.review_status == review_status)
+
+        records = self.session.exec(statement.limit(limit)).all()
+        employee_ids = [record.employee_id for record in records if record.employee_id is not None]
+        employees_by_id = {
+            employee.id: employee
+            for employee in self.session.exec(select(Employee).where(Employee.id.in_(employee_ids))).all()
+        } if employee_ids else {}
+        return AttendanceListResponse(
+            items=[
+                self._build_attendance_item(
+                    record=record,
+                    employee=employees_by_id.get(record.employee_id) if record.employee_id is not None else None,
+                )
+                for record in records
+            ],
+            total=len(records),
+            generated_at=datetime.now(timezone.utc),
+        )
+
     def list_employees(self) -> EmployeeListResponse:
         employees = self.session.exec(select(Employee).order_by(Employee.employee_no.asc(), Employee.name.asc())).all()
         devices = self.session.exec(select(Device)).all()
@@ -571,27 +565,6 @@ class QueryService:
         days = hours // 24
         unit = "day" if days == 1 else "days"
         return f"{days} {unit}"
-
-    def _access_template_for_role(self, role_name: str | None) -> dict[str, object]:
-        normalized_name = (role_name or "").strip().casefold()
-        for template in ACCESS_ROLE_TEMPLATES:
-            if template["name"].casefold() == normalized_name:
-                return template
-
-        if "admin" in normalized_name:
-            return ACCESS_ROLE_TEMPLATES[0]
-        if any(token in normalized_name for token in ("risk", "review", "analyst")):
-            return ACCESS_ROLE_TEMPLATES[1]
-        if any(token in normalized_name for token in ("manager", "lead", "supervisor")):
-            return ACCESS_ROLE_TEMPLATES[2]
-        if any(token in normalized_name for token in ("compliance", "audit", "security")):
-            return ACCESS_ROLE_TEMPLATES[3]
-
-        return {
-            "name": role_name or "Observer",
-            "description": "Read-only observer for aggregate dashboard and directory planning surfaces.",
-            "permission_keys": ["dashboard.view", "directory.view"],
-        }
 
     def _build_employee_risk_score(
         self,
@@ -937,7 +910,7 @@ class QueryService:
         existing_role_names: set[str] = set()
         for role in roles:
             existing_role_names.add(role.name.casefold())
-            template = self._access_template_for_role(role.name)
+            template = access_template_for_role(role.name)
             assigned_users = users_by_role.get(role.id, [])
             role_items.append(
                 AccessRoleMatrixItem(

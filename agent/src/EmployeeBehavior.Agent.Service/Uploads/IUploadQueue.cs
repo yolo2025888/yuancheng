@@ -4,5 +4,15 @@ public interface IUploadQueue
 {
     ValueTask EnqueueAsync(QueuedUploadItem item, CancellationToken cancellationToken);
 
-    ValueTask<IReadOnlyList<QueuedUploadItem>> DequeueBatchAsync(int maxItems, CancellationToken cancellationToken);
+    ValueTask<UploadQueueLease> LeaseBatchAsync(int maxItems, CancellationToken cancellationToken);
+
+    ValueTask CompleteAsync(
+        string leaseId,
+        IReadOnlyCollection<Guid> localIds,
+        CancellationToken cancellationToken);
+
+    ValueTask ReleaseAsync(
+        string leaseId,
+        IReadOnlyCollection<Guid> localIds,
+        CancellationToken cancellationToken);
 }

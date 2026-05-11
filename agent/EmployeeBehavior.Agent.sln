@@ -1,4 +1,4 @@
-Microsoft Visual Studio Solution File, Format Version 12.00
+﻿Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.0.31903.59
 MinimumVisualStudioVersion = 10.0.40219.1
@@ -7,6 +7,10 @@ EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EmployeeBehavior.Agent.Service", "src\EmployeeBehavior.Agent.Service\EmployeeBehavior.Agent.Service.csproj", "{A3B0E0F8-14C6-4E31-B8D2-0C4EE8F9A201}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EmployeeBehavior.Agent.SessionHelper", "src\EmployeeBehavior.Agent.SessionHelper\EmployeeBehavior.Agent.SessionHelper.csproj", "{1F0B7A69-85FA-4A44-9D07-0FB0CC6D7301}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{E9A88E7C-E6F6-458A-9245-5586601102A7}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EmployeeBehavior.Agent.Launcher", "src\EmployeeBehavior.Agent.Launcher\EmployeeBehavior.Agent.Launcher.csproj", "{6CD16234-3EF5-4DBE-A104-A16A29227CEF}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -26,8 +30,15 @@ Global
 		{1F0B7A69-85FA-4A44-9D07-0FB0CC6D7301}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{1F0B7A69-85FA-4A44-9D07-0FB0CC6D7301}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{1F0B7A69-85FA-4A44-9D07-0FB0CC6D7301}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6CD16234-3EF5-4DBE-A104-A16A29227CEF}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6CD16234-3EF5-4DBE-A104-A16A29227CEF}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6CD16234-3EF5-4DBE-A104-A16A29227CEF}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6CD16234-3EF5-4DBE-A104-A16A29227CEF}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{6CD16234-3EF5-4DBE-A104-A16A29227CEF} = {E9A88E7C-E6F6-458A-9245-5586601102A7}
 	EndGlobalSection
 EndGlobal
