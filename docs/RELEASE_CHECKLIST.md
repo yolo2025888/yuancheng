@@ -12,6 +12,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Test-AgentPu
 powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Test-AgentDeployment.ps1 -ServiceConfigPath .\agent\publish\Service\appsettings.json -HelperConfigPath .\agent\publish\SessionHelper\appsettings.json
 ```
 
+Run the GitHub Actions `Security Audit` workflow before promoting a release candidate. It performs backend Python, frontend npm, and agent .NET dependency audits separately from ordinary PR CI.
+
 Production gates:
 
 - `ApiBaseUrl` is the production API URL.
