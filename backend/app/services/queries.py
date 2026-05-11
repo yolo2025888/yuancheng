@@ -5,8 +5,10 @@ from uuid import UUID
 
 from sqlmodel import Session, select
 
-from app.models import BehaviorEvent, Device, Employee, Policy, ScreenDiff, Screenshot
+from app.models import AuditLog, BehaviorEvent, Device, Employee, Policy, ScreenDiff, Screenshot
 from app.schemas.admin import (
+    AuditLogItem,
+    AuditLogListResponse,
     DeviceItem,
     DeviceListResponse,
     EmployeeItem,
@@ -18,6 +20,8 @@ from app.schemas.admin import (
     SafeInputActivity,
     SafeSessionState,
 )
+from app.services.audit import AuditContext, AuditService
+from app.services.policies import PolicyService
 from app.schemas.query import (
     BehaviorEventDetail,
     BehaviorEventListResponse,
@@ -48,6 +52,7 @@ def ensure_utc(value: datetime) -> datetime:
 class QueryService:
     def __init__(self, session: Session):
         self.session = session
+        self.audit = AuditService(session)
 
     def _screen_diff_map(self, screenshot_ids: list[UUID]) -> dict[UUID, ScreenDiff]:
         if not screenshot_ids:
@@ -292,7 +297,13 @@ class QueryService:
             return None
         return self._build_event_detail(event=event)
 
-    def review_event(self, event_id: UUID, payload: BehaviorEventReviewRequest) -> BehaviorEventDetail | None:
+    def review_event(
+        self,
+        event_id: UUID,
+        payload: BehaviorEventReviewRequest,
+        *,
+        audit_context: AuditContext | None = None,
+    ) -> BehaviorEventDetail | None:
         event = self.session.get(BehaviorEvent, event_id)
         if event is None:
             return None
@@ -303,6 +314,13 @@ class QueryService:
         event.reviewed_at = datetime.now(timezone.utc)
         event.updated_at = event.reviewed_at
         self.session.add(event)
+        self.audit.log(
+            action="event.reviewed",
+            target_type="behavior_event",
+            target_id=event.id,
+            reason=payload.review_note or (f"Set status to {payload.status}" if payload.status is not None else None),
+            context=audit_context,
+        )
         self.session.commit()
         self.session.refresh(event)
         return self._build_event_detail(event=event)
@@ -349,9 +367,7 @@ class QueryService:
     def list_employees(self) -> EmployeeListResponse:
         employees = self.session.exec(select(Employee).order_by(Employee.employee_no.asc(), Employee.name.asc())).all()
         devices = self.session.exec(select(Device)).all()
-        active_policy = self.session.exec(
-            select(Policy).where(Policy.is_active.is_(True)).order_by(Policy.created_at.desc())
-        ).first()
+        active_policy = PolicyService(self.session).ensure_default_policy()
         policy_summary = PolicySummary.model_validate(active_policy) if active_policy is not None else None
 
         active_device_counts: dict[UUID, int] = {}
@@ -427,4 +443,13 @@ class QueryService:
         return PolicyListResponse(
             items=[PolicyItem.model_validate(policy) for policy in policies],
             total=len(policies),
+        )
+
+    def list_audit_logs(self, limit: int) -> AuditLogListResponse:
+        audit_logs = self.session.exec(
+            select(AuditLog).order_by(AuditLog.created_at.desc()).limit(limit)
+        ).all()
+        return AuditLogListResponse(
+            items=[AuditLogItem.model_validate(audit_log) for audit_log in audit_logs],
+            total=len(audit_logs),
         )

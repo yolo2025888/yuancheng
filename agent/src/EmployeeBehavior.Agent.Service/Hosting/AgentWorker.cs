@@ -48,7 +48,7 @@ public sealed class AgentWorker : BackgroundService
         {
             await Task.WhenAll(
                 RunHeartbeatLoopAsync(deviceId, stoppingToken),
-                RunPolicyLoopAsync(stoppingToken),
+                RunPolicyLoopAsync(deviceId, stoppingToken),
                 RunCaptureLoopAsync(deviceId, stoppingToken),
                 RunUploadLoopAsync(stoppingToken));
         }
@@ -92,13 +92,13 @@ public sealed class AgentWorker : BackgroundService
         while (await timer.WaitForNextTickAsync(cancellationToken));
     }
 
-    private async Task RunPolicyLoopAsync(CancellationToken cancellationToken)
+    private async Task RunPolicyLoopAsync(string deviceId, CancellationToken cancellationToken)
     {
         using var timer = new PeriodicTimer(TimeSpan.FromSeconds(_options.PolicyRefreshIntervalSeconds));
 
         do
         {
-            var latestPolicy = await _agentApiClient.GetPolicyAsync(cancellationToken);
+            var latestPolicy = await _agentApiClient.GetPolicyAsync(deviceId, cancellationToken);
             _policyCache.Update(latestPolicy);
 
             _logger.LogInformation(

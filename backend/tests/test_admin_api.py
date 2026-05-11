@@ -6,11 +6,11 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 from fastapi.testclient import TestClient
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from app.core.config import Settings
 from app.main import create_app
-from app.models import BehaviorEvent, Device, Employee, Policy
+from app.models import AuditLog, BehaviorEvent, Device, Employee, Policy
 
 
 def test_admin_list_apis_return_employees_devices_and_policies(
@@ -103,7 +103,94 @@ def test_admin_list_apis_return_employees_devices_and_policies(
     policies_payload = policies_response.json()
     assert policies_payload["total"] == 2
     assert policies_payload["items"][0]["is_active"] is True
+    assert policies_payload["items"][0]["rules_json"] == {}
     assert policies_payload["items"][1]["version"] == "0.0.1"
+
+
+def test_policy_crud_and_activation_write_audit_logs(client: TestClient) -> None:
+    create_response = client.post(
+        "/api/policies",
+        json={
+            "name": "engineering-focus",
+            "version": "2026.05",
+            "screenshot_interval_seconds": 15,
+            "no_change_threshold": 4,
+            "retention_days": 21,
+            "is_active": False,
+            "rules_json": {
+                "roles": ["Engineer"],
+                "departments": ["Engineering"],
+                "positions": ["Senior Engineer"],
+            },
+        },
+    )
+
+    assert create_response.status_code == 201
+    created_policy = create_response.json()
+    assert created_policy["is_active"] is False
+    assert created_policy["rules_json"] == {
+        "roles": ["engineer"],
+        "departments": ["engineering"],
+        "positions": ["senior engineer"],
+    }
+
+    update_response = client.put(
+        f"/api/policies/{created_policy['id']}",
+        json={
+            "version": "2026.05.1",
+            "retention_days": 28,
+            "rules_json": {
+                "roles": ["Engineer", "Lead Engineer"],
+                "departments": ["Engineering"],
+            },
+        },
+    )
+
+    assert update_response.status_code == 200
+    updated_policy = update_response.json()
+    assert updated_policy["version"] == "2026.05.1"
+    assert updated_policy["retention_days"] == 28
+    assert updated_policy["rules_json"] == {
+        "roles": ["engineer", "lead engineer"],
+        "departments": ["engineering"],
+    }
+
+    activation_response = client.post(
+        f"/api/policies/{created_policy['id']}/activation",
+        json={"is_active": True},
+    )
+
+    assert activation_response.status_code == 200
+    activated_policy = activation_response.json()
+    assert activated_policy["is_active"] is True
+
+    with Session(client.app.state.engine) as session:
+        persisted_policy = session.get(Policy, UUID(created_policy["id"]))
+        assert persisted_policy is not None
+        assert persisted_policy.version == "2026.05.1"
+        assert persisted_policy.is_active is True
+        assert persisted_policy.rules_json == {
+            "roles": ["engineer", "lead engineer"],
+            "departments": ["engineering"],
+        }
+
+        audit_logs = session.exec(select(AuditLog).order_by(AuditLog.created_at.asc())).all()
+        assert [audit.action for audit in audit_logs] == [
+            "policy.created",
+            "policy.updated",
+            "policy.activated",
+        ]
+        assert all(audit.target_id == persisted_policy.id for audit in audit_logs)
+        assert all(audit.target_type == "policy" for audit in audit_logs)
+        assert all(audit.ip_address == "testclient" for audit in audit_logs)
+        assert all(audit.user_agent is not None for audit in audit_logs)
+
+    audit_response = client.get("/api/audit-logs")
+    assert audit_response.status_code == 200
+    audit_payload = audit_response.json()
+    assert audit_payload["total"] == 3
+    assert audit_payload["items"][0]["action"] == "policy.activated"
+    assert audit_payload["items"][0]["target_type"] == "policy"
 
 
 def test_event_review_updates_status_and_note(client: TestClient, seeded_device: dict[str, str]) -> None:
@@ -142,6 +229,14 @@ def test_event_review_updates_status_and_note(client: TestClient, seeded_device:
         assert event.status == "reviewed"
         assert event.review_note == "Confirmed benign activity."
         assert event.reviewed_at is not None
+
+        audit_logs = session.exec(
+            select(AuditLog).where(AuditLog.target_id == event_id).order_by(AuditLog.created_at.asc())
+        ).all()
+        assert len(audit_logs) == 1
+        assert audit_logs[0].action == "event.reviewed"
+        assert audit_logs[0].target_type == "behavior_event"
+        assert audit_logs[0].reason == "Confirmed benign activity."
 
 
 def test_sqlite_schema_ensure_adds_new_columns_to_existing_db(tmp_path: Path) -> None:

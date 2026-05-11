@@ -238,6 +238,15 @@ body {
   gap: 4px;
 }
 
+.policy-table-row-selected > td {
+  background: rgba(20, 184, 166, 0.08) !important;
+}
+
+.policy-editor-hints {
+  width: 100%;
+  margin-top: 8px;
+}
+
 .ant-table-wrapper .ant-table {
   font-size: 13px;
 }

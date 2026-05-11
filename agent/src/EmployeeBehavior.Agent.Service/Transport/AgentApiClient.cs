@@ -119,30 +119,35 @@ public sealed class AgentApiClient : IAgentApiClient
         };
     }
 
-    public async Task<AgentPolicy> GetPolicyAsync(CancellationToken cancellationToken)
+    public async Task<AgentPolicy> GetPolicyAsync(string deviceId, CancellationToken cancellationToken)
     {
         if (_options.DryRun)
         {
-            _logger.LogInformation("DryRun policy fetch from /api/agent/policy.");
+            _logger.LogInformation("DryRun policy fetch from /api/agent/policy for device {DeviceId}.", deviceId);
             return _options.DefaultPolicy ?? AgentPolicy.CreateDefault();
         }
 
-        await using var stream = await _httpClient.GetStreamAsync("/api/agent/policy", cancellationToken);
+        var requestUri = $"/api/agent/policy?device_id={Uri.EscapeDataString(deviceId)}";
+        await using var stream = await _httpClient.GetStreamAsync(requestUri, cancellationToken);
         using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
         var root = document.RootElement;
+        var policyRoot = root.TryGetProperty("policy", out var nestedPolicy) ? nestedPolicy : root;
+        var defaults = _options.DefaultPolicy ?? AgentPolicy.CreateDefault();
 
         return new AgentPolicy
         {
-            Version = root.TryGetProperty("version", out var version)
-                ? version.GetString() ?? "default"
-                : "default",
-            CaptureEnabled = true,
-            ScreenshotIntervalSeconds = root.TryGetProperty("screenshot_interval_seconds", out var interval)
+            Version = policyRoot.TryGetProperty("version", out var version)
+                ? version.GetString() ?? defaults.Version
+                : defaults.Version,
+            CaptureEnabled = policyRoot.TryGetProperty("capture_enabled", out var captureEnabled)
+                ? captureEnabled.GetBoolean()
+                : defaults.CaptureEnabled,
+            ScreenshotIntervalSeconds = policyRoot.TryGetProperty("screenshot_interval_seconds", out var interval)
                 ? interval.GetInt32()
-                : 10,
-            NoChangeThreshold = root.TryGetProperty("no_change_threshold", out var threshold)
+                : defaults.ScreenshotIntervalSeconds,
+            NoChangeThreshold = policyRoot.TryGetProperty("no_change_threshold", out var threshold)
                 ? threshold.GetInt32()
-                : 6
+                : defaults.NoChangeThreshold
         };
     }
 
@@ -187,6 +192,8 @@ public sealed class AgentApiClient : IAgentApiClient
         form.Add(new StringContent(request.SessionState?.SessionConnectState ?? string.Empty), "session_connect_state");
         if (!string.IsNullOrWhiteSpace(request.ImageSha256))
         {
+            // Backend still expects the legacy "phash" field name. The MVP currently
+            // supplies the image SHA-256 digest there as a deterministic fallback hash.
             form.Add(new StringContent(request.ImageSha256), "phash");
         }
 
@@ -239,6 +246,8 @@ public sealed class AgentApiClient : IAgentApiClient
             {
                 image_uri = request.ImageUri,
                 thumb_uri = request.ThumbUri,
+                // Keep the legacy contract key; the current value is SHA-256 rather than
+                // a perceptual hash until a dedicated phash pipeline exists.
                 phash = request.ImageSha256
             },
             cancellationToken);

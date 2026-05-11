@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from typing import Any
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class PolicySummary(BaseModel):
@@ -14,6 +15,7 @@ class PolicySummary(BaseModel):
     no_change_threshold: int
     retention_days: int
     is_active: bool
+    rules_json: dict[str, Any] = Field(default_factory=dict)
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -97,4 +99,47 @@ class PolicyItem(PolicySummary):
 
 class PolicyListResponse(BaseModel):
     items: list[PolicyItem]
+    total: int
+
+
+class PolicyCreateRequest(BaseModel):
+    name: str
+    version: str
+    screenshot_interval_seconds: int = Field(ge=1)
+    no_change_threshold: int = Field(ge=1)
+    retention_days: int = Field(ge=1)
+    is_active: bool = True
+    rules_json: dict[str, Any] = Field(default_factory=dict)
+
+
+class PolicyUpdateRequest(BaseModel):
+    name: str | None = None
+    version: str | None = None
+    screenshot_interval_seconds: int | None = Field(default=None, ge=1)
+    no_change_threshold: int | None = Field(default=None, ge=1)
+    retention_days: int | None = Field(default=None, ge=1)
+    is_active: bool | None = None
+    rules_json: dict[str, Any] | None = None
+
+
+class PolicyActivationRequest(BaseModel):
+    is_active: bool
+
+
+class AuditLogItem(BaseModel):
+    id: UUID
+    actor_id: UUID | None = None
+    action: str
+    target_type: str
+    target_id: UUID | None = None
+    reason: str | None = None
+    ip_address: str | None = None
+    user_agent: str | None = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AuditLogListResponse(BaseModel):
+    items: list[AuditLogItem]
     total: int

@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
-from sqlmodel import Session, select
+from sqlmodel import Session
 
 from app.core.config import Settings, get_settings
 from app.models import Device, Policy, Screenshot
@@ -21,6 +21,7 @@ from app.schemas.agent import (
     ScreenshotMetadataResponse,
     ScreenshotUploadResponse,
 )
+from app.services.policies import PolicyService
 from app.services.screen_analysis import ScreenshotAnalysisService
 from app.services.storage import LocalScreenshotStorage
 
@@ -34,28 +35,13 @@ class AgentService:
         self.session = session
         self.settings = settings or get_settings()
         self.storage = LocalScreenshotStorage(self.settings)
+        self.policies = PolicyService(session, self.settings)
 
     def ensure_default_policy(self) -> Policy:
-        statement = select(Policy).where(Policy.is_active.is_(True)).order_by(Policy.created_at.desc())
-        policy = self.session.exec(statement).first()
-        if policy is not None:
-            return policy
+        return self.policies.ensure_default_policy()
 
-        policy = Policy(
-            name=self.settings.default_policy_name,
-            version=self.settings.default_policy_version,
-            screenshot_interval_seconds=self.settings.default_screenshot_interval_seconds,
-            no_change_threshold=self.settings.default_no_change_threshold,
-            retention_days=self.settings.default_retention_days,
-        )
-        self.session.add(policy)
-        self.session.commit()
-        self.session.refresh(policy)
-        return policy
-
-    def get_policy(self, device_id: str | None = None) -> PolicyResponse:
-        del device_id
-        policy = self.ensure_default_policy()
+    def get_policy(self, device_id: UUID | None = None) -> PolicyResponse:
+        policy = self.policies.resolve_policy_for_device(device_id)
         return PolicyResponse.model_validate(policy)
 
     def _get_bound_device(self, device_id: UUID) -> Device:
@@ -169,7 +155,6 @@ class AgentService:
             self.session.refresh(screenshot)
 
     def heartbeat(self, payload: HeartbeatRequest) -> HeartbeatResponse:
-        policy = self.ensure_default_policy()
         device = self.session.get(Device, payload.device_id)
         now = utc_now()
 
@@ -207,6 +192,7 @@ class AgentService:
             self.session.add(device)
 
         self.session.commit()
+        policy = self.policies.resolve_policy_for_device(payload.device_id)
         return HeartbeatResponse(server_time=now, policy=PolicyResponse.model_validate(policy))
 
     def create_screenshot(self, payload: ScreenshotMetadataRequest) -> ScreenshotMetadataResponse:

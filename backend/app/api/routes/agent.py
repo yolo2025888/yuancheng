@@ -34,7 +34,7 @@ def heartbeat(
 
 @router.get("/policy", response_model=PolicyResponse)
 def get_policy(
-    device_id: str | None = Query(default=None),
+    device_id: UUID | None = Query(default=None),
     session: Session = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> PolicyResponse:

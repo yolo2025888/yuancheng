@@ -46,7 +46,14 @@ export type HeatmapPoint = {
 
 export type EventSeverity = 'low' | 'medium' | 'high' | 'critical';
 
-export type EventStatus = 'new' | 'reviewing' | 'confirmed' | 'ignored' | 'closed';
+export type EventStatus =
+  | 'new'
+  | 'reviewing'
+  | 'reviewed'
+  | 'confirmed'
+  | 'ignored'
+  | 'closed'
+  | (string & {});
 
 export type ChangeMetrics = {
   changeLevel: string;
@@ -158,18 +165,35 @@ export type ScreenshotListItem = {
 
 export type PolicyRecord = {
   key: string;
-  name?: string;
+  name: string;
   version?: string;
   role: string;
-  positions?: string[];
-  departments?: string[];
+  roles: string[];
+  positions: string[];
+  departments: string[];
   status?: string;
+  isActive: boolean;
   assignedEmployees?: number;
+  screenshotIntervalSeconds: number;
   screenshotInterval: string;
+  noChangeThresholdFrames: number;
   noChangeThreshold: string;
+  highRiskDurationSeconds: number;
   highRiskDuration: string;
   ocrEnabled: boolean;
+  retentionDays: number;
   originalRetention: string;
+};
+
+export type PolicyMutationInput = {
+  name: string;
+  version?: string;
+  screenshotIntervalSeconds: number;
+  noChangeThresholdFrames: number;
+  retentionDays: number;
+  roles: string[];
+  departments: string[];
+  positions: string[];
 };
 
 export type AuditLogRecord = {
@@ -177,6 +201,8 @@ export type AuditLogRecord = {
   operator: string;
   action: string;
   target: string;
+  scope?: string;
+  metadataSummary?: string;
   reason: string;
   timestamp: string;
   result: string;

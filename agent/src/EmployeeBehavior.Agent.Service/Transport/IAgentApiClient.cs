@@ -6,7 +6,7 @@ public interface IAgentApiClient
 {
     Task<HeartbeatResponse> SendHeartbeatAsync(HeartbeatRequest request, CancellationToken cancellationToken);
 
-    Task<AgentPolicy> GetPolicyAsync(CancellationToken cancellationToken);
+    Task<AgentPolicy> GetPolicyAsync(string deviceId, CancellationToken cancellationToken);
 
     Task<ScreenshotUploadResponse> UploadScreenshotAsync(
         ScreenshotUploadRequest request,

@@ -16,6 +16,7 @@ import { apiClient, getErrorMessage } from './apiClient';
 import type {
   ApiResult,
   ApiStatus,
+  AuditLogRecord,
   BackendHealth,
   ChangeMetrics,
   DeviceRecord,
@@ -25,6 +26,7 @@ import type {
   EventStatus,
   KpiMetric,
   LinkedRiskRecord,
+  PolicyMutationInput,
   PolicyRecord,
   RealtimeStatusRecord,
   ScreenshotComparison,
@@ -59,6 +61,14 @@ type RealtimeStatusData = {
 type EmployeeListData = ApiResult<EmployeeRecord[]>;
 type DeviceListData = ApiResult<DeviceRecord[]>;
 type PolicyListData = ApiResult<PolicyRecord[]>;
+type AuditLogListData = ApiResult<AuditLogRecord[]>;
+type PolicyMutationResult = { apiStatus: ApiStatus; data?: PolicyRecord[] };
+type PolicyStateAction = 'activate' | 'deactivate' | 'set_active';
+type PolicyMutationAttempt = {
+  path: string;
+  method: 'POST' | 'PUT';
+  body?: unknown;
+};
 
 type EventApiItem = {
   id: string;
@@ -150,6 +160,20 @@ type PolicyApiItem = Record<string, unknown> & {
   rules_json?: Record<string, unknown>;
 };
 
+type AuditLogApiItem = Record<string, unknown> & {
+  id?: string;
+  operator?: string;
+  action?: string;
+  target?: string;
+  reason?: string;
+  result?: string;
+  timestamp?: string;
+  created_at?: string;
+  updated_at?: string;
+  metadata?: Record<string, unknown>;
+  details_json?: Record<string, unknown>;
+};
+
 type HealthPayload = {
   status: string;
   app_name?: string;
@@ -195,7 +219,7 @@ export const adminApi = {
   async getDashboardData(): Promise<DashboardData> {
     const [eventResult, backendHealth] = await Promise.all([this.getEvents(), this.getHealth()]);
 
-    return {
+  return {
       kpis: buildDashboardKpis(eventResult.data),
       workStatusSeries,
       employeeHeatmap,
@@ -370,7 +394,10 @@ export const adminApi = {
 
       const refreshed = await this.getEvents();
       return {
-        apiStatus: liveStatus(endpoint, `Review updated to ${status}`),
+        apiStatus:
+          refreshed.apiStatus.source === 'live'
+            ? liveStatus(endpoint, `Review updated to ${status}`)
+            : fallbackStatus(endpoint, `Review updated but event refresh used fallback data`),
         events: refreshed.data
       };
     } catch (error) {
@@ -433,8 +460,83 @@ export const adminApi = {
     }
   },
 
-  async getAuditLogs() {
-    return Promise.resolve(auditLogs);
+  async savePolicy(policy: PolicyMutationInput, policyId?: string): Promise<PolicyMutationResult> {
+    const payload = buildPolicyPayload(policy);
+    const attempts: PolicyMutationAttempt[] = policyId
+      ? [
+          {
+            path: `/api/policies/${policyId}`,
+            method: 'PUT',
+            body: payload
+          },
+          {
+            path: `/api/policies/${policyId}`,
+            method: 'POST',
+            body: payload
+          }
+        ]
+      : [
+          {
+            path: '/api/policies',
+            method: 'POST',
+            body: payload
+          }
+        ];
+
+    return attemptPolicyMutation(
+      attempts,
+      policyId ? `Saved policy ${policy.name}` : `Created policy ${policy.name}`
+    );
+  },
+
+  async updatePolicyState(policyId: string, action: PolicyStateAction): Promise<PolicyMutationResult> {
+    const activeBody = { is_active: true, status: 'active', set_active: action === 'set_active' };
+    const inactiveBody = { is_active: false, status: 'inactive' };
+    const attempts: PolicyMutationAttempt[] =
+      action === 'deactivate'
+        ? [
+            { path: `/api/policies/${policyId}/activation`, method: 'POST', body: inactiveBody },
+            { path: `/api/policies/${policyId}/deactivate`, method: 'POST' },
+            { path: `/api/policies/${policyId}`, method: 'PUT', body: inactiveBody }
+          ]
+        : action === 'activate'
+          ? [
+              { path: `/api/policies/${policyId}/activation`, method: 'POST', body: activeBody },
+              { path: `/api/policies/${policyId}/activate`, method: 'POST' },
+              { path: `/api/policies/${policyId}`, method: 'PUT', body: activeBody }
+            ]
+          : [
+              { path: `/api/policies/${policyId}/activation`, method: 'POST', body: activeBody },
+              { path: `/api/policies/${policyId}/set-active`, method: 'POST' },
+              { path: `/api/policies/${policyId}/activate`, method: 'POST' },
+              { path: `/api/policies/${policyId}`, method: 'PUT', body: activeBody }
+            ];
+
+    return attemptPolicyMutation(
+      attempts,
+      `${formatLabel(action)} applied to policy ${shortenUuid(policyId)}`
+    );
+  },
+
+  async getAuditLogs(): Promise<AuditLogListData> {
+    try {
+      const payload = await apiClient<AuditLogApiItem[] | { items: AuditLogApiItem[] }>('/api/audit-logs');
+      const items = extractItems(payload);
+
+      if (!items) {
+        throw new Error('Audit log payload is not an array');
+      }
+
+      return {
+        data: [...items].sort(compareAuditLogItems).map(mapAuditLogRecord),
+        apiStatus: liveStatus('/api/audit-logs', `Loaded ${items.length} audit log records`)
+      };
+    } catch (error) {
+      return {
+        data: auditLogs,
+        apiStatus: fallbackStatus('/api/audit-logs', getErrorMessage(error))
+      };
+    }
   },
 
   async getGitHubRisks() {
@@ -466,6 +568,70 @@ function extractItems<T>(payload: T[] | { items: T[] }) {
   }
 
   return Array.isArray(payload.items) ? payload.items : undefined;
+}
+
+async function attemptPolicyMutation(
+  attempts: PolicyMutationAttempt[],
+  successDetail: string
+): Promise<PolicyMutationResult> {
+  let lastError: unknown = new Error('No mutation attempt was configured');
+
+  for (const attempt of attempts) {
+    try {
+      await apiClient(attempt.path, {
+        method: attempt.method,
+        body: attempt.body
+      });
+
+      const refreshed = await adminApi.getPolicies();
+      return {
+        data: refreshed.data,
+        apiStatus:
+          refreshed.apiStatus.source === 'live'
+            ? liveStatus(attempt.path, successDetail)
+            : fallbackStatus(attempt.path, `${successDetail}; list refresh used fallback data`)
+      };
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  return {
+    apiStatus: fallbackStatus(
+      attempts[0]?.path ?? '/api/policies',
+      `Saved locally only: ${getErrorMessage(lastError)}`
+    )
+  };
+}
+
+function buildPolicyPayload(policy: PolicyMutationInput) {
+  const roles = dedupeLabels(policy.roles);
+  const departments = dedupeLabels(policy.departments);
+  const positions = dedupeLabels(policy.positions);
+
+    return {
+    name: policy.name,
+    version: policy.version?.trim() || 'draft',
+    screenshot_interval_seconds: policy.screenshotIntervalSeconds,
+    no_change_threshold: policy.noChangeThresholdFrames,
+    retention_days: policy.retentionDays,
+    roles,
+    departments,
+    positions,
+    scope: {
+      roles,
+      departments,
+      positions
+    },
+    rules_json: {
+      target_roles: roles,
+      target_departments: departments,
+      target_positions: positions,
+      screenshot_interval_seconds: policy.screenshotIntervalSeconds,
+      no_change_threshold: policy.noChangeThresholdFrames,
+      retention_days: policy.retentionDays
+    }
+  };
 }
 
 function mapEmployeeRecord(item: EmployeeApiItem, index: number): EmployeeRecord {
@@ -600,20 +766,71 @@ function mapPolicyRecord(item: PolicyApiItem, index: number): PolicyRecord {
     name: readString(item, ['name', 'policy_name', 'template_name']) ?? `Policy ${index + 1}`,
     version: readString(item, ['version']) ?? undefined,
     role: roles[0] ?? readString(item, ['role', 'job_role']) ?? 'All roles',
-    positions: positions.length > 0 ? positions : undefined,
-    departments: departments.length > 0 ? departments : undefined,
+    roles: roles.length > 0 ? roles : ['All roles'],
+    positions,
+    departments,
     status: normalizeListStatus(resolvePolicyStatus(item, rules)),
+    isActive: item.is_active === true || resolvePolicyStatus(item, rules) === 'active',
     assignedEmployees:
       readNumber(item, ['assigned_employees', 'assigned_employee_count', 'employee_count']) ?? undefined,
+    screenshotIntervalSeconds: intervalSeconds,
     screenshotInterval: `${intervalSeconds}s`,
+    noChangeThresholdFrames: noChangeThreshold,
     noChangeThreshold: `${noChangeThreshold} frames`,
+    highRiskDurationSeconds: highRiskWindowSeconds,
     highRiskDuration: formatDurationSeconds(highRiskWindowSeconds),
     ocrEnabled:
       firstBooleanFromSources(
         [item, rules].filter((source): source is Record<string, unknown> => Boolean(source)),
         ['ocr_enabled', 'enable_ocr', 'ocr']
       ) ?? false,
+    retentionDays,
     originalRetention: `${retentionDays} days`
+  };
+}
+
+function mapAuditLogRecord(item: AuditLogApiItem, index: number): AuditLogRecord {
+  const details = pickRecords(item, ['details_json', 'metadata', 'context', 'payload']);
+  const targetRecord = pickRecords(item, ['target', 'resource', 'entity']);
+  const scope = firstString(
+    readString(item, ['scope', 'entity_type', 'target_type', 'category']),
+    readString(targetRecord, ['type', 'entity_type', 'resource_type'])
+  );
+  const target = firstString(
+    readString(item, ['target', 'target_name', 'resource_name', 'entity_name']),
+    readString(targetRecord, ['name', 'title']),
+    readString(item, ['event_id', 'policy_name', 'policy_id', 'session_id'])
+  );
+
+  return {
+    key: readString(item, ['id']) ?? String(index),
+    operator:
+      firstString(
+        readString(item, ['operator', 'actor_name', 'user_name', 'admin_name', 'reviewer_name']),
+        readString(pickRecords(item, ['operator_info', 'actor', 'user']), ['name', 'display_name'])
+      ) ?? 'System',
+    action:
+      firstString(readString(item, ['action', 'operation', 'activity', 'event', 'type']), 'Unknown action') ??
+      'Unknown action',
+    target: target ?? 'Unspecified target',
+    scope: scope ? formatLabel(scope) : undefined,
+    metadataSummary: buildAuditMetadataSummary(item, details),
+    reason:
+      firstString(
+        readString(item, ['reason', 'note', 'description', 'message', 'review_note']),
+        readString(details, ['reason', 'note', 'description', 'message'])
+      ) ?? '--',
+    timestamp: formatDateTime(
+      firstString(
+        readString(item, ['timestamp', 'occurred_at', 'created_at', 'updated_at']),
+        readString(details, ['timestamp', 'occurred_at'])
+      )
+    ),
+    result:
+      firstString(
+        readString(item, ['result', 'status', 'outcome']),
+        readString(details, ['result', 'status', 'outcome'])
+      ) ?? 'logged'
   };
 }
 
@@ -1303,6 +1520,17 @@ function compareEvents(left: EventRecord, right: EventRecord) {
   return rightPriority - leftPriority;
 }
 
+function compareAuditLogs(left: AuditLogRecord, right: AuditLogRecord) {
+  return toTimestamp(right.timestamp) - toTimestamp(left.timestamp);
+}
+
+function compareAuditLogItems(left: AuditLogApiItem, right: AuditLogApiItem) {
+  return (
+    toTimestamp(readString(right, ['timestamp', 'occurred_at', 'created_at', 'updated_at'])) -
+    toTimestamp(readString(left, ['timestamp', 'occurred_at', 'created_at', 'updated_at']))
+  );
+}
+
 function severityWeight(value: EventSeverity) {
   switch (value) {
     case 'critical':
@@ -1402,15 +1630,24 @@ function normalizeDeviceStatus(status?: string) {
 }
 
 function normalizeEventStatus(status: string): EventStatus {
-  if (status === 'new' || status === 'reviewing' || status === 'confirmed' || status === 'ignored' || status === 'closed') {
-    return status;
+  const normalized = status.trim().toLowerCase();
+
+  if (
+    normalized === 'new' ||
+    normalized === 'reviewing' ||
+    normalized === 'reviewed' ||
+    normalized === 'confirmed' ||
+    normalized === 'ignored' ||
+    normalized === 'closed'
+  ) {
+    return normalized;
   }
 
-  if (status === 'open') {
+  if (normalized === 'open') {
     return 'reviewing';
   }
 
-  return 'new';
+  return normalized;
 }
 
 function normalizeSeverity(severity: string): EventSeverity {
@@ -1606,6 +1843,10 @@ function collectStringList(...lists: Array<string[] | undefined>) {
   return Array.from(new Set(lists.flatMap((list) => list ?? []).filter(Boolean)));
 }
 
+function dedupeLabels(values: string[]) {
+  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
+}
+
 function firstStringFromSources(sources: Record<string, unknown>[], keys: string[]) {
   for (const source of sources) {
     const value = readString(source, keys);
@@ -1663,4 +1904,69 @@ function formatNumber(value?: number | null, digits = 2) {
   }
 
   return value.toFixed(digits);
+}
+
+function buildAuditMetadataSummary(
+  item: Record<string, unknown>,
+  details?: Record<string, unknown>
+) {
+  const safeValues = [
+    buildAuditMetadataLabel(item, 'event_id', 'Event'),
+    buildAuditMetadataLabel(item, 'policy_name', 'Policy'),
+    buildAuditMetadataLabel(item, 'policy_id', 'Policy ID'),
+    buildAuditMetadataLabel(item, 'session_id', 'Session'),
+    buildAuditMetadataLabel(item, 'risk_rule', 'Risk rule'),
+    buildAuditMetadataLabel(item, 'severity', 'Severity'),
+    buildAuditMetadataLabel(item, 'department', 'Department'),
+    buildAuditMetadataLabel(item, 'role', 'Role'),
+    buildAuditMetadataLabel(item, 'position', 'Position'),
+    buildAuditMetadataLabel(item, 'streak_count', 'Streak'),
+    buildAuditMetadataLabel(item, 'duration_seconds', 'Duration'),
+    buildAuditMetadataLabel(item, 'retention_days', 'Retention'),
+    buildAuditMetadataLabel(item, 'screenshot_interval_seconds', 'Interval'),
+    buildAuditMetadataLabel(item, 'no_change_threshold', 'Threshold'),
+    details ? buildAuditMetadataLabel(details, 'event_id', 'Event') : undefined,
+    details ? buildAuditMetadataLabel(details, 'session_id', 'Session') : undefined,
+    details ? buildAuditMetadataLabel(details, 'risk_rule', 'Risk rule') : undefined,
+    details ? buildAuditMetadataLabel(details, 'severity', 'Severity') : undefined,
+    details ? buildAuditMetadataLabel(details, 'streak_count', 'Streak') : undefined,
+    details ? buildAuditMetadataLabel(details, 'duration_seconds', 'Duration') : undefined
+  ].filter(Boolean);
+
+  return safeValues.length > 0 ? safeValues.join(' / ') : undefined;
+}
+
+function buildAuditMetadataLabel(
+  source: Record<string, unknown>,
+  key: string,
+  label: string
+) {
+  const stringValue = readString(source, [key]);
+  if (stringValue) {
+    return `${label} ${stringValue}`;
+  }
+
+  const numberValue = readNumber(source, [key]);
+  if (numberValue !== undefined) {
+    if (key.endsWith('_seconds')) {
+      return `${label} ${formatDurationSeconds(numberValue)}`;
+    }
+
+    if (key.endsWith('_days')) {
+      return `${label} ${numberValue}d`;
+    }
+
+    return `${label} ${numberValue}`;
+  }
+
+  return undefined;
+}
+
+function toTimestamp(value?: string | null) {
+  if (!value) {
+    return 0;
+  }
+
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? 0 : parsed.getTime();
 }

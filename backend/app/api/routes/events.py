@@ -6,8 +6,9 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlmodel import Session
 
-from app.api.deps import get_session
+from app.api.deps import get_audit_context, get_session
 from app.schemas.query import BehaviorEventDetail, BehaviorEventListResponse, BehaviorEventReviewRequest
+from app.services.audit import AuditContext
 from app.services.queries import QueryService
 
 router = APIRouter(prefix="/api/events", tags=["events"])
@@ -47,8 +48,9 @@ def review_event(
     event_id: UUID,
     payload: BehaviorEventReviewRequest,
     session: Session = Depends(get_session),
+    audit_context: AuditContext = Depends(get_audit_context),
 ) -> BehaviorEventDetail:
-    event = QueryService(session).review_event(event_id, payload)
+    event = QueryService(session).review_event(event_id, payload, audit_context=audit_context)
     if event is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
     return event

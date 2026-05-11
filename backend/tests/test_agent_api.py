@@ -10,7 +10,7 @@ from uuid import UUID, uuid4
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
-from app.models import BehaviorEvent, Device, Policy, Screenshot
+from app.models import BehaviorEvent, Device, Employee, Policy, Screenshot
 
 ONE_PIXEL_PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO9W0WQAAAAASUVORK5CYII="
@@ -60,6 +60,55 @@ def test_heartbeat_returns_policy(client: TestClient, seeded_device: dict[str, s
     payload = response.json()
     assert payload["policy"]["screenshot_interval_seconds"] == 10
     assert payload["policy"]["no_change_threshold"] == 6
+
+
+def test_agent_policy_endpoint_resolves_role_targeted_policy(
+    client: TestClient,
+    seeded_device: dict[str, str],
+) -> None:
+    app = client.app
+    employee_id = UUID(seeded_device["employee_id"])
+
+    with Session(app.state.engine) as session:
+        employee = session.get(Employee, employee_id)
+        assert employee is not None
+        employee.job_role = "Engineer"
+        session.add(employee)
+
+        session.add(
+            Policy(
+                name="sales-only",
+                version="2026.sales",
+                screenshot_interval_seconds=45,
+                no_change_threshold=12,
+                retention_days=14,
+                is_active=True,
+                rules_json={"roles": ["sales"], "departments": ["sales"]},
+            )
+        )
+        session.add(
+            Policy(
+                name="engineering-targeted",
+                version="2026.engineering",
+                screenshot_interval_seconds=18,
+                no_change_threshold=3,
+                retention_days=10,
+                is_active=True,
+                rules_json={"roles": ["engineer"], "departments": ["engineering"]},
+            )
+        )
+        session.commit()
+
+    response = client.get("/api/agent/policy", params={"device_id": seeded_device["device_id"]})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload == {
+        "version": "2026.engineering",
+        "screenshot_interval_seconds": 18,
+        "no_change_threshold": 3,
+        "retention_days": 10,
+    }
 
 
 def test_heartbeat_persists_safe_nested_metadata(client: TestClient, seeded_device: dict[str, str]) -> None:

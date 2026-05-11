@@ -8,7 +8,7 @@ import { StatusTag } from '../components/StatusTag';
 import { adminApi } from '../services/adminApi';
 import type { ApiStatus, EventRecord, EventStatus } from '../types/models';
 
-const REVIEW_ACTIONS: EventStatus[] = ['reviewing', 'confirmed', 'ignored', 'closed'];
+const REVIEW_ACTIONS: EventStatus[] = ['reviewing', 'reviewed', 'confirmed', 'ignored', 'closed'];
 
 export function EventsPage() {
   const [rows, setRows] = useState<EventRecord[]>([]);
@@ -43,14 +43,8 @@ export function EventsPage() {
             ? {
                 ...item,
                 status: nextStatus,
-                reviewedAt:
-                  nextStatus === 'reviewing'
-                    ? item.reviewedAt
-                    : new Date().toLocaleString(),
-                reviewNote:
-                  nextStatus === 'ignored'
-                    ? 'Marked ignored in admin UI fallback flow.'
-                    : item.reviewNote
+                reviewedAt: nextStatus === 'reviewing' ? item.reviewedAt : new Date().toLocaleString(),
+                reviewNote: nextStatus === 'reviewing' ? item.reviewNote : item.reviewNote ?? buildReviewNote(nextStatus)
               }
             : item
         )
@@ -151,8 +145,15 @@ export function EventsPage() {
                   {record.relatedScreenshotId ? (
                     <Typography.Text type="secondary">Screenshot {record.relatedScreenshotId}</Typography.Text>
                   ) : null}
+                  <Space size={4}>
+                    <Typography.Text type="secondary">Review status</Typography.Text>
+                    <StatusTag value={record.status} />
+                  </Space>
                   {record.reviewedAt ? (
                     <Typography.Text type="secondary">Reviewed {record.reviewedAt}</Typography.Text>
+                  ) : null}
+                  {record.reviewNote ? (
+                    <Typography.Text type="secondary">Review note: {record.reviewNote}</Typography.Text>
                   ) : null}
                 </Space>
               )
@@ -183,4 +184,19 @@ export function EventsPage() {
       </Card>
     </Space>
   );
+}
+
+function buildReviewNote(status: EventStatus) {
+  switch (status) {
+    case 'reviewed':
+      return 'Reviewed in admin UI fallback flow.';
+    case 'confirmed':
+      return 'Confirmed in admin UI fallback flow.';
+    case 'ignored':
+      return 'Marked ignored in admin UI fallback flow.';
+    case 'closed':
+      return 'Closed in admin UI fallback flow.';
+    default:
+      return '';
+  }
 }

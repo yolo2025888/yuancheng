@@ -14,6 +14,7 @@ const statusColorMap: Record<string, string> = {
   locked: 'gold',
   new: 'blue',
   reviewing: 'gold',
+  reviewed: 'cyan',
   confirmed: 'red',
   ignored: 'default',
   closed: 'green',
@@ -37,6 +38,7 @@ const fallbackLabels: Record<string, string> = {
   locked: 'Locked',
   new: 'New',
   reviewing: 'Reviewing',
+  reviewed: 'Reviewed',
   confirmed: 'Confirmed',
   ignored: 'Ignored',
   closed: 'Closed',
@@ -50,12 +52,21 @@ const fallbackLabels: Record<string, string> = {
 };
 
 export function StatusTag({ value }: StatusTagProps) {
-  const normalized = value === 'high' ? 'high' : value;
+  const normalized = value === 'high' ? 'high' : value.trim().toLowerCase();
   const colorKey = value === 'high' ? 'highrisk' : normalized;
 
   return (
     <Tag color={statusColorMap[colorKey] ?? 'default'}>
-      {fallbackLabels[normalized] ?? value}
+      {fallbackLabels[normalized] ?? formatStatusLabel(value)}
     </Tag>
   );
+}
+
+function formatStatusLabel(value: string) {
+  return value
+    .trim()
+    .split(/[_\s-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
 }

@@ -45,6 +45,8 @@ Screenshot upload form fields use the backend snake_case names directly:
 - `input_desktop_name`
 - `session_connect_state`
 
+The screenshot upload contract still uses the legacy `phash` field name. In the current MVP, the agent sends the screenshot SHA-256 digest there as a compatibility fallback; it is not yet a perceptual hash.
+
 ## Current capture scope
 
 - Multi-screen screenshots captured from `Screen.AllScreens`
