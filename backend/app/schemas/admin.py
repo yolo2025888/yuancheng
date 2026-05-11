@@ -295,6 +295,36 @@ class EmployeeRiskScoreListResponse(BaseModel):
     generated_at: datetime
 
 
+class GitHubRiskEventItem(BaseModel):
+    id: UUID
+    employee_id: UUID
+    employee_name: str
+    employee_no: str | None = None
+    github_username: str | None = None
+    device_id: UUID | None = None
+    related_screenshot_id: UUID | None = None
+    repository: str
+    action: str
+    risk_rule: str
+    severity: str
+    occurred_at: datetime
+    correlation: str | None = None
+    status: str
+    details_json: dict[str, Any] = Field(default_factory=dict)
+
+
+class GitHubRiskTrendPoint(BaseModel):
+    bucket: str
+    count: int = Field(ge=0)
+
+
+class GitHubRiskEventListResponse(BaseModel):
+    items: list[GitHubRiskEventItem]
+    total: int
+    generated_at: datetime
+    trend: list[GitHubRiskTrendPoint] = Field(default_factory=list)
+
+
 class RiskLevelBreakdown(BaseModel):
     low: int = 0
     medium: int = 0

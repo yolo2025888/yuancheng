@@ -811,6 +811,83 @@ def test_risk_scores_endpoint_returns_transparent_employee_scores(
     assert all(isinstance(reason, str) and reason for reason in item["reasons"])
 
 
+def test_github_risks_endpoint_maps_github_behavior_events(
+    client: TestClient,
+    seeded_device: dict[str, str],
+    auth_headers,
+) -> None:
+    headers = auth_headers(bootstrap=True)
+    app = client.app
+    employee_id = UUID(seeded_device["employee_id"])
+    device_id = UUID(seeded_device["device_id"])
+
+    with Session(app.state.engine) as session:
+        employee = session.get(Employee, employee_id)
+        assert employee is not None
+        employee.github_username = "alice-dev"
+        session.add(employee)
+        session.add(
+            BehaviorEvent(
+                employee_id=employee_id,
+                device_id=device_id,
+                event_type="github_sensitive_repo_clone",
+                severity="critical",
+                start_at=datetime(2026, 5, 11, 10, 15, tzinfo=timezone.utc),
+                status="open",
+                reason="Sensitive repository cloned repeatedly.",
+                details_json={
+                    "repository": "corp/infra-secrets",
+                    "action": "clone",
+                    "risk_rule": "Sensitive repository clone",
+                    "correlation": "Linked to DEV-PC-001",
+                },
+            )
+        )
+        session.add(
+            BehaviorEvent(
+                employee_id=employee_id,
+                device_id=device_id,
+                event_type="github_frequent_fetch",
+                severity="high",
+                start_at=datetime(2026, 5, 11, 10, 45, tzinfo=timezone.utc),
+                status="reviewing",
+                reason="Frequent fetch burst.",
+                details_json={
+                    "repository": "corp/core-platform",
+                    "action": "fetch",
+                    "risk_rule": "Short-window frequent fetch",
+                },
+            )
+        )
+        session.add(
+            BehaviorEvent(
+                employee_id=employee_id,
+                device_id=device_id,
+                event_type="no_change_streak_triggered",
+                severity="medium",
+                start_at=datetime(2026, 5, 11, 11, 0, tzinfo=timezone.utc),
+                status="open",
+                reason="Unrelated event",
+                details_json={},
+            )
+        )
+        session.commit()
+
+    response = client.get("/api/github-risks", headers=headers)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 2
+    assert payload["trend"] == [{"bucket": "10:00", "count": 2}]
+    assert payload["items"][0]["repository"] == "corp/core-platform"
+    assert payload["items"][0]["action"] == "fetch"
+    assert payload["items"][0]["risk_rule"] == "Short-window frequent fetch"
+    assert payload["items"][0]["employee_name"] == "Alice"
+    assert payload["items"][0]["github_username"] == "alice-dev"
+    assert payload["items"][1]["severity"] == "critical"
+    assert payload["items"][1]["correlation"] == "Linked to DEV-PC-001"
+
+
 def test_access_matrix_endpoint_returns_roles_users_and_recommended_planning_matrix(
     client: TestClient,
     auth_headers,

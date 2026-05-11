@@ -22,6 +22,7 @@ from app.schemas.admin import (
     DashboardSummaryResponse,
     DeviceListResponse,
     EmployeeRiskScoreListResponse,
+    GitHubRiskEventListResponse,
     EmployeeImportResponse,
     EmployeeListResponse,
     PolicyActivationRequest,
@@ -143,6 +144,15 @@ def list_risk_scores(
     _: object = Depends(require_permissions("risk_scores.view")),
 ) -> EmployeeRiskScoreListResponse:
     return QueryService(session).list_risk_scores(limit=limit)
+
+
+@router.get("/github-risks", response_model=GitHubRiskEventListResponse)
+def list_github_risks(
+    limit: int = Query(default=200, ge=1, le=1000),
+    session: Session = Depends(get_session),
+    _: object = Depends(require_permissions("github_risks.view")),
+) -> GitHubRiskEventListResponse:
+    return QueryService(session).list_github_risks(limit=limit)
 
 
 @router.get("/access-matrix", response_model=AccessMatrixResponse, include_in_schema=False)

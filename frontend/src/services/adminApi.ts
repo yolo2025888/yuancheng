@@ -33,6 +33,7 @@ import type {
   EventRecord,
   EventSeverity,
   EventStatus,
+  GitHubRiskRecord,
   HeatmapPoint,
   KpiMetric,
   LinkedRiskRecord,
@@ -104,6 +105,11 @@ type DashboardSummaryData = ApiResult<{
   kpis: KpiMetric[];
   workStatusSeries: StatusBucket[];
 }>;
+type GitHubRiskData = {
+  records: GitHubRiskRecord[];
+  trend: readonly (readonly [string, number])[];
+  apiStatus: ApiStatus;
+};
 type RiskScoreListData = ApiResult<RiskScoreRecord[]>;
 type AccessMatrixListData = ApiResult<AccessMatrixRecord[]>;
 type PolicyMutationResult = { apiStatus: ApiStatus; data?: PolicyRecord[] };
@@ -254,6 +260,17 @@ type AttendanceApiItem = Record<string, unknown> & {
   review_status?: string;
   review_note?: string | null;
   source?: string;
+};
+
+type GitHubRiskApiItem = Record<string, unknown> & {
+  employee?: string;
+  repository?: string;
+  action?: string;
+  risk_rule?: string;
+  severity?: string;
+  timestamp?: string;
+  correlation?: string;
+  details_json?: Record<string, unknown> | null;
 };
 
 type HealthPayload = {
@@ -1142,11 +1159,37 @@ export const adminApi = {
     }
   },
 
-  async getGitHubRisks() {
-    return Promise.resolve({
-      records: githubRisks,
-      trend: githubTrend
-    });
+  async getGitHubRisks(): Promise<GitHubRiskData> {
+    const endpoints = ['/api/github-risks', '/api/github/risk-events'];
+    let lastError: unknown = new Error('No GitHub risk endpoint responded');
+
+    for (const endpoint of endpoints) {
+      try {
+        const payload = await apiClient<unknown>(endpoint);
+        const data = mapGitHubRiskData(payload);
+
+        return {
+          records: data.records,
+          trend: data.trend,
+          apiStatus: liveStatus(
+            endpoint,
+            data.records.length > 0
+              ? `Loaded ${data.records.length} GitHub risk events`
+              : 'GitHub risk API returned no events'
+          )
+        };
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    const fallbackRecords = sortGitHubRiskRecords(githubRisks);
+
+    return {
+      records: fallbackRecords,
+      trend: githubTrend,
+      apiStatus: fallbackStatus(endpoints[0], getErrorMessage(lastError))
+    };
   }
 };
 
@@ -1163,6 +1206,239 @@ async function discoverEmployeeId() {
   } catch {
     return undefined;
   }
+}
+
+function mapGitHubRiskData(payload: unknown) {
+  const records = mapGitHubRiskRecords(payload);
+  const explicitTrend = extractGitHubRiskTrend(payload);
+
+  return {
+    records,
+    trend: explicitTrend.length > 0 ? explicitTrend : buildGitHubRiskTrend(records)
+  };
+}
+
+function mapGitHubRiskRecords(payload: unknown) {
+  const items = extractGitHubRiskItems(payload);
+
+  if (!items) {
+    throw new Error('GitHub risk payload did not contain a usable list');
+  }
+
+  const records = items
+    .map((item, index) => mapGitHubRiskRecord(item, index))
+    .filter((record): record is GitHubRiskRecord => record !== null);
+
+  if (items.length > 0 && records.length === 0) {
+    throw new Error('GitHub risk payload items could not be normalized');
+  }
+
+  return sortGitHubRiskRecords(records);
+}
+
+function extractGitHubRiskItems(payload: unknown) {
+  if (Array.isArray(payload)) {
+    return payload;
+  }
+
+  const root = asRecord(payload);
+  if (!root) {
+    return null;
+  }
+
+  const candidates = collectRecordSources(
+    root,
+    pickRecords(root, ['data', 'result', 'payload', 'response', 'github_risks'])
+  );
+
+  for (const candidate of candidates) {
+    for (const key of ['items', 'records', 'risk_events', 'events', 'github_risks', 'data', 'results']) {
+      const value = candidate[key];
+      if (Array.isArray(value)) {
+        return value;
+      }
+    }
+  }
+
+  return null;
+}
+
+function mapGitHubRiskRecord(item: unknown, index: number): GitHubRiskRecord | null {
+  const record = asRecord(item) as GitHubRiskApiItem | undefined;
+  if (!record) {
+    return null;
+  }
+
+  const details = pickRecords(record, ['details_json', 'details', 'metadata', 'context']);
+  const employee =
+    firstString(
+      readString(record, ['employee', 'employee_name', 'employeeName']),
+      readString(details, ['employee', 'employee_name', 'actor', 'actor_name', 'user_name', 'username'])
+    ) ?? 'Unknown employee';
+  const repository =
+    firstString(
+      readString(record, ['repository', 'repo', 'repo_name', 'repository_name']),
+      readString(details, ['repository', 'repo', 'repo_name', 'repository_name', 'full_name'])
+    ) ?? 'Unknown repository';
+  const action =
+    firstString(
+      readString(record, ['action', 'event', 'event_type', 'operation']),
+      readString(details, ['action', 'event', 'event_type', 'operation'])
+    ) ?? 'unknown';
+  const riskRule =
+    firstString(
+      readString(record, ['risk_rule', 'riskRule', 'rule', 'rule_name']),
+      readString(details, ['risk_rule', 'riskRule', 'rule', 'rule_name', 'policy_name']),
+      'GitHub risk event'
+    ) ?? 'GitHub risk event';
+  const rawTimestamp =
+    firstString(
+      readString(record, ['timestamp', 'occurred_at', 'created_at', 'detected_at', 'event_time']),
+      readString(details, ['timestamp', 'occurred_at', 'created_at', 'detected_at', 'event_time'])
+    ) ?? '';
+  const detailSummary = summarizeDetails(details);
+  const correlation =
+    firstString(
+      readString(record, ['correlation', 'correlation_id', 'correlation_info', 'session_id']),
+      readString(details, ['correlation', 'correlation_id', 'session_id', 'device_name', 'device_id']),
+      detailSummary
+    ) ?? 'No linked context';
+
+  return {
+    key:
+      firstString(
+        readString(record, ['id', 'key', 'event_id']),
+        rawTimestamp ? `${repository}-${rawTimestamp}-${index + 1}` : undefined
+      ) ?? `github-risk-${index + 1}`,
+    employee,
+    repository,
+    action,
+    riskRule,
+    severity: normalizeSeverity(
+      firstString(
+        readString(record, ['severity', 'risk_level']),
+        readString(details, ['severity', 'risk_level']),
+        'medium'
+      ) ?? 'medium'
+    ),
+    timestamp: formatOptionalDateTime(rawTimestamp) ?? (rawTimestamp || 'Unknown time'),
+    correlation,
+    detailsJson: details,
+    occurredAt: rawTimestamp || undefined
+  };
+}
+
+function sortGitHubRiskRecords(records: GitHubRiskRecord[]) {
+  return [...records].sort((left, right) => {
+    const timeDelta = toTimestamp(right.occurredAt ?? right.timestamp) - toTimestamp(left.occurredAt ?? left.timestamp);
+    if (timeDelta !== 0) {
+      return timeDelta;
+    }
+
+    return severityWeight(right.severity) - severityWeight(left.severity);
+  });
+}
+
+function extractGitHubRiskTrend(payload: unknown) {
+  const root = asRecord(payload);
+  if (!root) {
+    return [] as readonly (readonly [string, number])[];
+  }
+
+  const candidates = collectRecordSources(
+    root,
+    pickRecords(root, ['data', 'result', 'payload', 'summary', 'stats'])
+  );
+
+  for (const candidate of candidates) {
+    for (const key of ['trend', 'timeline', 'series', 'counts_by_hour', 'histogram']) {
+      const trend = mapGitHubRiskTrendEntries(candidate[key]);
+      if (trend) {
+        return trend;
+      }
+    }
+  }
+
+  return [] as readonly (readonly [string, number])[];
+}
+
+function mapGitHubRiskTrendEntries(value: unknown) {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+
+  return value
+    .map((entry) => {
+      if (Array.isArray(entry) && entry.length >= 2) {
+        const slot = typeof entry[0] === 'string' ? entry[0] : typeof entry[0] === 'number' ? `${entry[0]}` : undefined;
+        const count =
+          typeof entry[1] === 'number'
+            ? entry[1]
+            : typeof entry[1] === 'string' && entry[1].trim()
+              ? Number(entry[1])
+              : undefined;
+
+        if (slot && count !== undefined && Number.isFinite(count)) {
+          return [slot, count] as const;
+        }
+
+        return null;
+      }
+
+      const record = asRecord(entry);
+      if (!record) {
+        return null;
+      }
+
+      const slot =
+        firstString(
+          readString(record, ['slot', 'time', 'label', 'bucket', 'hour']),
+          readNumber(record, ['hour']) !== undefined ? `${readNumber(record, ['hour'])}:00` : undefined
+        ) ?? undefined;
+      const count = readNumber(record, ['count', 'total', 'value', 'events']);
+
+      if (!slot || count === undefined) {
+        return null;
+      }
+
+      return [slot, count] as const;
+    })
+    .filter((entry): entry is readonly [string, number] => entry !== null);
+}
+
+function buildGitHubRiskTrend(records: GitHubRiskRecord[]) {
+  const buckets = new Map<string, number>();
+
+  for (const record of records) {
+    const slot = buildGitHubRiskTrendSlot(record.occurredAt ?? record.timestamp);
+    if (!slot) {
+      continue;
+    }
+
+    buckets.set(slot, (buckets.get(slot) ?? 0) + 1);
+  }
+
+  return Array.from(buckets.entries())
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([slot, count]) => [slot, count] as const);
+}
+
+function buildGitHubRiskTrendSlot(value?: string) {
+  if (!value) {
+    return null;
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    const match = value.match(/(\d{1,2}):(\d{2})/);
+    if (!match) {
+      return null;
+    }
+
+    return `${match[1].padStart(2, '0')}:00`;
+  }
+
+  return `${String(parsed.getHours()).padStart(2, '0')}:00`;
 }
 
 function extractItems<T>(payload: T[] | { items: T[] }) {

@@ -326,9 +326,11 @@ export type GitHubRiskRecord = {
   repository: string;
   action: string;
   riskRule: string;
-  severity: 'medium' | 'high' | 'critical';
+  severity: EventSeverity;
   timestamp: string;
   correlation: string;
+  detailsJson?: Record<string, unknown>;
+  occurredAt?: string;
 };
 
 export type ScreenshotComparison = {

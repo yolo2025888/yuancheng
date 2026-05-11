@@ -24,6 +24,9 @@ from app.schemas.admin import (
     EmployeeRiskScoreListResponse,
     EmployeeItem,
     EmployeeListResponse,
+    GitHubRiskEventItem,
+    GitHubRiskEventListResponse,
+    GitHubRiskTrendPoint,
     PolicyItem,
     PolicyListResponse,
     PolicySummary,
@@ -68,6 +71,12 @@ STATUS_MULTIPLIERS = {
     "reviewed": 0.6,
     "resolved": 0.25,
     "dismissed": 0.15,
+}
+
+GITHUB_EVENT_TYPES = {
+    "github_sensitive_repo_clone",
+    "github_offhours_review",
+    "github_frequent_fetch",
 }
 
 STALE_DEVICE_AFTER_SECONDS = 10 * 60
@@ -964,6 +973,74 @@ class QueryService:
             generated_at=generated_at,
         )
 
+    def list_github_risks(self, limit: int = 200) -> GitHubRiskEventListResponse:
+        events = self.session.exec(
+            select(BehaviorEvent)
+            .where(BehaviorEvent.event_type.in_(GITHUB_EVENT_TYPES))
+            .order_by(BehaviorEvent.start_at.desc())
+            .limit(limit)
+        ).all()
+        employees = (
+            {
+                employee.id: employee
+                for employee in self.session.exec(
+                    select(Employee).where(Employee.id.in_({event.employee_id for event in events}))
+                ).all()
+            }
+            if events
+            else {}
+        )
+        items = [
+            self._build_github_risk_item(event=event, employee=employees.get(event.employee_id))
+            for event in events
+        ]
+        trend_counts: dict[str, int] = defaultdict(int)
+        for event in events:
+            bucket = ensure_utc(event.start_at).strftime("%H:00")
+            trend_counts[bucket] += 1
+        trend = [
+            GitHubRiskTrendPoint(bucket=bucket, count=trend_counts[bucket])
+            for bucket in sorted(trend_counts)
+        ]
+        return GitHubRiskEventListResponse(
+            items=items,
+            total=len(items),
+            generated_at=datetime.now(timezone.utc),
+            trend=trend,
+        )
+
+    def _build_github_risk_item(
+        self,
+        *,
+        event: BehaviorEvent,
+        employee: Employee | None,
+    ) -> GitHubRiskEventItem:
+        details = event.details_json or {}
+        repository = _safe_detail_string(details, "repository") or "unknown"
+        action = _safe_detail_string(details, "action") or event.event_type.replace("github_", "")
+        risk_rule = _safe_detail_string(details, "risk_rule") or event.reason or event.event_type
+        correlation = _safe_detail_string(details, "correlation") or event.reason
+        return GitHubRiskEventItem(
+            id=event.id,
+            employee_id=event.employee_id,
+            employee_name=employee.name if employee is not None else "Unknown employee",
+            employee_no=employee.employee_no if employee is not None else None,
+            github_username=(
+                _safe_detail_string(details, "github_username")
+                or (employee.github_username if employee is not None else None)
+            ),
+            device_id=event.device_id,
+            related_screenshot_id=event.related_screenshot_id,
+            repository=repository,
+            action=action,
+            risk_rule=risk_rule,
+            severity=event.severity,
+            occurred_at=event.start_at,
+            correlation=correlation,
+            status=event.status,
+            details_json=details,
+        )
+
     def get_access_matrix(self) -> AccessMatrixResponse:
         roles = self.session.exec(select(Role).order_by(Role.name.asc())).all()
         users = self.session.exec(select(User).order_by(User.username.asc())).all()
@@ -1040,3 +1117,11 @@ class QueryService:
             items=[AuditLogItem.model_validate(audit_log) for audit_log in audit_logs],
             total=len(audit_logs),
         )
+
+
+def _safe_detail_string(details: dict[str, object], key: str) -> str | None:
+    value = details.get(key)
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    return stripped or None

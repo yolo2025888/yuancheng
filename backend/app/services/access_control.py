@@ -16,6 +16,11 @@ ACCESS_CAPABILITY_DEFINITIONS = (
         "description": "View employee-level risk scores, labels, and scoring reasons.",
     },
     {
+        "key": "github_risks.view",
+        "label": "GitHub risk events",
+        "description": "View repository activity risk signals linked to employees.",
+    },
+    {
         "key": "events.review",
         "label": "Event review",
         "description": "Review behavior events and update their workflow status.",
@@ -79,6 +84,7 @@ ACCESS_ROLE_TEMPLATES = (
         "permission_keys": [
             "dashboard.view",
             "risk_scores.view",
+            "github_risks.view",
             "events.review",
             "screenshots.view",
             "directory.view",
@@ -92,6 +98,7 @@ ACCESS_ROLE_TEMPLATES = (
         "permission_keys": [
             "dashboard.view",
             "risk_scores.view",
+            "github_risks.view",
             "events.review",
             "screenshots.view",
             "directory.view",
@@ -105,6 +112,7 @@ ACCESS_ROLE_TEMPLATES = (
         "permission_keys": [
             "dashboard.view",
             "risk_scores.view",
+            "github_risks.view",
             "directory.view",
             "attendance.view",
         ],
@@ -114,6 +122,7 @@ ACCESS_ROLE_TEMPLATES = (
         "description": "Audits policy coverage, review activity, and access planning decisions.",
         "permission_keys": [
             "dashboard.view",
+            "github_risks.view",
             "audit_logs.view",
             "policies.manage",
             "access_matrix.view",
