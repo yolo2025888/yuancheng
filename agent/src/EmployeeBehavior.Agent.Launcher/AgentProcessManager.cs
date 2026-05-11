@@ -6,19 +6,23 @@ internal sealed class AgentProcessManager
 {
     private const string ServiceProcessName = "EmployeeBehavior.Agent.Service";
     private const string HelperProcessName = "EmployeeBehavior.Agent.SessionHelper";
+    private readonly object _startLock = new();
 
     public AgentProcessStatus StartAgentProcesses()
     {
-        var service = StartIfMissing(
-            ServiceProcessName,
-            ResolveAgentPath("Service", "EmployeeBehavior.Agent.Service.exe"),
-            hideWindow: true);
-        var helper = StartIfMissing(
-            HelperProcessName,
-            ResolveAgentPath("SessionHelper", "EmployeeBehavior.Agent.SessionHelper.exe"),
-            hideWindow: true);
+        lock (_startLock)
+        {
+            var service = StartIfMissing(
+                ServiceProcessName,
+                ResolveAgentPath("Service", "EmployeeBehavior.Agent.Service.exe"),
+                hideWindow: true);
+            var helper = StartIfMissing(
+                HelperProcessName,
+                ResolveAgentPath("SessionHelper", "EmployeeBehavior.Agent.SessionHelper.exe"),
+                hideWindow: true);
 
-        return new AgentProcessStatus(service.Started, service.ProcessId, helper.Started, helper.ProcessId);
+            return new AgentProcessStatus(service.Started, service.ProcessId, helper.Started, helper.ProcessId);
+        }
     }
 
     public AgentProcessStatus GetStatus()
@@ -45,16 +49,22 @@ internal sealed class AgentProcessManager
         {
             FileName = executablePath,
             WorkingDirectory = Path.GetDirectoryName(executablePath) ?? AppContext.BaseDirectory,
-            UseShellExecute = true
+            UseShellExecute = !hideWindow,
+            CreateNoWindow = hideWindow
         };
 
-        if (hideWindow)
+        if (hideWindow is false)
         {
-            startInfo.WindowStyle = ProcessWindowStyle.Hidden;
+            startInfo.WindowStyle = ProcessWindowStyle.Normal;
         }
 
         var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException($"Failed to start {executablePath}.");
+        if (process.WaitForExit(500))
+        {
+            throw new InvalidOperationException(
+                $"{Path.GetFileName(executablePath)} exited immediately with code {process.ExitCode}.");
+        }
         return (true, process.Id);
     }
 

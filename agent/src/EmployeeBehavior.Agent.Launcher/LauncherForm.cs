@@ -56,6 +56,11 @@ internal sealed class LauncherForm : Form
         };
     }
 
+    private Task<AgentProcessStatus> StartAgentProcessesAsync()
+    {
+        return Task.Run(() => _agentProcessManager.StartAgentProcesses());
+    }
+
     private void BuildLoginPanel()
     {
         _loginPanel.Dock = DockStyle.Fill;
@@ -65,9 +70,14 @@ internal sealed class LauncherForm : Form
         title.Height = 44;
         title.Dock = DockStyle.Top;
 
-        var subtitle = CreateLabel("Start your work session and launch the approved monitoring agent.", 10, FontStyle.Regular);
+        var subtitle = CreateLabel(
+            "Clock in starts company-device monitoring: screenshots, active app/session metadata, and aggregate input counts." +
+            Environment.NewLine +
+            "No raw keys, clipboard, camera, microphone, or remote control.",
+            9,
+            FontStyle.Regular);
         subtitle.ForeColor = Color.FromArgb(92, 101, 116);
-        subtitle.Height = 42;
+        subtitle.Height = 58;
         subtitle.Dock = DockStyle.Top;
 
         var employeeLabel = CreateFieldLabel("Employee code");
@@ -195,7 +205,7 @@ internal sealed class LauncherForm : Form
         AgentProcessStatus processStatus;
         try
         {
-            processStatus = _agentProcessManager.StartAgentProcesses();
+            processStatus = await StartAgentProcessesAsync();
         }
         catch (Exception ex)
         {
