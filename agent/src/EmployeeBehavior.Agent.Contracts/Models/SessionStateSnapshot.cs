@@ -14,5 +14,17 @@ public sealed record SessionStateSnapshot
 
     public bool IsRdpSession { get; init; }
 
+    public bool IsActiveSession { get; init; }
+
+    public bool IsConsoleSession { get; init; }
+
+    public int ActiveConsoleSessionId { get; init; }
+
+    public int IdleSeconds { get; init; }
+
+    public string InputDesktopName { get; init; } = string.Empty;
+
+    public string SessionConnectState { get; init; } = string.Empty;
+
     public string StatusDetail { get; init; } = string.Empty;
 }

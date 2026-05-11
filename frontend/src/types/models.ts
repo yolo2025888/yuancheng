@@ -44,16 +44,44 @@ export type HeatmapPoint = {
   status: string;
 };
 
+export type EventSeverity = 'low' | 'medium' | 'high' | 'critical';
+
+export type EventStatus = 'new' | 'reviewing' | 'confirmed' | 'ignored' | 'closed';
+
+export type ChangeMetrics = {
+  changeLevel: string;
+  effectiveChange: boolean | null;
+  changedBlockRatio: number | null;
+  similarity: number | null;
+  distance: number | null;
+  reason: string;
+};
+
+export type LinkedRiskRecord = {
+  id: string;
+  type: string;
+  severity: EventSeverity;
+  status: EventStatus;
+  reason: string;
+  streakCount: number | null;
+  noChangeStreakTriggered: boolean;
+};
+
 export type EventRecord = {
   id: string;
   employee: string;
   department: string;
   type: string;
-  severity: 'low' | 'medium' | 'high' | 'critical';
-  status: 'new' | 'reviewing' | 'confirmed' | 'ignored' | 'closed';
+  severity: EventSeverity;
+  status: EventStatus;
   startedAt: string;
   duration: string;
   summary: string;
+  eventCode?: string;
+  relatedScreenshotId?: string | null;
+  streakCount?: number | null;
+  noChangeStreakTriggered?: boolean;
+  changeMetrics?: ChangeMetrics | null;
 };
 
 export type RealtimeStatusRecord = {
@@ -96,6 +124,9 @@ export type TimelineSegment = {
   label: string;
   detail: string;
   status: 'working' | 'meeting' | 'idle' | 'risk';
+  changeMetrics?: ChangeMetrics | null;
+  linkedRiskCount?: number;
+  noChangeStreakTriggered?: boolean;
 };
 
 export type ScreenshotListItem = {
@@ -109,6 +140,9 @@ export type ScreenshotListItem = {
   mouseCount: number;
   riskCount: number;
   riskSummary: string;
+  changeMetrics: ChangeMetrics;
+  linkedRisks: LinkedRiskRecord[];
+  noChangeStreakTriggered: boolean;
 };
 
 export type PolicyRecord = {
@@ -151,5 +185,8 @@ export type ScreenshotComparison = {
   previousThumbUri?: string | null;
   metrics: Array<{ label: string; value: string; hint: string }>;
   reasoning: string[];
+  changeMetrics?: ChangeMetrics | null;
+  linkedRisks?: LinkedRiskRecord[];
+  noChangeStreakTriggered?: boolean;
   apiStatus?: ApiStatus;
 };

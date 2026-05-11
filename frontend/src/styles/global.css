@@ -97,6 +97,10 @@ body {
   width: 100%;
 }
 
+.full-width {
+  width: 100%;
+}
+
 .page-section {
   display: flex;
   justify-content: space-between;
@@ -117,6 +121,11 @@ body {
 .panel-card {
   border: var(--panel-border);
   box-shadow: var(--panel-shadow);
+}
+
+.embedded-alert {
+  margin-bottom: 16px;
+  border-radius: 12px;
 }
 
 .kpi-card .ant-typography {
@@ -148,6 +157,12 @@ body {
 
 .event-summary {
   margin: 10px 0 0;
+}
+
+.event-item-priority {
+  padding-inline: 12px;
+  border-radius: 12px;
+  background: linear-gradient(90deg, rgba(245, 158, 11, 0.1), rgba(245, 158, 11, 0.02));
 }
 
 .event-meta {
@@ -207,6 +222,14 @@ body {
 
 .metric-row .ant-typography {
   margin-bottom: 0;
+}
+
+.change-summary {
+  width: 100%;
+}
+
+.change-summary .ant-tag {
+  margin-inline-end: 0;
 }
 
 .timeline-shot-row {

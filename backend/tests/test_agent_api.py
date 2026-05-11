@@ -1,15 +1,45 @@
 from __future__ import annotations
 
 import base64
+import struct
+import zlib
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
+from sqlmodel import Session, select
+
+from app.models import BehaviorEvent, Policy
 
 ONE_PIXEL_PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO9W0WQAAAAASUVORK5CYII="
 )
+
+
+def solid_png_bytes(*, red: int, green: int, blue: int, width: int = 8, height: int = 8) -> bytes:
+    rows = []
+    pixel = bytes([red, green, blue])
+    for _ in range(height):
+        rows.append(b"\x00" + (pixel * width))
+    raw = b"".join(rows)
+
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(data))
+            + tag
+            + data
+            + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+        )
+
+    return b"".join(
+        [
+            b"\x89PNG\r\n\x1a\n",
+            chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)),
+            chunk(b"IDAT", zlib.compress(raw)),
+            chunk(b"IEND", b""),
+        ]
+    )
 
 
 def test_heartbeat_returns_policy(client: TestClient, seeded_device: dict[str, str]) -> None:
@@ -120,3 +150,116 @@ def test_screenshot_direct_upload_persists_image_and_thumb(
     storage_base = Path(client.app.state.settings.storage_root_dir).parent
     assert (storage_base / payload["image_uri"]).exists()
     assert (storage_base / payload["thumb_uri"]).exists()
+
+
+def test_repeated_same_uploads_trigger_no_change_event_and_changed_upload_closes_it(
+    client: TestClient,
+    seeded_device: dict[str, str],
+) -> None:
+    app = client.app
+    with Session(app.state.engine) as session:
+        policy = session.exec(select(Policy).where(Policy.is_active.is_(True))).first()
+        assert policy is not None
+        policy.no_change_threshold = 2
+        session.add(policy)
+        session.commit()
+
+    unchanged_image = solid_png_bytes(red=32, green=32, blue=32)
+    changed_image = solid_png_bytes(red=240, green=240, blue=240)
+
+    for minute in range(3):
+        response = client.post(
+            "/api/agent/screenshots/upload",
+            data={
+                "device_id": seeded_device["device_id"],
+                "captured_at": datetime(2026, 5, 11, 12, minute, tzinfo=timezone.utc).isoformat(),
+                "screen_index": "0",
+                "width": "8",
+                "height": "8",
+                "foreground_process": "Cursor.exe",
+                "window_title": "steady frame",
+                "keyboard_count": "0",
+                "mouse_click_count": "0",
+                "mouse_move_count": "0",
+                "is_locked": "false",
+                "is_remote_session": "false",
+                "phash": "0000000000000000",
+            },
+            files={"file": ("steady.png", unchanged_image, "image/png")},
+        )
+        assert response.status_code == 201
+
+    events_response = client.get(
+        "/api/events",
+        params={
+            "employee_id": seeded_device["employee_id"],
+            "event_type": "no_change_streak_triggered",
+        },
+    )
+    assert events_response.status_code == 200
+    events_payload = events_response.json()
+    assert events_payload["total"] == 1
+    assert events_payload["items"][0]["status"] == "open"
+    assert events_payload["items"][0]["streak_count"] == 2
+    assert events_payload["items"][0]["screen_index"] == 0
+    assert events_payload["items"][0]["related_diff"]["is_effective_change"] is False
+
+    screenshots_response = client.get(
+        "/api/screenshots",
+        params={
+            "device_id": seeded_device["device_id"],
+            "limit": 1,
+        },
+    )
+    assert screenshots_response.status_code == 200
+    screenshot_payload = screenshots_response.json()["items"][0]
+    assert screenshot_payload["diff"]["change_level"] == "none"
+    assert screenshot_payload["diff"]["is_effective_change"] is False
+    assert screenshot_payload["risk_events"][0]["event_type"] == "no_change_streak_triggered"
+
+    changed_response = client.post(
+        "/api/agent/screenshots/upload",
+        data={
+            "device_id": seeded_device["device_id"],
+            "captured_at": datetime(2026, 5, 11, 12, 3, tzinfo=timezone.utc).isoformat(),
+            "screen_index": "0",
+            "width": "8",
+            "height": "8",
+            "foreground_process": "Cursor.exe",
+            "window_title": "changed frame",
+            "keyboard_count": "1",
+            "mouse_click_count": "1",
+            "mouse_move_count": "1",
+            "is_locked": "false",
+            "is_remote_session": "false",
+            "phash": "ffffffffffffffff",
+        },
+        files={"file": ("changed.png", changed_image, "image/png")},
+    )
+    assert changed_response.status_code == 201
+
+    events_response = client.get(
+        "/api/events",
+        params={
+            "employee_id": seeded_device["employee_id"],
+            "event_type": "no_change_streak_triggered",
+        },
+    )
+    assert events_response.status_code == 200
+    updated_event = events_response.json()["items"][0]
+    assert updated_event["status"] == "closed"
+    assert updated_event["related_diff"]["is_effective_change"] is True
+    assert updated_event["related_diff"]["change_level"] == "major"
+
+    detail_response = client.get(f"/api/screenshots/{changed_response.json()['screenshot_id']}")
+    assert detail_response.status_code == 200
+    detail_payload = detail_response.json()
+    assert detail_payload["diff"]["is_effective_change"] is True
+    assert detail_payload["diff"]["hash_distance"] is not None
+
+    with Session(app.state.engine) as session:
+        persisted_event = session.exec(
+            select(BehaviorEvent).where(BehaviorEvent.event_type == "no_change_streak_triggered")
+        ).first()
+        assert persisted_event is not None
+        assert persisted_event.status == "closed"

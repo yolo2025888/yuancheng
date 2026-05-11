@@ -17,6 +17,7 @@ from app.schemas.agent import (
     ScreenshotMetadataResponse,
     ScreenshotUploadResponse,
 )
+from app.services.screen_analysis import ScreenshotAnalysisService
 from app.services.storage import LocalScreenshotStorage
 
 
@@ -80,6 +81,35 @@ class AgentService:
             ocr_status="pending",
             analysis_status="pending",
         )
+
+    def _finalize_screenshot(
+        self,
+        *,
+        screenshot: Screenshot,
+        image_uri: str,
+        thumb_uri: str,
+        phash: str | None,
+        image_bytes: bytes | None = None,
+    ) -> None:
+        screenshot.image_uri = image_uri
+        screenshot.thumb_uri = thumb_uri
+        screenshot.phash = phash
+        screenshot.upload_status = "completed"
+        screenshot.analysis_status = "pending"
+        screenshot.updated_at = utc_now()
+        self.session.add(screenshot)
+        self.session.commit()
+        self.session.refresh(screenshot)
+
+        analysis_service = ScreenshotAnalysisService(self.session, self.settings)
+        try:
+            analysis_service.analyze_completed_screenshot(
+                screenshot=screenshot,
+                image_bytes=image_bytes,
+            )
+        except Exception as exc:
+            analysis_service.mark_analysis_failed(screenshot, str(exc))
+            self.session.refresh(screenshot)
 
     def heartbeat(self, payload: HeartbeatRequest) -> HeartbeatResponse:
         policy = self.ensure_default_policy()
@@ -155,14 +185,13 @@ class AgentService:
             self.session.commit()
             raise
 
-        screenshot.image_uri = stored.image_uri
-        screenshot.thumb_uri = stored.thumb_uri
-        screenshot.phash = phash
-        screenshot.upload_status = "completed"
-        screenshot.updated_at = utc_now()
-        self.session.add(screenshot)
-        self.session.commit()
-        self.session.refresh(screenshot)
+        self._finalize_screenshot(
+            screenshot=screenshot,
+            image_uri=stored.image_uri,
+            thumb_uri=stored.thumb_uri,
+            phash=phash,
+            image_bytes=image_bytes,
+        )
 
         return ScreenshotUploadResponse(
             screenshot_id=screenshot.id,
@@ -180,12 +209,10 @@ class AgentService:
         if screenshot is None:
             raise ValueError("Screenshot not found")
 
-        screenshot.image_uri = payload.image_uri
-        screenshot.thumb_uri = payload.thumb_uri
-        screenshot.phash = payload.phash
-        screenshot.upload_status = "completed"
-        screenshot.updated_at = utc_now()
-        self.session.add(screenshot)
-        self.session.commit()
-        self.session.refresh(screenshot)
+        self._finalize_screenshot(
+            screenshot=screenshot,
+            image_uri=payload.image_uri,
+            thumb_uri=payload.thumb_uri,
+            phash=payload.phash,
+        )
         return ScreenshotCompleteResponse(screenshot_id=screenshot.id, upload_status=screenshot.upload_status)

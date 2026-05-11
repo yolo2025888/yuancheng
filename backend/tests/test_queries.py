@@ -86,20 +86,28 @@ def test_timeline_and_events_queries(client: TestClient, seeded_device: dict[str
     assert timeline_payload["items"][0]["change_level"] == "major"
     assert timeline_payload["items"][0]["change"]["level"] == "major"
     assert timeline_payload["items"][0]["change"]["effective"] is True
+    assert timeline_payload["items"][0]["change"]["hash_distance"] == 1.2
+    assert timeline_payload["items"][0]["change"]["ssim_score"] == 0.92
+    assert timeline_payload["items"][0]["change"]["reason"] is None
     assert timeline_payload["items"][0]["thumb_uri"] == "thumbnails/example.jpg"
     assert timeline_payload["items"][0]["image_uri"] is None
     assert timeline_payload["items"][0]["keyboard_count"] == 23
     assert timeline_payload["items"][0]["mouse_count"] == 23
     assert timeline_payload["items"][0]["activity"]["keyboard_count"] == 23
     assert timeline_payload["items"][0]["risk_events"][0]["severity"] == "high"
+    assert timeline_payload["items"][0]["risk_events"][0]["streak_count"] == 6
 
     assert events_response.status_code == 200
     events_payload = events_response.json()
     assert events_payload["total"] == 1
     assert events_payload["items"][0]["event_type"] == "no_change_streak_triggered"
+    assert events_payload["items"][0]["screen_index"] == 0
+    assert events_payload["items"][0]["related_diff"]["change_level"] == "major"
 
     assert event_detail_response.status_code == 200
-    assert event_detail_response.json()["id"] == str(event.id)
+    event_detail_payload = event_detail_response.json()
+    assert event_detail_payload["id"] == str(event.id)
+    assert event_detail_payload["related_diff"]["hash_distance"] == 1.2
 
 
 def test_screenshot_list_and_detail_queries(client: TestClient, seeded_device: dict[str, str]) -> None:
@@ -151,6 +159,7 @@ def test_screenshot_list_and_detail_queries(client: TestClient, seeded_device: d
     assert list_payload["total"] == 1
     assert list_payload["items"][0]["screen_index"] == 1
     assert list_payload["items"][0]["thumb_uri"].endswith("_thumb.jpg")
+    assert list_payload["items"][0]["diff"] is None
 
     screenshot_id = list_payload["items"][0]["id"]
     detail_response = client.get(f"/api/screenshots/{screenshot_id}")
@@ -160,3 +169,4 @@ def test_screenshot_list_and_detail_queries(client: TestClient, seeded_device: d
     assert detail_payload["employee_id"] == str(employee_id)
     assert detail_payload["device_id"] == str(device_id)
     assert detail_payload["image_uri"].endswith(".jpg")
+    assert detail_payload["risk_events"] == []

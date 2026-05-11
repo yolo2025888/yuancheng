@@ -3,6 +3,9 @@
     "PipeName": "employee-behavior-agent",
     "EnableTrayIcon": true,
     "RunInConsole": false,
+    "EnableInputActivityHooks": true,
+    "EnableDesktopStateInspection": true,
+    "InputHookStartupTimeoutSeconds": 5,
     "SampleLogIntervalSeconds": 60
   },
   "Logging": {

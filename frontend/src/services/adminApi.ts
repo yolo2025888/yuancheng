@@ -10,8 +10,6 @@ import {
   policies,
   realtimeStatus,
   screenshotComparison,
-  timelineKpis,
-  timelineSegments,
   workStatusSeries
 } from '../mock/data';
 import { apiClient, getErrorMessage } from './apiClient';
@@ -19,9 +17,13 @@ import type {
   ApiResult,
   ApiStatus,
   BackendHealth,
+  ChangeMetrics,
   DeviceRecord,
   EventRecord,
+  EventSeverity,
+  EventStatus,
   KpiMetric,
+  LinkedRiskRecord,
   RealtimeStatusRecord,
   ScreenshotComparison,
   ScreenshotListItem,
@@ -29,7 +31,7 @@ import type {
 } from '../types/models';
 
 type DashboardData = {
-  kpis: typeof dashboardKpis;
+  kpis: KpiMetric[];
   workStatusSeries: typeof workStatusSeries;
   employeeHeatmap: typeof employeeHeatmap;
   events: EventRecord[];
@@ -64,10 +66,11 @@ type EventApiItem = {
   end_at?: string | null;
   duration_seconds?: number | null;
   related_screenshot_id?: string | null;
-  streak_count: number;
+  related_diff?: Record<string, unknown> | null;
+  streak_count?: number | null;
   status: string;
   reason?: string | null;
-  details_json: Record<string, unknown>;
+  details_json?: Record<string, unknown> | null;
   created_at: string;
   updated_at: string;
 };
@@ -77,22 +80,26 @@ type EventApiListResponse = {
   total: number;
 };
 
-type TimelineApiRiskEvent = {
-  id: string;
-  event_type: string;
-  severity: string;
-  status: string;
-};
-
-type TimelineApiItem = {
-  time: string;
-  screenshot_id: string;
+type TimelineApiItem = Record<string, unknown> & {
+  time?: string;
+  screenshot_id?: string;
   thumbnail_url?: string | null;
-  activity_type: string;
-  change_level: string;
-  keyboard_count: number;
-  mouse_count: number;
-  risk_events: TimelineApiRiskEvent[];
+  thumb_uri?: string | null;
+  image_url?: string | null;
+  image_uri?: string | null;
+  full_image_url?: string | null;
+  activity_type?: string;
+  change_level?: string;
+  change?: Record<string, unknown> | null;
+  diff?: Record<string, unknown> | null;
+  keyboard_count?: number;
+  mouse_count?: number;
+  risk_events?: unknown[];
+  events?: unknown[];
+  details_json?: Record<string, unknown> | null;
+  diff_metrics?: Record<string, unknown> | null;
+  change_metrics?: Record<string, unknown> | null;
+  metadata?: Record<string, unknown> | null;
 };
 
 type TimelineApiResponse = {
@@ -154,13 +161,10 @@ const unavailableStatus = (endpoint: string, detail: string): ApiStatus => ({
 
 export const adminApi = {
   async getDashboardData(): Promise<DashboardData> {
-    const [eventResult, backendHealth] = await Promise.all([
-      this.getEvents(),
-      this.getHealth()
-    ]);
+    const [eventResult, backendHealth] = await Promise.all([this.getEvents(), this.getHealth()]);
 
     return {
-      kpis: dashboardKpis,
+      kpis: buildDashboardKpis(eventResult.data),
       workStatusSeries,
       employeeHeatmap,
       events: eventResult.data,
@@ -231,17 +235,18 @@ export const adminApi = {
   async getTimeline(query: TimelineQuery = {}): Promise<TimelineData> {
     const selectedDate = query.date ?? today;
     const discoveredEmployeeId = query.employeeId ?? (await discoverEmployeeId());
+    const mockTimeline = buildMockTimeline(selectedDate);
 
     if (!discoveredEmployeeId) {
       return {
-        kpis: timelineKpis,
-        segments: timelineSegments,
-        screenshots: buildMockScreenshotList(),
+        kpis: buildTimelineKpis(mockTimeline.screenshots),
+        segments: mockTimeline.segments,
+        screenshots: mockTimeline.screenshots,
         apiStatus: fallbackStatus(
           '/api/employees/{employee_id}/timeline',
           'No employee_id could be discovered from live data'
         ),
-        employeeLabel: 'Mock employee',
+        employeeLabel: mockTimeline.employeeLabel,
         selectedDate
       };
     }
@@ -266,9 +271,9 @@ export const adminApi = {
       };
     } catch (error) {
       return {
-        kpis: timelineKpis,
-        segments: timelineSegments,
-        screenshots: buildMockScreenshotList(),
+        kpis: buildTimelineKpis(mockTimeline.screenshots),
+        segments: mockTimeline.segments,
+        screenshots: mockTimeline.screenshots,
         apiStatus: fallbackStatus(
           `/api/employees/${discoveredEmployeeId}/timeline`,
           getErrorMessage(error)
@@ -293,12 +298,12 @@ export const adminApi = {
     try {
       const payload = await fetchEventsRaw();
       return {
-        data: payload.items.map(mapEventRecord),
+        data: payload.items.map(mapEventRecord).sort(compareEvents),
         apiStatus: liveStatus('/api/events', `Loaded ${payload.total} events`)
       };
     } catch (error) {
       return {
-        data: events,
+        data: buildMockEventRecords().sort(compareEvents),
         apiStatus: fallbackStatus('/api/events', getErrorMessage(error))
       };
     }
@@ -327,30 +332,11 @@ export const adminApi = {
       currentThumbUri: current.thumbUri ?? null,
       previousImageUri: previous?.imageUri ?? previous?.thumbUri ?? null,
       previousThumbUri: previous?.thumbUri ?? null,
-      metrics: [
-        {
-          label: 'Change level',
-          value: current.changeLevel,
-          hint: 'Derived from the employee timeline API'
-        },
-        {
-          label: 'Keyboard / Mouse',
-          value: `${current.keyboardCount} / ${current.mouseCount}`,
-          hint: 'Input counters captured for this screenshot'
-        },
-        {
-          label: 'Risk events',
-          value: String(current.riskCount),
-          hint: current.riskSummary || 'No linked risk events'
-        }
-      ],
-      reasoning: [
-        `Screenshot ID: ${current.id}`,
-        `Activity type: ${current.activityType || 'unknown'}`,
-        previous
-          ? `Compared against previous frame at ${previous.capturedAt}`
-          : 'No previous frame is available from the live API'
-      ],
+      metrics: buildScreenshotDetailMetrics(current),
+      reasoning: buildScreenshotReasoning(current, previous),
+      changeMetrics: current.changeMetrics,
+      linkedRisks: current.linkedRisks,
+      noChangeStreakTriggered: current.noChangeStreakTriggered,
       apiStatus: timeline.apiStatus
     };
   },
@@ -386,57 +372,144 @@ async function discoverEmployeeId() {
   }
 }
 
-function mapEventRecord(item: EventApiItem, index: number): EventRecord {
+function mapEventRecord(item: EventApiItem): EventRecord {
+  const details = asRecord(item.details_json);
+  const changeMetrics = extractChangeMetrics(
+    item,
+    details,
+    asRecord(item.related_diff),
+    nestedRecord(details, 'screenshot_diff'),
+    nestedRecord(details, 'related_diff')
+  );
+  const eventCode =
+    firstString(
+      item.event_type,
+      readString(details, ['event_code', 'code', 'rule_code', 'risk_code'])
+    ) ?? 'event';
+  const noChangeStreakTriggered =
+    isNoChangeEventCode(eventCode) ||
+    isNoChangeEventCode(readString(details, ['event_type', 'rule_name'])) ||
+    readBoolean(details, ['no_change_streak_triggered', 'streak_triggered']) === true;
+
   return {
     id: item.id,
     employee: shortenUuid(item.employee_id),
-    department: 'API',
-    type: item.event_type,
+    department: readString(details, ['department', 'department_name']) ?? 'API',
+    type: formatLabel(item.event_type),
     severity: normalizeSeverity(item.severity),
     status: normalizeEventStatus(item.status),
     startedAt: formatDateTime(item.start_at),
     duration: formatDurationSeconds(item.duration_seconds),
-    summary: item.reason || summarizeDetails(item.details_json) || `Device ${shortenUuid(item.device_id)}`,
+    summary:
+      firstString(item.reason, changeMetrics.reason, summarizeDetails(details)) ??
+      `Device ${shortenUuid(item.device_id)}`,
+    eventCode,
+    relatedScreenshotId:
+      item.related_screenshot_id ?? readString(details, ['screenshot_id', 'related_screenshot_id']) ?? null,
+    streakCount:
+      item.streak_count ?? readNumber(details, ['streak_count', 'no_change_streak_count']) ?? null,
+    noChangeStreakTriggered,
+    changeMetrics
   };
 }
 
 function mapTimelineSegment(item: TimelineApiItem): TimelineSegment {
+  const linkedRisks = extractLinkedRisks(item);
+  const changeMetrics = extractChangeMetrics(
+    item,
+    asRecord(item.change),
+    asRecord(item.diff),
+    asRecord(item.details_json),
+    asRecord(item.diff_metrics),
+    asRecord(item.change_metrics),
+    asRecord(item.metadata)
+  );
+  const noChangeStreakTriggered = linkedRisks.some((risk) => risk.noChangeStreakTriggered);
+
   return {
-    time: item.time,
-    label: buildTimelineLabel(item),
-    detail: buildTimelineDetail(item),
-    status: buildTimelineStatus(item)
+    time: item.time ?? '--',
+    label: buildTimelineLabel(item, changeMetrics, noChangeStreakTriggered),
+    detail: buildTimelineDetail(item, linkedRisks, changeMetrics),
+    status: buildTimelineStatus(item, linkedRisks, changeMetrics),
+    changeMetrics,
+    linkedRiskCount: linkedRisks.length,
+    noChangeStreakTriggered
   };
 }
 
 function mapScreenshotListItem(item: TimelineApiItem): ScreenshotListItem {
+  const linkedRisks = extractLinkedRisks(item);
+  const details = asRecord(item.details_json);
+  const changeMetrics = extractChangeMetrics(
+    item,
+    asRecord(item.change),
+    asRecord(item.diff),
+    details,
+    asRecord(item.diff_metrics),
+    asRecord(item.change_metrics),
+    asRecord(item.metadata)
+  );
+  const noChangeStreakTriggered = linkedRisks.some((risk) => risk.noChangeStreakTriggered);
+
   return {
-    id: item.screenshot_id,
-    capturedAt: item.time,
-    thumbUri: item.thumbnail_url ?? null,
-    imageUri: null,
-    activityType: item.activity_type,
-    changeLevel: item.change_level,
-    keyboardCount: item.keyboard_count,
-    mouseCount: item.mouse_count,
-    riskCount: item.risk_events.length,
+    id: item.screenshot_id ?? `frame-${item.time ?? Date.now()}`,
+    capturedAt: item.time ?? '--',
+    thumbUri:
+      firstString(item.thumbnail_url, item.thumb_uri, readString(details, ['thumbnail_url', 'thumb_uri'])) ??
+      null,
+    imageUri:
+      firstString(
+        item.image_uri,
+        item.image_url,
+        item.full_image_url,
+        readString(details, ['image_url', 'full_image_url', 'image_uri'])
+      ) ?? null,
+    activityType: firstString(item.activity_type, readString(details, ['activity_type'])) ?? 'unknown',
+    changeLevel: changeMetrics.changeLevel,
+    keyboardCount: readNumber(item, ['keyboard_count']) ?? readNumber(details, ['keyboard_count']) ?? 0,
+    mouseCount: readNumber(item, ['mouse_count']) ?? readNumber(details, ['mouse_count']) ?? 0,
+    riskCount: linkedRisks.length,
     riskSummary:
-      item.risk_events.map((riskEvent) => `${riskEvent.event_type} (${riskEvent.severity})`).join(', ') ||
-      'No linked risk events'
+      linkedRisks.map((risk) => risk.type).join(', ') ||
+      firstString(changeMetrics.reason, 'No linked risk events') ||
+      'No linked risk events',
+    changeMetrics,
+    linkedRisks,
+    noChangeStreakTriggered
   };
+}
+
+function buildDashboardKpis(eventItems: EventRecord[]): KpiMetric[] {
+  const noChangeCount = eventItems.filter((item) => item.noChangeStreakTriggered).length;
+  const reviewableCount = eventItems.filter((item) => item.status === 'new' || item.status === 'reviewing').length;
+
+  return dashboardKpis.map((metric) => {
+    if (metric.key !== 'risk') {
+      return metric;
+    }
+
+    return {
+      ...metric,
+      title: 'High-risk events',
+      value: String(reviewableCount),
+      delta: noChangeCount > 0 ? `${noChangeCount} no-change streak` : 'No no-change streak',
+      tone: noChangeCount > 0 ? 'warning' : 'positive'
+    };
+  });
 }
 
 function buildTimelineKpis(screenshots: ScreenshotListItem[]): KpiMetric[] {
   if (screenshots.length === 0) {
     return [
-      { key: 'frames', title: 'Timeline frames', value: '0', delta: 'live', tone: 'default' },
-      { key: 'risk', title: 'Risk frames', value: '0', delta: 'live', tone: 'default' },
-      { key: 'keyboard', title: 'Keyboard', value: '0', delta: 'live', tone: 'default' },
-      { key: 'mouse', title: 'Mouse', value: '0', delta: 'live', tone: 'default' }
+      { key: 'frames', title: 'Timeline frames', value: '0', delta: 'no data', tone: 'default' },
+      { key: 'effective', title: 'Effective changes', value: '0', delta: '0%', tone: 'default' },
+      { key: 'no-change', title: 'No-change streak risks', value: '0', delta: 'clear', tone: 'positive' },
+      { key: 'input', title: 'Aggregate input', value: '0', delta: 'keyboard 0 / mouse 0', tone: 'default' }
     ];
   }
 
-  const riskFrames = screenshots.filter((item) => item.riskCount > 0).length;
+  const effectiveChanges = screenshots.filter((item) => item.changeMetrics.effectiveChange === true).length;
+  const noChangeRisks = screenshots.filter((item) => item.noChangeStreakTriggered).length;
   const keyboardCount = screenshots.reduce((sum, item) => sum + item.keyboardCount, 0);
   const mouseCount = screenshots.reduce((sum, item) => sum + item.mouseCount, 0);
 
@@ -449,76 +522,560 @@ function buildTimelineKpis(screenshots: ScreenshotListItem[]): KpiMetric[] {
       tone: 'positive'
     },
     {
-      key: 'risk',
-      title: 'Risk frames',
-      value: String(riskFrames),
-      delta: `${Math.round((riskFrames / screenshots.length) * 100)}%`,
-      tone: riskFrames > 0 ? 'warning' : 'positive'
+      key: 'effective',
+      title: 'Effective changes',
+      value: String(effectiveChanges),
+      delta: `${Math.round((effectiveChanges / screenshots.length) * 100)}%`,
+      tone: effectiveChanges > 0 ? 'positive' : 'default'
     },
     {
-      key: 'keyboard',
-      title: 'Keyboard',
-      value: String(keyboardCount),
-      delta: 'captured',
-      tone: 'default'
+      key: 'no-change',
+      title: 'No-change streak risks',
+      value: String(noChangeRisks),
+      delta: noChangeRisks > 0 ? 'review needed' : 'clear',
+      tone: noChangeRisks > 0 ? 'warning' : 'positive'
     },
     {
-      key: 'mouse',
-      title: 'Mouse',
-      value: String(mouseCount),
-      delta: 'captured',
+      key: 'input',
+      title: 'Aggregate input',
+      value: String(keyboardCount + mouseCount),
+      delta: `keyboard ${keyboardCount} / mouse ${mouseCount}`,
       tone: 'default'
     }
   ];
 }
 
-function buildMockScreenshotList(): ScreenshotListItem[] {
-  return timelineSegments.map((segment, index) => ({
-    id: `mock-${index + 1}`,
-    capturedAt: segment.time,
-    thumbUri: null,
-    imageUri: null,
-    activityType: segment.label,
-    changeLevel: segment.status === 'risk' ? 'high' : 'unknown',
-    keyboardCount: 0,
-    mouseCount: 0,
-    riskCount: segment.status === 'risk' ? 1 : 0,
-    riskSummary: segment.detail
-  }));
+function buildMockTimeline(selectedDate: string) {
+  const frames: ScreenshotListItem[] = [
+    buildMockScreenshot({
+      id: 'mock-1',
+      time: `${selectedDate} 09:10`,
+      activityType: 'Coding',
+      keyboardCount: 28,
+      mouseCount: 12,
+      changeLevel: 'high',
+      effectiveChange: true,
+      changedBlockRatio: 0.24,
+      similarity: 0.86,
+      distance: 11,
+      reason: 'Editor and terminal regions changed together.'
+    }),
+    buildMockScreenshot({
+      id: 'mock-2',
+      time: `${selectedDate} 10:00`,
+      activityType: 'Code review',
+      keyboardCount: 10,
+      mouseCount: 16,
+      changeLevel: 'medium',
+      effectiveChange: true,
+      changedBlockRatio: 0.15,
+      similarity: 0.92,
+      distance: 7,
+      reason: 'Review comments and diff pane changed.'
+    }),
+    buildMockScreenshot({
+      id: 'mock-3',
+      time: `${selectedDate} 11:25`,
+      activityType: 'Meeting',
+      keyboardCount: 3,
+      mouseCount: 4,
+      changeLevel: 'low',
+      effectiveChange: true,
+      changedBlockRatio: 0.09,
+      similarity: 0.96,
+      distance: 4,
+      reason: 'Meeting window controls and participant tiles changed.'
+    }),
+    buildMockScreenshot({
+      id: 'mock-4',
+      time: `${selectedDate} 14:05`,
+      activityType: 'IDE foreground',
+      keyboardCount: 1,
+      mouseCount: 2,
+      changeLevel: 'low',
+      effectiveChange: false,
+      changedBlockRatio: 0.031,
+      similarity: 0.992,
+      distance: 2,
+      reason: 'Only cursor and clock regions changed across repeated captures.',
+      linkedRisks: [
+        {
+          id: 'mock-risk-1',
+          type: 'No-change streak triggered',
+          severity: 'high',
+          status: 'reviewing',
+          reason: 'Repeated low-diff screenshots with near-zero aggregate input.',
+          streakCount: 6,
+          noChangeStreakTriggered: true
+        }
+      ]
+    }),
+    buildMockScreenshot({
+      id: 'mock-5',
+      time: `${selectedDate} 15:10`,
+      activityType: 'Recovered work',
+      keyboardCount: 18,
+      mouseCount: 9,
+      changeLevel: 'medium',
+      effectiveChange: true,
+      changedBlockRatio: 0.18,
+      similarity: 0.9,
+      distance: 8,
+      reason: 'Terminal output and code editor resumed changing.'
+    }),
+    buildMockScreenshot({
+      id: 'mock-6',
+      time: `${selectedDate} 16:02`,
+      activityType: 'Documentation',
+      keyboardCount: 4,
+      mouseCount: 7,
+      changeLevel: 'low',
+      effectiveChange: false,
+      changedBlockRatio: 0.055,
+      similarity: 0.984,
+      distance: 3,
+      reason: 'Document stayed open with only small viewport movement.'
+    })
+  ];
+
+  return {
+    employeeLabel: 'Mock employee',
+    screenshots: frames,
+    segments: frames.map(mapMockFrameToSegment)
+  };
 }
 
-function buildTimelineStatus(item: TimelineApiItem): TimelineSegment['status'] {
-  if (item.risk_events.length > 0) {
+function buildMockScreenshot(input: {
+  id: string;
+  time: string;
+  activityType: string;
+  keyboardCount: number;
+  mouseCount: number;
+  changeLevel: string;
+  effectiveChange: boolean;
+  changedBlockRatio: number;
+  similarity: number;
+  distance: number;
+  reason: string;
+  linkedRisks?: LinkedRiskRecord[];
+}): ScreenshotListItem {
+  const linkedRisks = input.linkedRisks ?? [];
+  const changeMetrics: ChangeMetrics = {
+    changeLevel: input.changeLevel,
+    effectiveChange: input.effectiveChange,
+    changedBlockRatio: input.changedBlockRatio,
+    similarity: input.similarity,
+    distance: input.distance,
+    reason: input.reason
+  };
+
+  return {
+    id: input.id,
+    capturedAt: input.time,
+    thumbUri: null,
+    imageUri: null,
+    activityType: input.activityType,
+    changeLevel: input.changeLevel,
+    keyboardCount: input.keyboardCount,
+    mouseCount: input.mouseCount,
+    riskCount: linkedRisks.length,
+    riskSummary: linkedRisks.map((risk) => risk.type).join(', ') || input.reason,
+    changeMetrics,
+    linkedRisks,
+    noChangeStreakTriggered: linkedRisks.some((risk) => risk.noChangeStreakTriggered)
+  };
+}
+
+function mapMockFrameToSegment(item: ScreenshotListItem): TimelineSegment {
+  return {
+    time: item.capturedAt.split(' ').pop() ?? item.capturedAt,
+    label: item.noChangeStreakTriggered ? 'No-change streak triggered' : item.activityType,
+    detail: buildScreenshotDetailLine(item),
+    status: item.noChangeStreakTriggered
+      ? 'risk'
+      : item.changeMetrics.effectiveChange
+        ? item.activityType.toLowerCase().includes('meeting')
+          ? 'meeting'
+          : 'working'
+        : 'idle',
+    changeMetrics: item.changeMetrics,
+    linkedRiskCount: item.riskCount,
+    noChangeStreakTriggered: item.noChangeStreakTriggered
+  };
+}
+
+function buildMockEventRecords(): EventRecord[] {
+  return events.map((item) => {
+    if (item.id === 'EVT-1024') {
+      return {
+        ...item,
+        eventCode: 'no_change_streak_triggered',
+        relatedScreenshotId: 'mock-4',
+        streakCount: 6,
+        noChangeStreakTriggered: true,
+        changeMetrics: {
+          changeLevel: 'low',
+          effectiveChange: false,
+          changedBlockRatio: 0.031,
+          similarity: 0.992,
+          distance: 2,
+          reason: 'Repeated low-diff screenshots with near-zero aggregate input.'
+        }
+      };
+    }
+
+    if (item.id === 'EVT-1023') {
+      return {
+        ...item,
+        eventCode: 'unexpected_app_focus',
+        changeMetrics: {
+          changeLevel: 'medium',
+          effectiveChange: true,
+          changedBlockRatio: 0.17,
+          similarity: 0.91,
+          distance: 9,
+          reason: 'Foreground application changed away from expected work tools.'
+        }
+      };
+    }
+
+    return item;
+  });
+}
+
+function buildTimelineStatus(
+  item: TimelineApiItem,
+  linkedRisks: LinkedRiskRecord[],
+  changeMetrics: ChangeMetrics
+): TimelineSegment['status'] {
+  if (linkedRisks.length > 0) {
     return 'risk';
   }
 
-  const activity = item.activity_type.toLowerCase();
-  if (activity.includes('meeting')) {
+  const activity = firstString(item.activity_type, readString(asRecord(item.details_json), ['activity_type'])) ?? '';
+  if (activity.toLowerCase().includes('meeting')) {
     return 'meeting';
   }
 
-  if (item.keyboard_count === 0 && item.mouse_count === 0) {
+  if (changeMetrics.effectiveChange === false) {
     return 'idle';
   }
 
   return 'working';
 }
 
-function buildTimelineLabel(item: TimelineApiItem) {
-  if (item.activity_type && item.activity_type !== 'unknown') {
-    return item.activity_type;
+function buildTimelineLabel(
+  item: TimelineApiItem,
+  changeMetrics: ChangeMetrics,
+  noChangeStreakTriggered: boolean
+) {
+  if (noChangeStreakTriggered) {
+    return 'No-change streak triggered';
   }
 
-  return `Change ${item.change_level}`;
+  const activity = firstString(item.activity_type, readString(asRecord(item.details_json), ['activity_type']));
+  if (activity && activity !== 'unknown') {
+    return formatLabel(activity);
+  }
+
+  return `Change ${formatLabel(changeMetrics.changeLevel)}`;
 }
 
-function buildTimelineDetail(item: TimelineApiItem) {
-  const riskText = item.risk_events.length > 0 ? `${item.risk_events.length} linked risk events` : 'No linked risk events';
-  return `Keyboard ${item.keyboard_count}, Mouse ${item.mouse_count}, ${riskText}`;
+function buildTimelineDetail(
+  item: TimelineApiItem,
+  linkedRisks: LinkedRiskRecord[],
+  changeMetrics: ChangeMetrics
+) {
+  const keyboardCount =
+    readNumber(item, ['keyboard_count']) ?? readNumber(asRecord(item.details_json), ['keyboard_count']) ?? 0;
+  const mouseCount =
+    readNumber(item, ['mouse_count']) ?? readNumber(asRecord(item.details_json), ['mouse_count']) ?? 0;
+  const riskText =
+    linkedRisks.length > 0 ? linkedRisks.map((risk) => risk.type).join(', ') : 'No linked risk events';
+
+  return [
+    `Keyboard ${keyboardCount}`,
+    `Mouse ${mouseCount}`,
+    `Changed blocks ${formatPercent(changeMetrics.changedBlockRatio) ?? '--'}`,
+    `Similarity ${formatNumber(changeMetrics.similarity, 3) ?? '--'}`,
+    riskText
+  ].join(' / ');
 }
 
-function shortenUuid(value: string) {
-  return value.length > 12 ? `${value.slice(0, 8)}...` : value;
+function buildScreenshotDetailMetrics(item: ScreenshotListItem) {
+  const metrics = [
+    {
+      label: 'Change level',
+      value: formatLabel(item.changeMetrics.changeLevel),
+      hint: 'Normalized from live or mock screenshot diff fields.'
+    },
+    {
+      label: 'Effective change',
+      value:
+        item.changeMetrics.effectiveChange === null
+          ? 'Unknown'
+          : item.changeMetrics.effectiveChange
+            ? 'Yes'
+            : 'No',
+      hint: 'Shows whether the capture should count as valid work-state change.'
+    },
+    {
+      label: 'Changed block ratio',
+      value: formatPercent(item.changeMetrics.changedBlockRatio) ?? '--',
+      hint: 'Portion of blocks that changed between adjacent screenshots.'
+    },
+    {
+      label: 'Similarity',
+      value: formatNumber(item.changeMetrics.similarity, 3) ?? '--',
+      hint: 'Higher values generally mean the screenshots are more alike.'
+    },
+    {
+      label: 'Distance',
+      value: formatNumber(item.changeMetrics.distance, 2) ?? '--',
+      hint: 'Distance-style diff metric from the backend when available.'
+    },
+    {
+      label: 'Keyboard / Mouse',
+      value: `${item.keyboardCount} / ${item.mouseCount}`,
+      hint: 'Aggregate counters only. No raw keystrokes or content are stored.'
+    },
+    {
+      label: 'Reason',
+      value: item.changeMetrics.reason || '--',
+      hint: 'Backend-compatible reason text shown defensively when present.'
+    }
+  ];
+
+  if (item.linkedRisks.length > 0) {
+    metrics.push({
+      label: 'Linked risks',
+      value: String(item.linkedRisks.length),
+      hint: item.linkedRisks.map((risk) => risk.type).join(', ')
+    });
+  }
+
+  return metrics;
+}
+
+function buildScreenshotReasoning(current: ScreenshotListItem, previous?: ScreenshotListItem) {
+  const notes = [
+    `Screenshot ID: ${current.id}`,
+    `Activity type: ${current.activityType || 'unknown'}`,
+    previous
+      ? `Compared against previous frame at ${previous.capturedAt}`
+      : 'No previous frame is available from the current source.',
+    current.noChangeStreakTriggered
+      ? 'This frame is linked to a no-change streak risk and should be reviewed in context.'
+      : 'No no-change streak risk is linked to this frame.'
+  ];
+
+  if (current.changeMetrics.reason) {
+    notes.push(`Diff reason: ${current.changeMetrics.reason}`);
+  }
+
+  return notes;
+}
+
+function buildScreenshotDetailLine(item: ScreenshotListItem) {
+  return [
+    item.changeMetrics.reason,
+    `changed blocks ${formatPercent(item.changeMetrics.changedBlockRatio) ?? '--'}`,
+    `keyboard ${item.keyboardCount}`,
+    `mouse ${item.mouseCount}`
+  ].join(' / ');
+}
+
+function extractLinkedRisks(item: TimelineApiItem): LinkedRiskRecord[] {
+  const candidates = Array.isArray(item.risk_events)
+    ? item.risk_events
+    : Array.isArray(item.events)
+      ? item.events
+      : [];
+
+  return candidates
+    .map((riskItem, index) => mapLinkedRisk(riskItem, index))
+    .filter((risk): risk is LinkedRiskRecord => risk !== null);
+}
+
+function mapLinkedRisk(riskItem: unknown, index: number): LinkedRiskRecord | null {
+  const record = asRecord(riskItem);
+  if (!record) {
+    return null;
+  }
+
+  const rawType =
+    firstString(
+      readString(record, ['event_type', 'type', 'rule_name', 'event_code', 'code']),
+      `risk-${index + 1}`
+    ) ?? `risk-${index + 1}`;
+  const noChangeStreakTriggered =
+    isNoChangeEventCode(rawType) ||
+    readBoolean(record, ['no_change_streak_triggered', 'streak_triggered']) === true;
+
+  return {
+    id: readString(record, ['id']) ?? `risk-${index + 1}`,
+    type: noChangeStreakTriggered ? 'No-change streak triggered' : formatLabel(rawType),
+    severity: normalizeSeverity(readString(record, ['severity']) ?? 'medium'),
+    status: normalizeEventStatus(readString(record, ['status']) ?? 'new'),
+    reason:
+      firstString(readString(record, ['reason', 'summary', 'description']), 'Linked risk from timeline') ??
+      'Linked risk from timeline',
+    streakCount: readNumber(record, ['streak_count', 'no_change_streak_count']) ?? null,
+    noChangeStreakTriggered
+  };
+}
+
+function extractChangeMetrics(...sources: Array<Record<string, unknown> | undefined>): ChangeMetrics {
+  const relevant = sources.filter((source): source is Record<string, unknown> => Boolean(source));
+  const level =
+    firstStringFromSources(relevant, ['change_level', 'level']) ??
+    deriveChangeLevel(
+      readNumberFromSources(relevant, ['changed_block_ratio', 'change_block_ratio', 'diff_block_ratio']),
+      readNumberFromSources(relevant, ['similarity', 'similarity_score', 'ssim']),
+      readNumberFromSources(relevant, ['distance', 'phash_distance', 'hash_distance'])
+    );
+  const effectiveChange =
+    firstBooleanFromSources(relevant, [
+      'is_effective_change',
+      'effective',
+      'effective_change',
+      'valid_change',
+      'is_valid_change'
+    ]) ?? null;
+
+  return {
+    changeLevel: level ?? 'unknown',
+    effectiveChange,
+    changedBlockRatio:
+      normalizeRatio(
+        readNumberFromSources(relevant, [
+          'changed_block_ratio',
+          'change_block_ratio',
+          'diff_block_ratio'
+        ])
+      ) ?? null,
+    similarity:
+      readNumberFromSources(relevant, ['similarity', 'similarity_score', 'ssim_score', 'ssim', 'similarity_index']) ?? null,
+    distance: readNumberFromSources(relevant, ['distance', 'phash_distance', 'hash_distance']) ?? null,
+    reason:
+      firstStringFromSources(relevant, ['reason', 'change_reason', 'diff_reason', 'summary', 'description']) ?? ''
+  };
+}
+
+function compareEvents(left: EventRecord, right: EventRecord) {
+  const leftPriority = (left.noChangeStreakTriggered ? 100 : 0) + severityWeight(left.severity);
+  const rightPriority = (right.noChangeStreakTriggered ? 100 : 0) + severityWeight(right.severity);
+
+  return rightPriority - leftPriority;
+}
+
+function severityWeight(value: EventSeverity) {
+  switch (value) {
+    case 'critical':
+      return 40;
+    case 'high':
+      return 30;
+    case 'medium':
+      return 20;
+    default:
+      return 10;
+  }
+}
+
+function deriveChangeLevel(
+  blockRatio?: number,
+  similarity?: number,
+  distance?: number
+): string | undefined {
+  if (blockRatio !== undefined) {
+    const normalizedRatio = normalizeRatio(blockRatio) ?? blockRatio;
+
+    if (normalizedRatio >= 0.2) {
+      return 'high';
+    }
+
+    if (normalizedRatio >= 0.08) {
+      return 'medium';
+    }
+
+    return 'low';
+  }
+
+  if (similarity !== undefined) {
+    if (similarity >= 0.985) {
+      return 'low';
+    }
+
+    if (similarity >= 0.93) {
+      return 'medium';
+    }
+
+    return 'high';
+  }
+
+  if (distance !== undefined) {
+    if (distance <= 2) {
+      return 'low';
+    }
+
+    if (distance <= 7) {
+      return 'medium';
+    }
+
+    return 'high';
+  }
+
+  return undefined;
+}
+
+function isNoChangeEventCode(value?: string | null) {
+  if (!value) {
+    return false;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  return (
+    normalized.includes('no_change_streak_triggered') ||
+    normalized.includes('continuous_no_change') ||
+    normalized.includes('no_change') ||
+    normalized.includes('streak_triggered')
+  );
+}
+
+function normalizeDeviceStatus(status?: string) {
+  if (status === 'online' || status === 'offline' || status === 'warning') {
+    return status;
+  }
+
+  return 'warning';
+}
+
+function normalizeEventStatus(status: string): EventStatus {
+  if (status === 'new' || status === 'reviewing' || status === 'confirmed' || status === 'ignored' || status === 'closed') {
+    return status;
+  }
+
+  if (status === 'open') {
+    return 'reviewing';
+  }
+
+  return 'new';
+}
+
+function normalizeSeverity(severity: string): EventSeverity {
+  if (severity === 'low' || severity === 'medium' || severity === 'high' || severity === 'critical') {
+    return severity;
+  }
+
+  return 'medium';
+}
+
+function normalizeRatio(value?: number | null) {
+  if (value === undefined || value === null || Number.isNaN(value)) {
+    return undefined;
+  }
+
+  return value > 1 ? value / 100 : value;
 }
 
 function formatDateTime(value?: string | null) {
@@ -548,45 +1105,20 @@ function formatDurationSeconds(value?: number | null) {
   return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
 }
 
-function summarizeDetails(details: Record<string, unknown>) {
-  const entries = Object.entries(details);
-
-  if (entries.length === 0) {
+function summarizeDetails(details?: Record<string, unknown>) {
+  if (!details) {
     return '';
   }
 
-  return entries
-    .slice(0, 2)
-    .map(([key, value]) => `${key}: ${String(value)}`)
+  return Object.entries(details)
+    .filter(([, value]) => !Array.isArray(value) && typeof value !== 'object')
+    .slice(0, 3)
+    .map(([key, value]) => `${formatLabel(key)}: ${String(value)}`)
     .join(' | ');
 }
 
-function normalizeDeviceStatus(status?: string) {
-  if (status === 'online' || status === 'offline' || status === 'warning') {
-    return status;
-  }
-
-  return 'warning';
-}
-
-function normalizeEventStatus(status: string): EventRecord['status'] {
-  if (status === 'new' || status === 'reviewing' || status === 'confirmed' || status === 'ignored' || status === 'closed') {
-    return status;
-  }
-
-  if (status === 'open') {
-    return 'reviewing';
-  }
-
-  return 'new';
-}
-
-function normalizeSeverity(severity: string): EventRecord['severity'] {
-  if (severity === 'low' || severity === 'medium' || severity === 'high' || severity === 'critical') {
-    return severity;
-  }
-
-  return 'medium';
+function shortenUuid(value: string) {
+  return value.length > 12 ? `${value.slice(0, 8)}...` : value;
 }
 
 function getLocalDateString() {
@@ -595,4 +1127,141 @@ function getLocalDateString() {
   const month = String(now.getMonth() + 1).padStart(2, '0');
   const day = String(now.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+
+  return undefined;
+}
+
+function nestedRecord(source: Record<string, unknown> | undefined, key: string) {
+  return source ? asRecord(source[key]) : undefined;
+}
+
+function readString(source: Record<string, unknown> | undefined, keys: string[]) {
+  if (!source) {
+    return undefined;
+  }
+
+  for (const key of keys) {
+    const value = source[key];
+    if (typeof value === 'string' && value.trim()) {
+      return value;
+    }
+  }
+
+  return undefined;
+}
+
+function readNumber(source: Record<string, unknown> | undefined, keys: string[]) {
+  if (!source) {
+    return undefined;
+  }
+
+  for (const key of keys) {
+    const value = source[key];
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return value;
+    }
+
+    if (typeof value === 'string' && value.trim()) {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) {
+        return parsed;
+      }
+    }
+  }
+
+  return undefined;
+}
+
+function readBoolean(source: Record<string, unknown> | undefined, keys: string[]) {
+  if (!source) {
+    return undefined;
+  }
+
+  for (const key of keys) {
+    const value = source[key];
+    if (typeof value === 'boolean') {
+      return value;
+    }
+
+    if (typeof value === 'string') {
+      if (value === 'true') {
+        return true;
+      }
+
+      if (value === 'false') {
+        return false;
+      }
+    }
+  }
+
+  return undefined;
+}
+
+function firstString(...values: Array<string | undefined | null>) {
+  return values.find((value) => typeof value === 'string' && value.trim()) ?? undefined;
+}
+
+function firstStringFromSources(sources: Record<string, unknown>[], keys: string[]) {
+  for (const source of sources) {
+    const value = readString(source, keys);
+    if (value) {
+      return value;
+    }
+  }
+
+  return undefined;
+}
+
+function readNumberFromSources(sources: Record<string, unknown>[], keys: string[]) {
+  for (const source of sources) {
+    const value = readNumber(source, keys);
+    if (value !== undefined) {
+      return value;
+    }
+  }
+
+  return undefined;
+}
+
+function firstBooleanFromSources(sources: Record<string, unknown>[], keys: string[]) {
+  for (const source of sources) {
+    const value = readBoolean(source, keys);
+    if (value !== undefined) {
+      return value;
+    }
+  }
+
+  return undefined;
+}
+
+function formatLabel(value: string) {
+  return value
+    .split(/[_\s-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+function formatPercent(value?: number | null) {
+  const normalized = normalizeRatio(value);
+  if (normalized === undefined) {
+    return null;
+  }
+
+  const percentage = normalized * 100;
+  return `${percentage.toFixed(percentage >= 10 ? 0 : 1)}%`;
+}
+
+function formatNumber(value?: number | null, digits = 2) {
+  if (value === undefined || value === null || Number.isNaN(value)) {
+    return null;
+  }
+
+  return value.toFixed(digits);
 }

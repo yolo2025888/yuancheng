@@ -46,7 +46,41 @@ public sealed class AgentApiClient : IAgentApiClient
             os_type = request.OsType,
             agent_version = request.AgentVersion,
             screen_count = request.ScreenCount,
-            status = request.Status
+            status = request.Status,
+            session_state = request.SessionState is null ? null : new
+            {
+                collected_at = request.SessionState.CollectedAtUtc,
+                session_id = request.SessionState.SessionId,
+                user_name = request.SessionState.UserName,
+                is_locked = request.SessionState.IsLocked,
+                is_remote_session = request.SessionState.IsRemoteSession,
+                is_rdp_session = request.SessionState.IsRdpSession,
+                is_active_session = request.SessionState.IsActiveSession,
+                is_console_session = request.SessionState.IsConsoleSession,
+                active_console_session_id = request.SessionState.ActiveConsoleSessionId,
+                idle_seconds = request.SessionState.IdleSeconds,
+                input_desktop_name = request.SessionState.InputDesktopName,
+                session_connect_state = request.SessionState.SessionConnectState,
+                status_detail = request.SessionState.StatusDetail
+            },
+            foreground_window = request.ForegroundWindow is null ? null : new
+            {
+                collected_at = request.ForegroundWindow.CollectedAtUtc,
+                process_name = request.ForegroundWindow.ProcessName,
+                executable_path = request.ForegroundWindow.ExecutablePath,
+                window_title = request.ForegroundWindow.WindowTitle
+            },
+            input_activity = request.InputActivity is null ? null : new
+            {
+                collected_from = request.InputActivity.CollectedFromUtc,
+                collected_to = request.InputActivity.CollectedToUtc,
+                keyboard_event_count = request.InputActivity.KeyboardEventCount,
+                mouse_event_count = request.InputActivity.MouseEventCount,
+                mouse_move_count = request.InputActivity.MouseMoveCount,
+                mouse_click_count = request.InputActivity.MouseClickCount,
+                mouse_wheel_count = request.InputActivity.MouseWheelCount,
+                window_switch_count = request.InputActivity.WindowSwitchCount
+            }
         };
 
         using var response = await _httpClient.PostAsJsonAsync(
@@ -128,10 +162,16 @@ public sealed class AgentApiClient : IAgentApiClient
         form.Add(new StringContent(request.ForegroundWindow?.ProcessName ?? string.Empty), "foreground_process");
         form.Add(new StringContent(request.ForegroundWindow?.WindowTitle ?? string.Empty), "window_title");
         form.Add(new StringContent((request.InputActivity?.KeyboardEventCount ?? 0).ToString()), "keyboard_count");
-        form.Add(new StringContent("0"), "mouse_click_count");
-        form.Add(new StringContent((request.InputActivity?.MouseEventCount ?? 0).ToString()), "mouse_move_count");
+        form.Add(new StringContent((request.InputActivity?.MouseClickCount ?? 0).ToString()), "mouse_click_count");
+        form.Add(new StringContent((request.InputActivity?.MouseMoveCount ?? 0).ToString()), "mouse_move_count");
+        form.Add(new StringContent((request.InputActivity?.MouseWheelCount ?? 0).ToString()), "mouse_wheel_count");
+        form.Add(new StringContent((request.InputActivity?.WindowSwitchCount ?? 0).ToString()), "window_switch_count");
         form.Add(new StringContent((request.SessionState?.IsLocked ?? false).ToString().ToLowerInvariant()), "is_locked");
         form.Add(new StringContent((request.SessionState?.IsRemoteSession ?? false).ToString().ToLowerInvariant()), "is_remote_session");
+        form.Add(new StringContent((request.SessionState?.IsRdpSession ?? false).ToString().ToLowerInvariant()), "is_rdp_session");
+        form.Add(new StringContent((request.SessionState?.IdleSeconds ?? 0).ToString()), "idle_seconds");
+        form.Add(new StringContent(request.SessionState?.InputDesktopName ?? string.Empty), "input_desktop_name");
+        form.Add(new StringContent(request.SessionState?.SessionConnectState ?? string.Empty), "session_connect_state");
         if (!string.IsNullOrWhiteSpace(request.ImageSha256))
         {
             form.Add(new StringContent(request.ImageSha256), "phash");

@@ -10,5 +10,11 @@ public sealed record InputActivitySnapshot
 
     public long MouseEventCount { get; init; }
 
+    public long MouseMoveCount { get; init; }
+
+    public long MouseClickCount { get; init; }
+
+    public long MouseWheelCount { get; init; }
+
     public long WindowSwitchCount { get; init; }
 }

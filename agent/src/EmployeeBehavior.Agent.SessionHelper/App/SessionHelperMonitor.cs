@@ -1,20 +1,24 @@
 using Microsoft.Extensions.Options;
 using EmployeeBehavior.Agent.SessionHelper.Configuration;
+using EmployeeBehavior.Agent.SessionHelper.Monitoring;
 
 namespace EmployeeBehavior.Agent.SessionHelper.App;
 
 public sealed class SessionHelperMonitor : BackgroundService
 {
+    private readonly IForegroundWindowProvider _foregroundWindowProvider;
     private readonly ILogger<SessionHelperMonitor> _logger;
-    private readonly ISessionSnapshotCollector _sessionSnapshotCollector;
     private readonly SessionHelperOptions _options;
+    private readonly ISessionStateProvider _sessionStateProvider;
 
     public SessionHelperMonitor(
-        ISessionSnapshotCollector sessionSnapshotCollector,
+        IForegroundWindowProvider foregroundWindowProvider,
+        ISessionStateProvider sessionStateProvider,
         IOptions<SessionHelperOptions> options,
         ILogger<SessionHelperMonitor> logger)
     {
-        _sessionSnapshotCollector = sessionSnapshotCollector;
+        _foregroundWindowProvider = foregroundWindowProvider;
+        _sessionStateProvider = sessionStateProvider;
         _options = options.Value;
         _logger = logger;
     }
@@ -25,13 +29,19 @@ public sealed class SessionHelperMonitor : BackgroundService
 
         do
         {
-            var snapshot = await _sessionSnapshotCollector.CaptureAsync(stoppingToken);
+            var foregroundWindowTask = _foregroundWindowProvider.GetCurrentAsync(stoppingToken);
+            var sessionStateTask = _sessionStateProvider.GetCurrentAsync(stoppingToken);
+            await Task.WhenAll(foregroundWindowTask, sessionStateTask);
+
+            var foregroundWindow = await foregroundWindowTask;
+            var sessionState = await sessionStateTask;
             _logger.LogInformation(
-                "Session snapshot collected. Foreground={ForegroundWindow}; Keyboard={KeyboardCount}; Mouse={MouseCount}; Remote={IsRemote}.",
-                snapshot.ForegroundWindow?.WindowTitle,
-                snapshot.InputActivity?.KeyboardEventCount,
-                snapshot.InputActivity?.MouseEventCount,
-                snapshot.SessionState?.IsRemoteSession);
+                "Session helper alive. Foreground={ForegroundWindow}; Remote={IsRemote}; Locked={IsLocked}; Idle={IdleSeconds}s; Desktop={DesktopName}.",
+                foregroundWindow.WindowTitle,
+                sessionState.IsRemoteSession,
+                sessionState.IsLocked,
+                sessionState.IdleSeconds,
+                sessionState.InputDesktopName);
         }
         while (await timer.WaitForNextTickAsync(stoppingToken));
     }

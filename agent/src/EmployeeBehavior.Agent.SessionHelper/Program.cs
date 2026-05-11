@@ -25,8 +25,10 @@ internal static class Program
 
         builder.Services.AddSingleton<IScreenshotCapture, WindowsScreenshotCapture>();
         builder.Services.AddSingleton<IForegroundWindowProvider, Win32ForegroundWindowProvider>();
-        builder.Services.AddSingleton<IInputActivityCounter, InputActivityCounterStub>();
-        builder.Services.AddSingleton<ISessionStateProvider, SessionStateProviderStub>();
+        builder.Services.AddSingleton<Win32InputActivityCounter>();
+        builder.Services.AddSingleton<IInputActivityCounter>(serviceProvider => serviceProvider.GetRequiredService<Win32InputActivityCounter>());
+        builder.Services.AddHostedService(serviceProvider => serviceProvider.GetRequiredService<Win32InputActivityCounter>());
+        builder.Services.AddSingleton<ISessionStateProvider, Win32SessionStateProvider>();
         builder.Services.AddSingleton<ISessionSnapshotCollector, SessionSnapshotCollector>();
         builder.Services.AddSingleton<AgentSessionApplicationContext>();
         builder.Services.AddHostedService<SessionHelperMonitor>();
