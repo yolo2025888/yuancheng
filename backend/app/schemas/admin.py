@@ -1,11 +1,15 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 from datetime import date, datetime
 import re
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+
+def _clean_single_line(value: str) -> str:
+    return "".join(character for character in value.strip() if character >= " " and character not in "\r\n\t")
 
 
 class PolicySummary(BaseModel):
@@ -323,6 +327,54 @@ class GitHubRiskEventListResponse(BaseModel):
     total: int
     generated_at: datetime
     trend: list[GitHubRiskTrendPoint] = Field(default_factory=list)
+
+
+class GitHubRiskEventCreateRequest(BaseModel):
+    employee_id: UUID
+    device_id: UUID | None = None
+    repository: str = Field(min_length=1, max_length=200, pattern=r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+    action: Literal["clone", "fetch", "pull", "review", "comment"]
+    risk_rule: str = Field(min_length=1, max_length=120)
+    severity: str = Field(default="medium", pattern="^(low|medium|high|critical)$")
+    occurred_at: datetime
+    correlation: str | None = Field(default=None, max_length=256)
+    details_json: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("repository", "risk_rule")
+    @classmethod
+    def strip_required_text(cls, value: str) -> str:
+        stripped = _clean_single_line(value)
+        if not stripped:
+            raise ValueError("Value must not be blank")
+        return stripped
+
+    @field_validator("action")
+    @classmethod
+    def validate_action(cls, value: str) -> str:
+        normalized = _clean_single_line(value).casefold().replace("-", "_")
+        allowed_actions = {"clone", "fetch", "pull", "review", "comment"}
+        if normalized not in allowed_actions:
+            raise ValueError("Unsupported GitHub action")
+        return normalized
+
+    @field_validator("correlation")
+    @classmethod
+    def strip_optional_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = _clean_single_line(value)
+        if re.search(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+", stripped) or re.search(r"https?://", stripped, re.I):
+            raise ValueError("correlation must not contain emails or URLs")
+        if re.search(r"(?i)(token|secret|password|passwd|api[_-]?key)", stripped):
+            raise ValueError("correlation must not contain secret markers")
+        return stripped or None
+
+    @field_validator("details_json")
+    @classmethod
+    def validate_details_json(cls, value: dict[str, Any]) -> dict[str, Any]:
+        if len(str(value)) > 4000:
+            raise ValueError("details_json is too large")
+        return value
 
 
 class RiskLevelBreakdown(BaseModel):

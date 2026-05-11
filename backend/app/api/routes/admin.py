@@ -22,6 +22,8 @@ from app.schemas.admin import (
     DashboardSummaryResponse,
     DeviceListResponse,
     EmployeeRiskScoreListResponse,
+    GitHubRiskEventCreateRequest,
+    GitHubRiskEventItem,
     GitHubRiskEventListResponse,
     EmployeeImportResponse,
     EmployeeListResponse,
@@ -153,6 +155,19 @@ def list_github_risks(
     _: object = Depends(require_permissions("github_risks.view")),
 ) -> GitHubRiskEventListResponse:
     return QueryService(session).list_github_risks(limit=limit)
+
+
+@router.post("/github-risks", response_model=GitHubRiskEventItem, status_code=status.HTTP_201_CREATED)
+def create_github_risk(
+    payload: GitHubRiskEventCreateRequest,
+    session: Session = Depends(get_session),
+    audit_context: AuditContext = Depends(get_audit_context),
+    _: object = Depends(require_permissions("github_risks.manage")),
+) -> GitHubRiskEventItem:
+    try:
+        return QueryService(session).create_github_risk(payload, audit_context=audit_context)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
 @router.get("/access-matrix", response_model=AccessMatrixResponse, include_in_schema=False)

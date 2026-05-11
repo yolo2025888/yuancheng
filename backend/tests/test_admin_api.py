@@ -888,6 +888,137 @@ def test_github_risks_endpoint_maps_github_behavior_events(
     assert payload["items"][1]["correlation"] == "Linked to DEV-PC-001"
 
 
+def test_github_risk_create_endpoint_records_sanitized_behavior_event(
+    client: TestClient,
+    seeded_device: dict[str, str],
+    auth_headers,
+) -> None:
+    headers = auth_headers(bootstrap=True)
+    employee_id = seeded_device["employee_id"]
+    device_id = seeded_device["device_id"]
+
+    response = client.post(
+        "/api/github-risks",
+        headers=headers,
+        json={
+            "employee_id": employee_id,
+            "device_id": device_id,
+            "repository": "corp/infra-secrets",
+            "action": "clone",
+            "risk_rule": "Sensitive repository clone",
+            "severity": "critical",
+            "occurred_at": "2026-05-11T10:15:00Z",
+            "correlation": "Linked to DEV-PC-001",
+            "details_json": {
+                "source": "github_audit",
+                "token": "ghp_should_not_persist",
+                "actor_email": "alice@example.test",
+                "request_url": "https://github.example.test/org/repo?token=secret",
+                "attempts": 3,
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["repository"] == "corp/infra-secrets"
+    assert payload["action"] == "clone"
+    assert payload["risk_rule"] == "Sensitive repository clone"
+    assert payload["severity"] == "critical"
+    assert payload["status"] == "open"
+    assert payload["github_username"] is None
+    assert payload["details_json"]["source"] == "github_audit"
+    assert payload["details_json"]["attempts"] == 3
+    assert payload["details_json"]["token"] == "[redacted]"
+    assert payload["details_json"]["actor_email"] == "[redacted]"
+    assert payload["details_json"]["request_url"] == "[redacted]"
+
+    list_response = client.get("/api/github-risks", headers=headers)
+    assert list_response.status_code == 200
+    list_payload = list_response.json()
+    assert list_payload["total"] == 1
+    assert list_payload["items"][0]["id"] == payload["id"]
+
+    with Session(client.app.state.engine) as session:
+        audit = session.exec(select(AuditLog).where(AuditLog.action == "github_risk.created")).first()
+        assert audit is not None
+        assert audit.target_id == UUID(payload["id"])
+
+
+def test_github_risk_create_requires_manage_permission(
+    client: TestClient,
+    seeded_device: dict[str, str],
+    auth_headers,
+) -> None:
+    headers = auth_headers(role_name="Manager")
+
+    response = client.post(
+        "/api/github-risks",
+        headers=headers,
+        json={
+            "employee_id": seeded_device["employee_id"],
+            "device_id": seeded_device["device_id"],
+            "repository": "corp/core-platform",
+            "action": "fetch",
+            "risk_rule": "Short-window frequent fetch",
+            "severity": "high",
+            "occurred_at": "2026-05-11T10:15:00Z",
+        },
+    )
+
+    assert response.status_code == 403
+
+
+def test_github_risk_create_rejects_unsupported_action_and_sensitive_correlation(
+    client: TestClient,
+    seeded_device: dict[str, str],
+    auth_headers,
+) -> None:
+    headers = auth_headers(bootstrap=True)
+    base_payload = {
+        "employee_id": seeded_device["employee_id"],
+        "device_id": seeded_device["device_id"],
+        "repository": "corp/core-platform",
+        "risk_rule": "Unexpected GitHub action",
+        "severity": "medium",
+        "occurred_at": "2026-05-11T10:15:00Z",
+    }
+
+    unsupported_response = client.post(
+        "/api/github-risks",
+        headers=headers,
+        json={**base_payload, "action": "admin_override"},
+    )
+    sensitive_correlation_response = client.post(
+        "/api/github-risks",
+        headers=headers,
+        json={**base_payload, "action": "fetch", "correlation": "https://example.test/?token=secret"},
+    )
+
+    assert unsupported_response.status_code == 422
+    assert sensitive_correlation_response.status_code == 422
+
+
+def test_github_risk_create_requires_authentication(
+    client: TestClient,
+    seeded_device: dict[str, str],
+) -> None:
+    response = client.post(
+        "/api/github-risks",
+        json={
+            "employee_id": seeded_device["employee_id"],
+            "device_id": seeded_device["device_id"],
+            "repository": "corp/core-platform",
+            "action": "fetch",
+            "risk_rule": "Short-window frequent fetch",
+            "severity": "high",
+            "occurred_at": "2026-05-11T10:15:00Z",
+        },
+    )
+
+    assert response.status_code == 401
+
+
 def test_access_matrix_endpoint_returns_roles_users_and_recommended_planning_matrix(
     client: TestClient,
     auth_headers,

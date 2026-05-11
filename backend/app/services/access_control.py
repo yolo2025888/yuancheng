@@ -21,6 +21,11 @@ ACCESS_CAPABILITY_DEFINITIONS = (
         "description": "View repository activity risk signals linked to employees.",
     },
     {
+        "key": "github_risks.manage",
+        "label": "GitHub risk ingestion",
+        "description": "Create normalized GitHub repository risk events from approved integrations.",
+    },
+    {
         "key": "events.review",
         "label": "Event review",
         "description": "Review behavior events and update their workflow status.",
@@ -85,6 +90,7 @@ ACCESS_ROLE_TEMPLATES = (
             "dashboard.view",
             "risk_scores.view",
             "github_risks.view",
+            "github_risks.manage",
             "events.review",
             "screenshots.view",
             "directory.view",
@@ -130,6 +136,7 @@ ACCESS_ROLE_TEMPLATES = (
             "attendance.view",
             "attendance.manage",
             "device_tokens.manage",
+            "github_risks.manage",
         ],
     },
 )

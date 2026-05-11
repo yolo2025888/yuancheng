@@ -24,6 +24,7 @@ from app.schemas.admin import (
     EmployeeRiskScoreListResponse,
     EmployeeItem,
     EmployeeListResponse,
+    GitHubRiskEventCreateRequest,
     GitHubRiskEventItem,
     GitHubRiskEventListResponse,
     GitHubRiskTrendPoint,
@@ -73,11 +74,7 @@ STATUS_MULTIPLIERS = {
     "dismissed": 0.15,
 }
 
-GITHUB_EVENT_TYPES = {
-    "github_sensitive_repo_clone",
-    "github_offhours_review",
-    "github_frequent_fetch",
-}
+SENSITIVE_DETAIL_KEY_MARKERS = ("token", "secret", "password", "passwd", "key", "email", "url")
 
 STALE_DEVICE_AFTER_SECONDS = 10 * 60
 AGED_DEVICE_AFTER_SECONDS = 30 * 60
@@ -976,7 +973,7 @@ class QueryService:
     def list_github_risks(self, limit: int = 200) -> GitHubRiskEventListResponse:
         events = self.session.exec(
             select(BehaviorEvent)
-            .where(BehaviorEvent.event_type.in_(GITHUB_EVENT_TYPES))
+            .where(BehaviorEvent.event_type.like("github_%"))
             .order_by(BehaviorEvent.start_at.desc())
             .limit(limit)
         ).all()
@@ -1008,6 +1005,58 @@ class QueryService:
             generated_at=datetime.now(timezone.utc),
             trend=trend,
         )
+
+    def create_github_risk(
+        self,
+        payload: GitHubRiskEventCreateRequest,
+        *,
+        audit_context: AuditContext | None = None,
+    ) -> GitHubRiskEventItem:
+        employee = self.session.get(Employee, payload.employee_id)
+        if employee is None:
+            raise ValueError("Employee not found")
+        device = self.session.get(Device, payload.device_id) if payload.device_id is not None else None
+        if payload.device_id is not None and device is None:
+            raise ValueError("Device not found")
+        if device is None:
+            device = self.session.exec(select(Device).where(Device.employee_id == employee.id)).first()
+            if device is None:
+                raise ValueError("Employee has no bound device")
+        if device is not None and device.employee_id != employee.id:
+            raise ValueError("Device is not bound to the employee")
+
+        details = _safe_github_details(payload.details_json)
+        details.update(
+            {
+                "repository": payload.repository,
+                "action": payload.action,
+                "risk_rule": payload.risk_rule,
+            }
+        )
+        if payload.correlation:
+            details["correlation"] = payload.correlation
+
+        event = BehaviorEvent(
+            employee_id=employee.id,
+            device_id=device.id,
+            event_type=_github_event_type_for_action(payload.action),
+            severity=payload.severity,
+            start_at=payload.occurred_at,
+            status="open",
+            reason=payload.risk_rule,
+            details_json=details,
+        )
+        self.session.add(event)
+        self.audit.log(
+            action="github_risk.created",
+            target_type="behavior_event",
+            target_id=event.id,
+            reason=f"{payload.risk_rule}: {payload.repository}",
+            context=audit_context,
+        )
+        self.session.commit()
+        self.session.refresh(event)
+        return self._build_github_risk_item(event=event, employee=employee)
 
     def _build_github_risk_item(
         self,
@@ -1125,3 +1174,32 @@ def _safe_detail_string(details: dict[str, object], key: str) -> str | None:
         return None
     stripped = value.strip()
     return stripped or None
+
+
+def _safe_github_details(details: dict[str, object]) -> dict[str, object]:
+    safe: dict[str, object] = {}
+    for key, value in details.items():
+        normalized_key = str(key).strip()
+        if not normalized_key:
+            continue
+        if any(marker in normalized_key.casefold() for marker in SENSITIVE_DETAIL_KEY_MARKERS):
+            safe[normalized_key] = "[redacted]"
+            continue
+        if isinstance(value, str):
+            stripped = value.strip()
+            if stripped:
+                safe[normalized_key] = stripped[:500]
+        elif isinstance(value, bool | int | float) or value is None:
+            safe[normalized_key] = value
+    return safe
+
+
+def _github_event_type_for_action(action: str) -> str:
+    normalized = action.strip().casefold()
+    if normalized == "clone":
+        return "github_sensitive_repo_clone"
+    if normalized in {"fetch", "pull"}:
+        return "github_frequent_fetch"
+    if normalized in {"review", "comment"}:
+        return "github_offhours_review"
+    raise ValueError("Unsupported GitHub action")
