@@ -486,6 +486,8 @@ def test_event_review_updates_status_and_note(client: TestClient, seeded_device:
     event_id = uuid4()
 
     with Session(app.state.engine) as session:
+        reviewer = session.exec(select(User).where(User.username == app.state.settings.bootstrap_admin_username)).one()
+        reviewer_id = reviewer.id
         event = BehaviorEvent(
             id=event_id,
             employee_id=UUID(seeded_device["employee_id"]),
@@ -511,6 +513,9 @@ def test_event_review_updates_status_and_note(client: TestClient, seeded_device:
     assert payload["status"] == "reviewed"
     assert payload["review_note"] == "Confirmed benign activity."
     assert payload["reviewed_at"] is not None
+    assert payload["reviewed_by"] == str(reviewer_id)
+    assert payload["reviewer_name"] == "Dev Admin"
+    assert payload["reviewer_username"] == app.state.settings.bootstrap_admin_username
 
     with Session(app.state.engine) as session:
         event = session.get(BehaviorEvent, event_id)
@@ -518,6 +523,7 @@ def test_event_review_updates_status_and_note(client: TestClient, seeded_device:
         assert event.status == "reviewed"
         assert event.review_note == "Confirmed benign activity."
         assert event.reviewed_at is not None
+        assert event.reviewed_by == reviewer_id
 
         audit_logs = session.exec(
             select(AuditLog).where(AuditLog.target_id == event_id).order_by(AuditLog.created_at.asc())
@@ -526,6 +532,13 @@ def test_event_review_updates_status_and_note(client: TestClient, seeded_device:
         assert audit_logs[0].action == "event.reviewed"
         assert audit_logs[0].target_type == "behavior_event"
         assert audit_logs[0].reason == "Confirmed benign activity."
+
+    list_response = client.get("/api/events", headers=headers)
+    assert list_response.status_code == 200
+    listed_event = next(item for item in list_response.json()["items"] if item["id"] == str(event_id))
+    assert listed_event["reviewed_by"] == str(reviewer_id)
+    assert listed_event["reviewer_name"] == "Dev Admin"
+    assert listed_event["reviewer_username"] == app.state.settings.bootstrap_admin_username
 
 
 def test_sqlite_schema_ensure_adds_new_columns_to_existing_db(tmp_path: Path) -> None:

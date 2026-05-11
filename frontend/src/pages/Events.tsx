@@ -153,7 +153,10 @@ export function EventsPage() {
                     <StatusTag value={record.status} />
                   </Space>
                   {record.reviewedAt ? (
-                    <Typography.Text type="secondary">Reviewed {record.reviewedAt}</Typography.Text>
+                    <Typography.Text type="secondary">
+                      Reviewed {record.reviewedAt}
+                      {record.reviewerName ? ` by ${record.reviewerName}` : ''}
+                    </Typography.Text>
                   ) : null}
                   {record.reviewNote ? (
                     <Typography.Text type="secondary">Review note: {record.reviewNote}</Typography.Text>

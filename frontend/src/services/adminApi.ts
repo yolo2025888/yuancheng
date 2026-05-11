@@ -153,6 +153,9 @@ type EventApiItem = {
   status: string;
   reason?: string | null;
   details_json?: Record<string, unknown> | null;
+  reviewed_by?: string | null;
+  reviewer_name?: string | null;
+  reviewer_username?: string | null;
   reviewed_at?: string | null;
   review_note?: string | null;
   created_at: string;
@@ -1904,6 +1907,10 @@ function mapEventRecord(item: EventApiItem): EventRecord {
       item.streak_count ?? readNumber(details, ['streak_count', 'no_change_streak_count']) ?? null,
     noChangeStreakTriggered,
     changeMetrics,
+    reviewedBy: item.reviewed_by ?? null,
+    reviewerName:
+      firstString(item.reviewer_name, item.reviewer_username, shortenOptionalId(item.reviewed_by ?? undefined)) ?? null,
+    reviewerUsername: item.reviewer_username ?? null,
     reviewedAt: item.reviewed_at ? formatDateTime(item.reviewed_at) : null,
     reviewNote: item.review_note ?? null
   };

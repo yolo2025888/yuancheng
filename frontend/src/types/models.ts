@@ -150,6 +150,9 @@ export type EventRecord = {
   changeMetrics?: ChangeMetrics | null;
   reviewedAt?: string | null;
   reviewNote?: string | null;
+  reviewedBy?: string | null;
+  reviewerName?: string | null;
+  reviewerUsername?: string | null;
 };
 
 export type ReviewQueueRecord = {

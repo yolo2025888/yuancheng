@@ -139,6 +139,8 @@ class BehaviorEventDetail(BaseModel):
     details_json: dict[str, object]
     related_diff: ScreenDiffSummary | None = None
     reviewed_by: UUID | None = None
+    reviewer_name: str | None = None
+    reviewer_username: str | None = None
     reviewed_at: datetime | None = None
     review_note: str | None = None
     created_at: datetime

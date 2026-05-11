@@ -257,6 +257,7 @@ class QueryService:
         *,
         event: BehaviorEvent,
         diff_map: dict[UUID, ScreenDiff] | None = None,
+        reviewer_map: dict[UUID, User] | None = None,
     ) -> BehaviorEventDetail:
         related_diff = None
         if event.related_diff_id is not None and diff_map is not None:
@@ -267,6 +268,10 @@ class QueryService:
             related_diff = self.session.exec(
                 select(ScreenDiff).where(ScreenDiff.current_screenshot_id == event.related_screenshot_id)
             ).first()
+
+        reviewer = None
+        if event.reviewed_by is not None:
+            reviewer = reviewer_map.get(event.reviewed_by) if reviewer_map is not None else self.session.get(User, event.reviewed_by)
 
         return BehaviorEventDetail(
             id=event.id,
@@ -286,6 +291,8 @@ class QueryService:
             details_json=event.details_json,
             related_diff=self._build_diff_summary(related_diff),
             reviewed_by=event.reviewed_by,
+            reviewer_name=reviewer.display_name if reviewer is not None else None,
+            reviewer_username=reviewer.username if reviewer is not None else None,
             reviewed_at=event.reviewed_at,
             review_note=event.review_note,
             created_at=event.created_at,
@@ -397,8 +404,20 @@ class QueryService:
                 diff.id: diff
                 for diff in self.session.exec(select(ScreenDiff).where(ScreenDiff.id.in_(diff_ids))).all()
             }
+        reviewer_ids = {event.reviewed_by for event in events if event.reviewed_by is not None}
+        reviewer_map = (
+            {
+                user.id: user
+                for user in self.session.exec(select(User).where(User.id.in_(reviewer_ids))).all()
+            }
+            if reviewer_ids
+            else {}
+        )
         return BehaviorEventListResponse(
-            items=[self._build_event_detail(event=event, diff_map=diff_map) for event in events],
+            items=[
+                self._build_event_detail(event=event, diff_map=diff_map, reviewer_map=reviewer_map)
+                for event in events
+            ],
             total=len(events),
         )
 
@@ -423,6 +442,8 @@ class QueryService:
             event.status = payload.status
         event.review_note = payload.review_note
         event.reviewed_at = datetime.now(timezone.utc)
+        if audit_context is not None and audit_context.actor_id is not None:
+            event.reviewed_by = audit_context.actor_id
         event.updated_at = event.reviewed_at
         self.session.add(event)
         self.audit.log(
