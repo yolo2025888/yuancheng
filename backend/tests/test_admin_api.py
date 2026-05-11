@@ -1267,10 +1267,14 @@ def test_access_matrix_endpoint_returns_roles_users_and_recommended_planning_mat
     assert admin_role["users"][0]["username"] == "alice.admin"
     assert "password_hash" not in admin_role["users"][0]
     assert "dashboard.view" in admin_role["permission_keys"]
+    assert "screenshots.metadata.view" in admin_role["permission_keys"]
+    assert "screenshots.image.view" in admin_role["permission_keys"]
 
     reviewer_role = next(role for role in payload["roles"] if role["name"] == "Reviewer")
     assert reviewer_role["source"] == "existing"
     assert "events.review" in reviewer_role["permission_keys"]
+    assert "screenshots.metadata.view" in reviewer_role["permission_keys"]
+    assert "screenshots.image.view" not in reviewer_role["permission_keys"]
 
     recommended_roles = {role["name"] for role in payload["roles"] if role["source"] == "recommended"}
     assert {"Compliance", "Manager", "Risk Analyst"} <= recommended_roles

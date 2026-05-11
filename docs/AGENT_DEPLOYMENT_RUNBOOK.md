@@ -283,7 +283,7 @@ For an already installed pilot or production endpoint, add `-RequireInstalledHel
 2. Backend secret and storage posture:
    - Production sets `EBM_ENVIRONMENT=production`.
    - Production sets non-default `EBM_AUTH_SECRET` and `EBM_AGENT_API_TOKEN`.
-   - Screenshot files are not exposed through a public `/storage` mount; admin UI reads them through `/api/screenshots/{id}/image` or `/thumbnail` with `screenshots.view`.
+   - Screenshot files are not exposed through a public `/storage` mount; admin UI reads metadata with `screenshots.metadata.view`, while `/api/screenshots/{id}/image` and `/thumbnail` require `screenshots.image.view` plus an audited access reason.
 
 3. Device identity:
    - `DeviceIdPath` parent directory exists and is writable by the service account.

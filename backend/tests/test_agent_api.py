@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
 from app.core.config import Settings
-from app.models import BehaviorEvent, Device, Employee, Policy, Screenshot
+from app.models import AuditLog, BehaviorEvent, Device, Employee, Policy, Screenshot
 from app.services.agent_auth import (
     authenticate_agent_token,
     create_device_agent_token,
@@ -840,17 +840,54 @@ def test_screenshot_direct_upload_persists_image_and_thumb(
     assert protected_image_response.status_code == 401
 
     admin_headers = auth_headers(bootstrap=True)
+    missing_reason_response = client.get(
+        f"/api/screenshots/{payload['screenshot_id']}/image",
+        headers=admin_headers,
+    )
+    assert missing_reason_response.status_code == 400
+    assert missing_reason_response.json()["detail"] == "Screenshot image access requires a non-empty reason"
+
+    reviewer_headers = auth_headers(
+        username="reviewer.screenshots",
+        password="reviewer-password",
+        role_name="Reviewer",
+    )
+    metadata_response = client.get(f"/api/screenshots/{payload['screenshot_id']}", headers=reviewer_headers)
+    assert metadata_response.status_code == 200
+    reviewer_image_response = client.get(
+        f"/api/screenshots/{payload['screenshot_id']}/image",
+        params={"reason": "Reviewer should not access images"},
+        headers=reviewer_headers,
+    )
+    assert reviewer_image_response.status_code == 403
+    assert reviewer_image_response.json()["detail"] == "Missing permissions: screenshots.image.view"
+
     protected_image_response = client.get(
         f"/api/screenshots/{payload['screenshot_id']}/image",
+        params={"reason": "Investigate screenshot risk event"},
         headers=admin_headers,
     )
     protected_thumb_response = client.get(
         f"/api/screenshots/{payload['screenshot_id']}/thumbnail",
+        params={"reason": "Investigate screenshot risk event"},
         headers=admin_headers,
     )
     assert protected_image_response.status_code == 200
     assert protected_image_response.content == ONE_PIXEL_PNG
     assert protected_thumb_response.status_code == 200
+
+    with Session(client.app.state.engine) as session:
+        audit_logs = session.exec(select(AuditLog).order_by(AuditLog.created_at.asc())).all()
+        assert [audit.action for audit in audit_logs] == [
+            "screenshot.image.viewed",
+            "screenshot.thumbnail.viewed",
+        ]
+        assert all(audit.target_type == "screenshot" for audit in audit_logs)
+        assert all(audit.target_id == UUID(payload["screenshot_id"]) for audit in audit_logs)
+        assert all(audit.reason == "Investigate screenshot risk event" for audit in audit_logs)
+        assert all(audit.actor_id is not None for audit in audit_logs)
+        assert all(audit.ip_address == "testclient" for audit in audit_logs)
+        assert all(audit.user_agent is not None for audit in audit_logs)
 
 
 def test_protected_screenshot_files_return_404_when_missing_or_outside_storage(
@@ -877,8 +914,16 @@ def test_protected_screenshot_files_return_404_when_missing_or_outside_storage(
         )
         session.commit()
 
-    image_response = client.get(f"/api/screenshots/{screenshot_id}/image", headers=admin_headers)
-    thumbnail_response = client.get(f"/api/screenshots/{screenshot_id}/thumbnail", headers=admin_headers)
+    image_response = client.get(
+        f"/api/screenshots/{screenshot_id}/image",
+        params={"reason": "Investigate missing screenshot image"},
+        headers=admin_headers,
+    )
+    thumbnail_response = client.get(
+        f"/api/screenshots/{screenshot_id}/thumbnail",
+        params={"reason": "Investigate missing screenshot thumbnail"},
+        headers=admin_headers,
+    )
 
     assert image_response.status_code == 404
     assert image_response.json()["detail"] == "Screenshot image not found"

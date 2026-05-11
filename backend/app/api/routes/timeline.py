@@ -18,6 +18,6 @@ def get_employee_timeline(
     employee_id: UUID,
     date_value: date = Query(alias="date"),
     session: Session = Depends(get_session),
-    _: object = Depends(require_permissions("screenshots.view")),
+    _: object = Depends(require_permissions("screenshots.metadata.view")),
 ) -> TimelineResponse:
     return QueryService(session).get_employee_timeline(employee_id=employee_id, date_value=date_value)

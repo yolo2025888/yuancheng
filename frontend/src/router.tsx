@@ -63,7 +63,7 @@ export const navRoutes: NavRoute[] = [
     label: 'Realtime Status',
     path: '/realtime-status',
     icon: <LaptopOutlined />,
-    permissionKeys: ['screenshots.view', 'dashboard.view']
+    permissionKeys: ['screenshots.metadata.view', 'dashboard.view']
   },
   {
     key: 'employees',
@@ -84,7 +84,7 @@ export const navRoutes: NavRoute[] = [
     label: 'Timeline',
     path: '/timeline',
     icon: <ClockCircleOutlined />,
-    permissionKeys: ['screenshots.view']
+    permissionKeys: ['screenshots.metadata.view']
   },
   {
     key: 'events',
@@ -105,7 +105,7 @@ export const navRoutes: NavRoute[] = [
     label: 'Screenshot Detail',
     path: '/screenshot-detail',
     icon: <UnorderedListOutlined />,
-    permissionKeys: ['screenshots.view']
+    permissionKeys: ['screenshots.metadata.view']
   },
   {
     key: 'access-roles',
