@@ -921,6 +921,19 @@ export const adminApi = {
         events: refreshed.data
       };
     } catch (error) {
+      const statusCode = readErrorStatus(error);
+      if (statusCode === 401 || statusCode === 403) {
+        return {
+          apiStatus: {
+            source: 'mock',
+            state: 'unavailable',
+            label: 'Access denied',
+            detail: `Event review access denied: ${getErrorMessage(error)}`,
+            endpoint
+          }
+        };
+      }
+
       return {
         apiStatus: fallbackStatus(endpoint, `Review kept locally only: ${getErrorMessage(error)}`)
       };

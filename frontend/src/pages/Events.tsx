@@ -44,6 +44,7 @@ export function EventsPage() {
 
   const handleReviewAction = useCallback(
     async (record: EventRecord, nextStatus: EventStatus) => {
+      const previousRows = rows;
       setPendingIds((current) => ({ ...current, [record.id]: true }));
       setRows((current) =>
         current.map((item) =>
@@ -67,6 +68,9 @@ export function EventsPage() {
       if (result.events) {
         setRows(result.events);
         messageApi.success(`Event ${record.id} updated to ${nextStatus}.`);
+      } else if (result.apiStatus.label === 'Access denied') {
+        setRows(previousRows);
+        messageApi.error(`Review access denied. Event ${record.id} was not changed.`);
       } else {
         messageApi.warning(`Backend review API unavailable. Event ${record.id} is updated locally only.`);
       }
@@ -77,7 +81,7 @@ export function EventsPage() {
         return next;
       });
     },
-    [messageApi, severityFilter, statusFilter]
+    [messageApi, rows, severityFilter, statusFilter]
   );
 
   const updateFilter = useCallback(
