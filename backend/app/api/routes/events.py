@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlmodel import Session
 
 from app.api.deps import get_session
-from app.schemas.query import BehaviorEventDetail, BehaviorEventListResponse
+from app.schemas.query import BehaviorEventDetail, BehaviorEventListResponse, BehaviorEventReviewRequest
 from app.services.queries import QueryService
 
 router = APIRouter(prefix="/api/events", tags=["events"])
@@ -37,6 +37,18 @@ def get_event(
     session: Session = Depends(get_session),
 ) -> BehaviorEventDetail:
     event = QueryService(session).get_event(event_id)
+    if event is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
+    return event
+
+
+@router.post("/{event_id}/review", response_model=BehaviorEventDetail)
+def review_event(
+    event_id: UUID,
+    payload: BehaviorEventReviewRequest,
+    session: Session = Depends(get_session),
+) -> BehaviorEventDetail:
+    event = QueryService(session).review_event(event_id, payload)
     if event is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
     return event

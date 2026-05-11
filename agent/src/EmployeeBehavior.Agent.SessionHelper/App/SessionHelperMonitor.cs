@@ -29,6 +29,9 @@ public sealed class SessionHelperMonitor : BackgroundService
 
         do
         {
+            // Keep monitor logging side-effect free. Input aggregates are reset by
+            // IInputActivityCounter.GetSnapshotAsync and must only be consumed by
+            // capture/heartbeat sampling paths, not by this liveness probe.
             var foregroundWindowTask = _foregroundWindowProvider.GetCurrentAsync(stoppingToken);
             var sessionStateTask = _sessionStateProvider.GetCurrentAsync(stoppingToken);
             await Task.WhenAll(foregroundWindowTask, sessionStateTask);

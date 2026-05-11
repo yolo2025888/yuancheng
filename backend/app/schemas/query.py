@@ -83,8 +83,14 @@ class ScreenshotItem(BaseModel):
     keyboard_count: int
     mouse_click_count: int
     mouse_move_count: int
+    mouse_wheel_count: int
+    window_switch_count: int
     is_locked: bool
     is_remote_session: bool
+    is_rdp_session: bool
+    idle_seconds: int | None = None
+    input_desktop_name: str | None = None
+    session_connect_state: str | None = None
     phash: str | None = None
     upload_status: str
     ocr_status: str
@@ -129,3 +135,8 @@ class BehaviorEventDetail(BaseModel):
 class BehaviorEventListResponse(BaseModel):
     items: list[BehaviorEventDetail]
     total: int
+
+
+class BehaviorEventReviewRequest(BaseModel):
+    status: str | None = None
+    review_note: str | None = None

@@ -29,6 +29,8 @@ public sealed class SessionSnapshotCollector : ISessionSnapshotCollector
 
         var screensTask = _screenshotCapture.CaptureAsync(cancellationToken);
         var foregroundWindowTask = _foregroundWindowProvider.GetCurrentAsync(cancellationToken);
+        // This is the only input counter sampling site in the helper because the
+        // counter snapshot resets the aggregate window after each read.
         var inputActivityTask = _inputActivityCounter.GetSnapshotAsync(cancellationToken);
         var sessionStateTask = _sessionStateProvider.GetCurrentAsync(cancellationToken);
 

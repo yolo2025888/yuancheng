@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlmodel import Session
 
-from app.api.routes import agent_router, events_router, health_router, screenshots_router, timeline_router
+from app.api.routes import admin_router, agent_router, events_router, health_router, screenshots_router, timeline_router
 from app.core.config import Settings, get_settings
 from app.core.db import build_engine, create_database_and_tables
 from app.services.agent import AgentService
@@ -45,6 +45,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.mount("/storage", StaticFiles(directory=storage_root), name="storage")
 
     app.include_router(health_router)
+    app.include_router(admin_router)
     app.include_router(agent_router)
     app.include_router(screenshots_router)
     app.include_router(timeline_router)

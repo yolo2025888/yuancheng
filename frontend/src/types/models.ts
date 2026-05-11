@@ -82,6 +82,8 @@ export type EventRecord = {
   streakCount?: number | null;
   noChangeStreakTriggered?: boolean;
   changeMetrics?: ChangeMetrics | null;
+  reviewedAt?: string | null;
+  reviewNote?: string | null;
 };
 
 export type RealtimeStatusRecord = {
@@ -101,22 +103,31 @@ export type RealtimeStatusRecord = {
 export type EmployeeRecord = {
   key: string;
   name: string;
+  employeeNo?: string;
   department: string;
   role: string;
+  position?: string;
   manager: string;
+  status?: string;
   devices: number;
   todayRisk: number;
   githubAccount: string;
+  policyName?: string;
 };
 
 export type DeviceRecord = {
   key: string;
   deviceName: string;
   employee: string;
+  employeeNo?: string;
+  department?: string;
+  role?: string;
+  position?: string;
   os: string;
   agentVersion: string;
   lastHeartbeat: string;
   status: 'online' | 'offline' | 'warning';
+  metadataLabels?: string[];
 };
 
 export type TimelineSegment = {
@@ -147,7 +158,13 @@ export type ScreenshotListItem = {
 
 export type PolicyRecord = {
   key: string;
+  name?: string;
+  version?: string;
   role: string;
+  positions?: string[];
+  departments?: string[];
+  status?: string;
+  assignedEmployees?: number;
   screenshotInterval: string;
   noChangeThreshold: string;
   highRiskDuration: string;

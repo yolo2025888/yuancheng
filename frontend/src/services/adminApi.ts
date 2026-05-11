@@ -19,11 +19,13 @@ import type {
   BackendHealth,
   ChangeMetrics,
   DeviceRecord,
+  EmployeeRecord,
   EventRecord,
   EventSeverity,
   EventStatus,
   KpiMetric,
   LinkedRiskRecord,
+  PolicyRecord,
   RealtimeStatusRecord,
   ScreenshotComparison,
   ScreenshotListItem,
@@ -54,7 +56,9 @@ type RealtimeStatusData = {
   backendHealth: BackendHealth;
 };
 
+type EmployeeListData = ApiResult<EmployeeRecord[]>;
 type DeviceListData = ApiResult<DeviceRecord[]>;
+type PolicyListData = ApiResult<PolicyRecord[]>;
 
 type EventApiItem = {
   id: string;
@@ -71,6 +75,8 @@ type EventApiItem = {
   status: string;
   reason?: string | null;
   details_json?: Record<string, unknown> | null;
+  reviewed_at?: string | null;
+  review_note?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -108,7 +114,22 @@ type TimelineApiResponse = {
   items: TimelineApiItem[];
 };
 
-type DeviceApiItem = {
+type EmployeeApiItem = Record<string, unknown> & {
+  id?: string;
+  name?: string;
+  employee_no?: string;
+  department?: string;
+  manager_name?: string;
+  github_username?: string;
+  status?: string;
+  role?: string;
+  position?: string;
+  title?: string;
+  job_title?: string;
+  post?: string;
+};
+
+type DeviceApiItem = Record<string, unknown> & {
   id?: string;
   hostname?: string;
   employee_name?: string;
@@ -116,6 +137,17 @@ type DeviceApiItem = {
   agent_version?: string;
   last_heartbeat_at?: string | null;
   status?: string;
+};
+
+type PolicyApiItem = Record<string, unknown> & {
+  id?: string;
+  name?: string;
+  version?: string;
+  screenshot_interval_seconds?: number;
+  no_change_threshold?: number;
+  retention_days?: number;
+  is_active?: boolean;
+  rules_json?: Record<string, unknown>;
 };
 
 type HealthPayload = {
@@ -199,29 +231,38 @@ export const adminApi = {
     };
   },
 
-  async getEmployees() {
-    return Promise.resolve(employees);
+  async getEmployees(): Promise<EmployeeListData> {
+    try {
+      const payload = await apiClient<EmployeeApiItem[] | { items: EmployeeApiItem[] }>('/api/employees');
+      const items = extractItems(payload);
+
+      if (!items) {
+        throw new Error('Employees payload is not an array');
+      }
+
+      return {
+        data: items.map(mapEmployeeRecord),
+        apiStatus: liveStatus('/api/employees', `Loaded ${items.length} employee records`)
+      };
+    } catch (error) {
+      return {
+        data: employees,
+        apiStatus: fallbackStatus('/api/employees', getErrorMessage(error))
+      };
+    }
   },
 
   async getDevices(): Promise<DeviceListData> {
     try {
       const payload = await apiClient<DeviceApiItem[] | { items: DeviceApiItem[] }>('/api/devices');
-      const items = Array.isArray(payload) ? payload : payload.items;
+      const items = extractItems(payload);
 
-      if (!Array.isArray(items) || items.length === 0) {
-        throw new Error('Devices payload is empty');
+      if (!items) {
+        throw new Error('Devices payload is not an array');
       }
 
       return {
-        data: items.map((item, index) => ({
-          key: item.id ?? String(index),
-          deviceName: item.hostname ?? `device-${index + 1}`,
-          employee: item.employee_name ?? 'Unknown',
-          os: item.os_type ?? 'Unknown',
-          agentVersion: item.agent_version ?? '--',
-          lastHeartbeat: formatDateTime(item.last_heartbeat_at),
-          status: normalizeDeviceStatus(item.status)
-        })),
+        data: items.map(mapDeviceRecord),
         apiStatus: liveStatus('/api/devices', `Loaded ${items.length} device records`)
       };
     } catch (error) {
@@ -309,6 +350,36 @@ export const adminApi = {
     }
   },
 
+  async reviewEvent(
+    eventId: string,
+    status: EventStatus,
+    reviewNote?: string
+  ): Promise<{ apiStatus: ApiStatus; events?: EventRecord[] }> {
+    const endpoint = `/api/events/${eventId}/review`;
+
+    try {
+      await apiClient(endpoint, {
+        method: 'POST',
+        body: {
+          status,
+          action: status,
+          review_status: status,
+          review_note: reviewNote ?? null
+        }
+      });
+
+      const refreshed = await this.getEvents();
+      return {
+        apiStatus: liveStatus(endpoint, `Review updated to ${status}`),
+        events: refreshed.data
+      };
+    } catch (error) {
+      return {
+        apiStatus: fallbackStatus(endpoint, `Review kept locally only: ${getErrorMessage(error)}`)
+      };
+    }
+  },
+
   async getScreenshotDetail(query: ScreenshotDetailQuery = {}): Promise<ScreenshotComparison> {
     const timeline = await this.getTimeline(query);
     const screenshots = timeline.screenshots;
@@ -341,8 +412,25 @@ export const adminApi = {
     };
   },
 
-  async getPolicies() {
-    return Promise.resolve(policies);
+  async getPolicies(): Promise<PolicyListData> {
+    try {
+      const payload = await apiClient<PolicyApiItem[] | { items: PolicyApiItem[] }>('/api/policies');
+      const items = extractItems(payload);
+
+      if (!items) {
+        throw new Error('Policies payload is not an array');
+      }
+
+      return {
+        data: items.map(mapPolicyRecord),
+        apiStatus: liveStatus('/api/policies', `Loaded ${items.length} policy records`)
+      };
+    } catch (error) {
+      return {
+        data: policies,
+        apiStatus: fallbackStatus('/api/policies', getErrorMessage(error))
+      };
+    }
   },
 
   async getAuditLogs() {
@@ -370,6 +458,163 @@ async function discoverEmployeeId() {
   } catch {
     return undefined;
   }
+}
+
+function extractItems<T>(payload: T[] | { items: T[] }) {
+  if (Array.isArray(payload)) {
+    return payload;
+  }
+
+  return Array.isArray(payload.items) ? payload.items : undefined;
+}
+
+function mapEmployeeRecord(item: EmployeeApiItem, index: number): EmployeeRecord {
+  const manager = asRecord(item.manager);
+  const deviceList = readArray(item, ['devices', 'device_ids', 'bound_devices']);
+
+  return {
+    key: readString(item, ['id']) ?? String(index),
+    employeeNo: readString(item, ['employee_no', 'employeeNo', 'code']) ?? undefined,
+    name: readString(item, ['name', 'display_name', 'full_name']) ?? `Employee ${index + 1}`,
+    department: readString(item, ['department', 'department_name', 'team']) ?? 'Unassigned',
+    role: readString(item, ['role', 'job_role', 'primary_role', 'job_family']) ?? 'General',
+    position:
+      firstString(
+        readString(item, ['position', 'job_title', 'title', 'post']),
+        readString(manager, ['position'])
+      ) ?? undefined,
+    manager:
+      firstString(
+        readString(item, ['manager_name']),
+        readString(manager, ['name', 'display_name']),
+        readString(item, ['manager'])
+      ) ?? 'Unassigned',
+    status: normalizeListStatus(readString(item, ['status'])),
+    devices:
+      readNumber(item, ['active_device_count', 'devices', 'device_count', 'bound_device_count']) ??
+      (Array.isArray(deviceList) ? deviceList.length : 0),
+    todayRisk:
+      readNumber(item, ['today_risk', 'risk_count', 'open_risk_count', 'todayRisk']) ?? 0,
+    githubAccount:
+      readString(item, ['github_username', 'github_account', 'github_login']) ?? '--',
+    policyName:
+      firstString(
+        readString(item, ['policy_name', 'policy_template']),
+        readString(asRecord(item.policy), ['name', 'policy_name']),
+        readString(asRecord(item.policy_summary), ['name', 'policy_name'])
+      ) ?? undefined
+  };
+}
+
+function mapDeviceRecord(item: DeviceApiItem, index: number): DeviceRecord {
+  const employee = asRecord(item.employee);
+  const metadata = pickRecords(item, ['metadata', 'agent_metadata', 'activity', 'state']);
+  const screenshot = pickRecords(item, ['last_screenshot', 'screenshot', 'latest_screenshot']);
+  const lastSessionState = asRecord(item.last_session_state);
+  const lastInputActivity = asRecord(item.last_input_activity);
+  const lastForegroundWindow = asRecord(item.last_foreground_window);
+
+  return {
+    key: readString(item, ['id']) ?? String(index),
+    deviceName: readString(item, ['hostname', 'device_name']) ?? `device-${index + 1}`,
+    employee:
+      firstString(
+        readString(item, ['employee_name']),
+        readString(employee, ['name', 'display_name']),
+        readString(item, ['employee_id'])
+      ) ?? 'Unknown',
+    employeeNo:
+      firstString(
+        readString(item, ['employee_no']),
+        readString(employee, ['employee_no', 'employeeNo', 'code'])
+      ) ?? undefined,
+    department:
+      firstString(
+        readString(item, ['department', 'employee_department']),
+        readString(employee, ['department', 'department_name'])
+      ) ?? undefined,
+    role:
+      firstString(
+        readString(item, ['role', 'employee_role', 'job_role']),
+        readString(employee, ['role', 'job_role', 'job_family'])
+      ) ?? undefined,
+    position:
+      firstString(
+        readString(item, ['position', 'employee_position', 'job_title', 'title']),
+        readString(employee, ['position', 'job_title', 'title'])
+      ) ?? undefined,
+    os: readString(item, ['os_type', 'os', 'platform']) ?? 'Unknown',
+    agentVersion: readString(item, ['agent_version', 'version']) ?? '--',
+    lastHeartbeat: formatDateTime(readString(item, ['last_heartbeat_at', 'last_seen_at'])),
+    status: normalizeDeviceStatus(readString(item, ['status'])),
+    metadataLabels: buildDeviceMetadataLabels(
+      item,
+      metadata,
+      screenshot,
+      lastSessionState,
+      lastInputActivity,
+      lastForegroundWindow
+    )
+  };
+}
+
+function mapPolicyRecord(item: PolicyApiItem, index: number): PolicyRecord {
+  const rules = asRecord(item.rules_json);
+  const scope = asRecord(item.scope);
+  const roles = collectStringList(
+    readStringArray(item, ['roles', 'target_roles', 'job_roles']),
+    readStringArray(scope, ['roles', 'target_roles', 'job_roles']),
+    readStringArray(rules, ['roles', 'target_roles', 'job_roles'])
+  );
+  const positions = collectStringList(
+    readStringArray(item, ['positions', 'target_positions', 'posts']),
+    readStringArray(scope, ['positions', 'target_positions', 'posts']),
+    readStringArray(rules, ['positions', 'target_positions', 'posts'])
+  );
+  const departments = collectStringList(
+    readStringArray(item, ['departments', 'target_departments']),
+    readStringArray(scope, ['departments', 'target_departments']),
+    readStringArray(rules, ['departments', 'target_departments'])
+  );
+  const intervalSeconds =
+    readNumber(item, ['screenshot_interval_seconds']) ??
+    readNumber(rules, ['screenshot_interval_seconds', 'capture_interval_seconds']) ??
+    10;
+  const noChangeThreshold =
+    readNumber(item, ['no_change_threshold']) ??
+    readNumber(rules, ['no_change_threshold', 'steady_frame_threshold']) ??
+    6;
+  const retentionDays =
+    readNumber(item, ['retention_days']) ?? readNumber(rules, ['retention_days', 'original_retention_days']) ?? 7;
+  const itemHighRiskMinutes = readNumber(item, ['high_risk_duration_minutes']);
+  const rulesHighRiskMinutes = readNumber(rules, ['high_risk_duration_minutes']);
+  const highRiskWindowSeconds =
+    readNumber(item, ['high_risk_duration_seconds']) ??
+    readNumber(rules, ['high_risk_duration_seconds']) ??
+    (itemHighRiskMinutes !== undefined ? itemHighRiskMinutes * 60 : undefined) ??
+    (rulesHighRiskMinutes !== undefined ? rulesHighRiskMinutes * 60 : undefined) ??
+    intervalSeconds * noChangeThreshold;
+
+  return {
+    key: readString(item, ['id']) ?? String(index),
+    name: readString(item, ['name', 'policy_name', 'template_name']) ?? `Policy ${index + 1}`,
+    version: readString(item, ['version']) ?? undefined,
+    role: roles[0] ?? readString(item, ['role', 'job_role']) ?? 'All roles',
+    positions: positions.length > 0 ? positions : undefined,
+    departments: departments.length > 0 ? departments : undefined,
+    status: normalizeListStatus(resolvePolicyStatus(item, rules)),
+    assignedEmployees:
+      readNumber(item, ['assigned_employees', 'assigned_employee_count', 'employee_count']) ?? undefined,
+    screenshotInterval: `${intervalSeconds}s`,
+    noChangeThreshold: `${noChangeThreshold} frames`,
+    highRiskDuration: formatDurationSeconds(highRiskWindowSeconds),
+    ocrEnabled:
+      firstBooleanFromSources(
+        [item, rules].filter((source): source is Record<string, unknown> => Boolean(source)),
+        ['ocr_enabled', 'enable_ocr', 'ocr']
+      ) ?? false,
+    originalRetention: `${retentionDays} days`
+  };
 }
 
 function mapEventRecord(item: EventApiItem): EventRecord {
@@ -409,7 +654,9 @@ function mapEventRecord(item: EventApiItem): EventRecord {
     streakCount:
       item.streak_count ?? readNumber(details, ['streak_count', 'no_change_streak_count']) ?? null,
     noChangeStreakTriggered,
-    changeMetrics
+    changeMetrics,
+    reviewedAt: item.reviewed_at ? formatDateTime(item.reviewed_at) : null,
+    reviewNote: item.review_note ?? null
   };
 }
 
@@ -743,6 +990,93 @@ function buildMockEventRecords(): EventRecord[] {
   });
 }
 
+function buildDeviceMetadataLabels(
+  item: DeviceApiItem,
+  ...sources: Array<Record<string, unknown> | undefined>
+) {
+  const labels: string[] = [];
+  const remote =
+    firstBooleanFromSources([item, ...sources].filter((source): source is Record<string, unknown> => Boolean(source)), [
+      'is_remote_session',
+      'is_rdp_session',
+      'remote_session',
+      'rdp',
+      'is_rdp'
+    ]) ?? false;
+  const locked =
+    firstBooleanFromSources([item, ...sources].filter((source): source is Record<string, unknown> => Boolean(source)), [
+      'is_locked',
+      'locked'
+    ]) ?? false;
+  const idleSeconds = readNumberFromSources(
+    [item, ...sources].filter((source): source is Record<string, unknown> => Boolean(source)),
+    ['idle_seconds', 'idleSeconds', 'user_idle_seconds']
+  );
+  const inputDesktop = firstStringFromSources(
+    [item, ...sources].filter((source): source is Record<string, unknown> => Boolean(source)),
+    ['input_desktop_name', 'input_desktop', 'input_desktop_state', 'desktop_state']
+  );
+  const sessionState = firstStringFromSources(
+    [item, ...sources].filter((source): source is Record<string, unknown> => Boolean(source)),
+    ['session_connect_state', 'session_state', 'session_type', 'desktop_session_state']
+  );
+  const windowSwitches = readNumberFromSources(
+    [item, ...sources].filter((source): source is Record<string, unknown> => Boolean(source)),
+    ['window_switches', 'window_switch_count', 'app_switches']
+  );
+  const mouseWheel = readNumberFromSources(
+    [item, ...sources].filter((source): source is Record<string, unknown> => Boolean(source)),
+    ['mouse_wheel', 'mouse_wheel_count', 'wheel_count']
+  );
+
+  if (remote) {
+    labels.push('Remote session');
+  }
+
+  if (locked) {
+    labels.push('Locked');
+  }
+
+  if (idleSeconds !== undefined) {
+    labels.push(`Idle ${formatDurationSeconds(idleSeconds)}`);
+  }
+
+  if (inputDesktop) {
+    labels.push(`Desktop ${formatLabel(inputDesktop)}`);
+  }
+
+  if (sessionState) {
+    labels.push(`Session ${formatLabel(sessionState)}`);
+  }
+
+  if (windowSwitches !== undefined) {
+    labels.push(`Switches ${windowSwitches}`);
+  }
+
+  if (mouseWheel !== undefined) {
+    labels.push(`Wheel ${mouseWheel}`);
+  }
+
+  return labels;
+}
+
+function resolvePolicyStatus(item: PolicyApiItem, rules?: Record<string, unknown>) {
+  const rawStatus = readString(item, ['status', 'state']) ?? readString(rules, ['status', 'state']);
+  if (rawStatus) {
+    return rawStatus;
+  }
+
+  if (item.is_active === true) {
+    return 'active';
+  }
+
+  if (item.is_active === false) {
+    return 'inactive';
+  }
+
+  return 'draft';
+}
+
 function buildTimelineStatus(
   item: TimelineApiItem,
   linkedRisks: LinkedRiskRecord[],
@@ -982,6 +1316,23 @@ function severityWeight(value: EventSeverity) {
   }
 }
 
+function normalizeListStatus(status?: string | null) {
+  if (!status) {
+    return undefined;
+  }
+
+  const normalized = status.trim().toLowerCase();
+  if (normalized === 'enabled') {
+    return 'active';
+  }
+
+  if (normalized === 'disabled') {
+    return 'inactive';
+  }
+
+  return normalized;
+}
+
 function deriveChangeLevel(
   blockRatio?: number,
   similarity?: number,
@@ -1141,6 +1492,24 @@ function nestedRecord(source: Record<string, unknown> | undefined, key: string) 
   return source ? asRecord(source[key]) : undefined;
 }
 
+function pickRecords(
+  source: Record<string, unknown> | undefined,
+  keys: string[]
+): Record<string, unknown> | undefined {
+  if (!source) {
+    return undefined;
+  }
+
+  for (const key of keys) {
+    const value = asRecord(source[key]);
+    if (value) {
+      return value;
+    }
+  }
+
+  return undefined;
+}
+
 function readString(source: Record<string, unknown> | undefined, keys: string[]) {
   if (!source) {
     return undefined;
@@ -1154,6 +1523,32 @@ function readString(source: Record<string, unknown> | undefined, keys: string[])
   }
 
   return undefined;
+}
+
+function readArray(source: Record<string, unknown> | undefined, keys: string[]) {
+  if (!source) {
+    return undefined;
+  }
+
+  for (const key of keys) {
+    const value = source[key];
+    if (Array.isArray(value)) {
+      return value;
+    }
+  }
+
+  return undefined;
+}
+
+function readStringArray(source: Record<string, unknown> | undefined, keys: string[]) {
+  const values = readArray(source, keys);
+  if (!values) {
+    return undefined;
+  }
+
+  return values
+    .map((value) => (typeof value === 'string' ? value.trim() : ''))
+    .filter(Boolean);
 }
 
 function readNumber(source: Record<string, unknown> | undefined, keys: string[]) {
@@ -1205,6 +1600,10 @@ function readBoolean(source: Record<string, unknown> | undefined, keys: string[]
 
 function firstString(...values: Array<string | undefined | null>) {
   return values.find((value) => typeof value === 'string' && value.trim()) ?? undefined;
+}
+
+function collectStringList(...lists: Array<string[] | undefined>) {
+  return Array.from(new Set(lists.flatMap((list) => list ?? []).filter(Boolean)));
 }
 
 function firstStringFromSources(sources: Record<string, unknown>[], keys: string[]) {

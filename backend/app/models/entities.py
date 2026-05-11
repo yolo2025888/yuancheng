@@ -33,6 +33,8 @@ class Employee(TimestampedUUIDModel, table=True):
     employee_no: str = Field(index=True)
     department: str | None = None
     manager_id: UUID | None = Field(default=None, foreign_key="employees.id")
+    manager_name: str | None = None
+    job_role: str | None = None
     github_username: str | None = None
     status: str = Field(default="active", index=True)
 
@@ -48,6 +50,18 @@ class Device(TimestampedUUIDModel, table=True):
     last_heartbeat_at: datetime | None = Field(
         default=None,
         sa_column=Column(DateTime(timezone=True), nullable=True),
+    )
+    last_foreground_window_json: dict[str, Any] | None = Field(
+        default=None,
+        sa_column=Column(JSON, nullable=True),
+    )
+    last_session_state_json: dict[str, Any] | None = Field(
+        default=None,
+        sa_column=Column(JSON, nullable=True),
+    )
+    last_input_activity_json: dict[str, Any] | None = Field(
+        default=None,
+        sa_column=Column(JSON, nullable=True),
     )
     status: str = Field(default="offline", index=True)
 
@@ -68,8 +82,14 @@ class Screenshot(TimestampedUUIDModel, table=True):
     keyboard_count: int = Field(default=0, ge=0)
     mouse_click_count: int = Field(default=0, ge=0)
     mouse_move_count: int = Field(default=0, ge=0)
+    mouse_wheel_count: int = Field(default=0, ge=0)
+    window_switch_count: int = Field(default=0, ge=0)
     is_locked: bool = False
     is_remote_session: bool = False
+    is_rdp_session: bool = False
+    idle_seconds: int | None = Field(default=None, ge=0)
+    input_desktop_name: str | None = None
+    session_connect_state: str | None = None
     phash: str | None = None
     upload_status: str = Field(default="pending", index=True)
     ocr_status: str = Field(default="pending", index=True)

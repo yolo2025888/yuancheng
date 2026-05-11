@@ -1,98 +1,127 @@
 # Windows Agent Skeleton
 
-`agent/` 是公司自有 Windows 端 MVP，采用 `Windows Service + User Session Helper` 双进程拆分：
+`agent/` contains the Windows-side MVP split into a non-interactive service and an interactive session helper.
 
-- `EmployeeBehavior.Agent.Service` 运行在服务上下文，负责心跳、策略拉取、截图上传和与后端通信。
-- `EmployeeBehavior.Agent.SessionHelper` 运行在交互用户会话，负责截图、前台窗口、会话状态和输入活动聚合采集，再通过 Named Pipe 返回给 Service。
+- `EmployeeBehavior.Agent.Service` runs as the Windows service. It handles heartbeat, policy refresh, screenshot upload, and backend communication.
+- `EmployeeBehavior.Agent.SessionHelper` runs inside the signed-in user session. It captures screenshots, foreground window metadata, session state, and aggregate input counts, then returns a single snapshot to the service over a named pipe.
 
-## 目录结构
+## Directory layout
 
 ```text
 agent/
-├─ EmployeeBehavior.Agent.sln
-├─ Directory.Build.props
-└─ src/
-   ├─ EmployeeBehavior.Agent.Contracts/
-   ├─ EmployeeBehavior.Agent.Service/
-   └─ EmployeeBehavior.Agent.SessionHelper/
++-- EmployeeBehavior.Agent.sln
++-- Directory.Build.props
++-- src/
+    +-- EmployeeBehavior.Agent.Contracts/
+    +-- EmployeeBehavior.Agent.Service/
+    +-- EmployeeBehavior.Agent.SessionHelper/
 ```
 
-## 当前采集能力
+## Telemetry contract
 
-- 多屏截图：按 `Screen.AllScreens` 逐屏抓取，输出 PNG 主图和 JPEG 缩略图。
-- 前台窗口：采集前台窗口标题、进程名、可执行路径。
-- 会话状态：
-  - `Environment.SessionId`
-  - `WTSQuerySessionInformation` 获取 `WTSConnectState` 与 `WTSClientProtocolType`
-  - `GetSystemMetrics(SM_REMOTESESSION)` 判断远程会话
-  - `GetLastInputInfo` 计算 `IdleSeconds`
-  - `OpenInputDesktop` / `GetUserObjectInformation` 获取当前输入桌面名，用于区分 `Default` 与锁屏/安全桌面
-- 输入活动聚合：
-  - `WH_KEYBOARD_LL` 仅统计键盘按下事件总数
-  - `WH_MOUSE_LL` 仅统计鼠标移动、点击、滚轮事件总数
-  - `SetWinEventHook(EVENT_SYSTEM_FOREGROUND)` 统计前台窗口切换次数
+The helper only reports aggregate counts and session metadata. No raw keystrokes, clipboard data, webcam, microphone, or private-content capture may be added to this contract.
 
-## 隐私与安全边界
+Heartbeat JSON keeps the nested payloads and also mirrors the transition-critical fields at the top level for backend compatibility:
 
-- 只保留聚合计数和会话元数据，不记录具体按键、字符、扫描码、窗口文本内容解析、剪贴板、麦克风、摄像头或其他私密正文。
-- 低层 hook 回调只做计数递增，不持久化 `key code`、`key char`、鼠标坐标或原始输入 payload。
-- 本阶段不实现远控、回放或主动控制能力。
+- `session_state.is_remote_session` and top-level `is_remote_session`
+- `session_state.is_rdp_session` and top-level `is_rdp_session`
+- `session_state.idle_seconds` and top-level `idle_seconds`
+- `session_state.input_desktop_name` and top-level `input_desktop_name`
+- `session_state.session_connect_state` and top-level `session_connect_state`
+- `input_activity.mouse_wheel_count` and top-level `mouse_wheel_count`
+- `input_activity.window_switch_count` and top-level `window_switch_count`
 
-## 进程分工
+Screenshot upload form fields use the backend snake_case names directly:
 
-- 必须在交互用户会话中完成的采集：
-  - 输入 hook
-  - 输入桌面检测
-  - 前台窗口状态
-  - 截图
-- `Service` 不直接访问交互桌面；它只通过 `SessionHelper` 的 Named Pipe 获取一次快照并上传。
-- 如果 `SessionHelper` 没有运行在真实 interactive session，输入计数和桌面状态可能退化为零值或空值，但不会突破隐私边界。
+- `keyboard_count`
+- `mouse_click_count`
+- `mouse_move_count`
+- `mouse_wheel_count`
+- `window_switch_count`
+- `is_locked`
+- `is_remote_session`
+- `is_rdp_session`
+- `idle_seconds`
+- `input_desktop_name`
+- `session_connect_state`
 
-## 配置
+## Current capture scope
 
-先复制示例配置：
+- Multi-screen screenshots captured from `Screen.AllScreens`
+- Foreground window process name, executable path, and title
+- Session state derived from `Environment.SessionId`, WTS session info, `GetLastInputInfo`, and input desktop inspection
+- Aggregate input activity only:
+  - `WH_KEYBOARD_LL` counts key-down events
+  - `WH_MOUSE_LL` counts mouse move, click, and wheel events
+  - `SetWinEventHook(EVENT_SYSTEM_FOREGROUND)` counts foreground window switches
+
+## Privacy boundary
+
+- Store and transmit counts only, never raw input payloads.
+- Hook callbacks must not persist virtual key codes, translated characters, scan codes, clipboard text, pointer coordinates, or screenshots beyond the configured capture pipeline.
+- `SessionHelper` may inspect whether the active desktop is `Default` versus a secure desktop, but it must not read secure desktop contents.
+- `Service` must stay non-interactive. It gets one helper snapshot and uploads that snapshot; it does not access the interactive desktop directly.
+
+## Interactive-session helper expectations
+
+- `SessionHelper` must be launched in the real interactive user session. If it runs outside that session, screenshot capture, desktop name, and aggregate input counters may legitimately degrade to empty or zero values.
+- `AgentService` and `SessionHelper` must use the same pipe name:
+  - `SessionHelper:PipeName`
+  - `AgentService:SessionHelperPipeName`
+- `SessionHelperMonitor` is a liveness logger only. It must not consume `IInputActivityCounter` snapshots because reading that counter resets the aggregate window.
+
+## Configuration
+
+Copy the example settings first:
 
 ```powershell
 Copy-Item .\agent\src\EmployeeBehavior.Agent.SessionHelper\appsettings.json.example .\agent\src\EmployeeBehavior.Agent.SessionHelper\appsettings.json
 Copy-Item .\agent\src\EmployeeBehavior.Agent.Service\appsettings.json.example .\agent\src\EmployeeBehavior.Agent.Service\appsettings.json
 ```
 
-两端管道名必须一致：
-
-- `SessionHelper:PipeName`
-- `AgentService:SessionHelperPipeName`
-
-`SessionHelper` 相关配置：
+`SessionHelper` toggles:
 
 - `EnableInputActivityHooks`
-  - 默认 `true`
-  - 关闭后不安装键盘/鼠标/前台切换 hook，输入计数会保持为 0
+  - Default `true`
+  - Disables keyboard, mouse, and foreground-switch counters when set to `false`
 - `EnableDesktopStateInspection`
-  - 默认 `true`
-  - 关闭后不调用 `OpenInputDesktop`，`InputDesktopName` 与基于桌面的锁屏判断会为空
+  - Default `true`
+  - Disables `OpenInputDesktop` inspection when set to `false`, which leaves `InputDesktopName` empty and removes desktop-based lock-state hints
 - `InputHookStartupTimeoutSeconds`
-  - 默认 `5`
-  - helper 启动时等待 hook 安装成功的最长时间
+  - Default `5`
+  - Maximum wait for low-level hook startup before the helper continues in degraded mode
+- `SampleLogIntervalSeconds`
+  - Default `60`
+  - Controls liveness logging only; it does not change upload cadence or counter reset timing
 
-## 本地运行
+`AgentService` notes:
 
-开发时建议先启动 Helper，再启动 Service：
+- Keep `DryRun=true` for local contract verification before pointing at a real backend.
+- `SessionHelperRequestTimeoutSeconds` must be long enough to cover multi-screen capture on slower endpoints.
+- `UploadBatchSize` affects only upload concurrency, not collection semantics.
+
+## Local run and deployment checks
+
+For local development, start the helper first and then the service:
 
 ```powershell
 dotnet run --project .\agent\src\EmployeeBehavior.Agent.SessionHelper\EmployeeBehavior.Agent.SessionHelper.csproj -- --console
 dotnet run --project .\agent\src\EmployeeBehavior.Agent.Service\EmployeeBehavior.Agent.Service.csproj
 ```
 
-默认情况下：
+Recommended deployment and validation sequence:
 
-- Service `DryRun=true`，不会依赖真实后端。
-- Helper 会持续输出截图、会话状态、前台窗口和输入计数采样日志。
+1. Copy both example config files and set a shared pipe name.
+2. Run the helper in the signed-in desktop session.
+3. Keep `DryRun=true` and confirm heartbeat plus screenshot upload logs show the expected contract fields without backend dependency.
+4. Switch `DryRun=false`, point `ApiBaseUrl` at the target backend, and repeat heartbeat plus upload checks.
+5. Test console session, locked desktop, and RDP/remote session transitions.
 
-## 建议验证点
+## Verification focus
 
-在具备 Windows + .NET SDK 的环境中，建议重点验证：
+When validating on a Windows machine with the .NET SDK installed, check:
 
-1. 本地控制台、RDP 会话、锁屏、解锁之间 `IsRemoteSession` / `IsRdpSession` / `InputDesktopName` / `IdleSeconds` 的变化。
-2. 键盘、鼠标移动、鼠标点击、滚轮和窗口切换计数是否随时间窗口正确归零并重新累积。
-3. `SessionHelper` 不在 interactive session 时，是否按预期退化且不会抛出未处理异常。
-4. 后端对新增心跳 JSON 字段与截图 multipart 字段是否按兼容方式处理。
+1. `IsRemoteSession`, `IsRdpSession`, `InputDesktopName`, `IdleSeconds`, and `SessionConnectState` change as expected across console, lock/unlock, and RDP transitions.
+2. Keyboard, mouse move, mouse click, mouse wheel, and window switch counts reset only when a capture snapshot is consumed.
+3. `SessionHelper` degrades safely when it is not running in the real interactive session.
+4. Backend parsing accepts the nested heartbeat payloads and the mirrored compatibility fields during rollout.

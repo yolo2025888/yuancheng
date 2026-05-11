@@ -242,7 +242,7 @@ public sealed class Win32InputActivityCounter : IInputActivityCounter, IHostedSe
             }
         }
 
-        return CallNextHookEx(IntPtr.Zero, nCode, wParam, lParam);
+        return CallNextHookEx(_keyboardHookHandle, nCode, wParam, lParam);
     }
 
     private IntPtr MouseHookCallback(int nCode, IntPtr wParam, IntPtr lParam)
@@ -267,7 +267,7 @@ public sealed class Win32InputActivityCounter : IInputActivityCounter, IHostedSe
             }
         }
 
-        return CallNextHookEx(IntPtr.Zero, nCode, wParam, lParam);
+        return CallNextHookEx(_mouseHookHandle, nCode, wParam, lParam);
     }
 
     private void ForegroundChangedCallback(

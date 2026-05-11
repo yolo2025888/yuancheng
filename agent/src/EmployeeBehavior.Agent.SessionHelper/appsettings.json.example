@@ -1,12 +1,15 @@
 {
   "SessionHelper": {
+    "_comment": "Privacy boundary: aggregate keyboard/mouse counts and session metadata only. Never add raw keystrokes, clipboard, webcam, microphone, or private-content capture.",
+    "_interactiveSessionNote": "Run this helper inside the signed-in user session. The Windows service stays non-interactive and talks to this helper over the named pipe.",
     "PipeName": "employee-behavior-agent",
     "EnableTrayIcon": true,
     "RunInConsole": false,
     "EnableInputActivityHooks": true,
     "EnableDesktopStateInspection": true,
     "InputHookStartupTimeoutSeconds": 5,
-    "SampleLogIntervalSeconds": 60
+    "SampleLogIntervalSeconds": 60,
+    "_toggleNote": "SampleLogIntervalSeconds only affects liveness logging. Aggregate counters reset when SessionSnapshotCollector reads IInputActivityCounter, not when the monitor logs."
   },
   "Logging": {
     "LogLevel": {

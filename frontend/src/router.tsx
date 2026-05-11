@@ -33,61 +33,61 @@ export type NavRoute = {
 export const navRoutes: NavRoute[] = [
   {
     key: 'dashboard',
-    label: '总览仪表盘',
+    label: 'Dashboard',
     path: '/',
     icon: <DashboardOutlined />
   },
   {
     key: 'realtime',
-    label: '实时状态',
+    label: 'Realtime Status',
     path: '/realtime-status',
     icon: <LaptopOutlined />
   },
   {
     key: 'employees',
-    label: '员工管理',
+    label: 'Employees',
     path: '/employees',
     icon: <TeamOutlined />
   },
   {
     key: 'devices',
-    label: '设备管理',
+    label: 'Devices',
     path: '/devices',
     icon: <DeploymentUnitOutlined />
   },
   {
     key: 'timeline',
-    label: '员工时间线',
+    label: 'Timeline',
     path: '/timeline',
     icon: <ClockCircleOutlined />
   },
   {
     key: 'events',
-    label: '事件中心',
+    label: 'Events',
     path: '/events',
     icon: <AlertOutlined />
   },
   {
     key: 'screenshot-detail',
-    label: '截图详情',
+    label: 'Screenshot Detail',
     path: '/screenshot-detail',
     icon: <UnorderedListOutlined />
   },
   {
     key: 'policies',
-    label: '策略模板',
+    label: 'Policies',
     path: '/policies',
     icon: <SafetyCertificateOutlined />
   },
   {
     key: 'audit-logs',
-    label: '审计日志',
+    label: 'Audit Logs',
     path: '/audit-logs',
     icon: <UnorderedListOutlined />
   },
   {
     key: 'github-risk',
-    label: 'GitHub 风险',
+    label: 'GitHub Risk',
     path: '/github-risk',
     icon: <GithubOutlined />
   }

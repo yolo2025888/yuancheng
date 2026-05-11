@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Any
 from uuid import UUID
 
 from sqlmodel import Session, select
@@ -8,8 +9,11 @@ from sqlmodel import Session, select
 from app.core.config import Settings, get_settings
 from app.models import Device, Policy, Screenshot
 from app.schemas.agent import (
+    HeartbeatForegroundWindow,
+    HeartbeatInputActivity,
     HeartbeatRequest,
     HeartbeatResponse,
+    HeartbeatSessionState,
     PolicyResponse,
     ScreenshotCompleteRequest,
     ScreenshotCompleteResponse,
@@ -75,12 +79,65 @@ class AgentService:
             keyboard_count=payload.keyboard_count,
             mouse_click_count=payload.mouse_click_count,
             mouse_move_count=payload.mouse_move_count,
+            mouse_wheel_count=payload.mouse_wheel_count,
+            window_switch_count=payload.window_switch_count,
             is_locked=payload.is_locked,
             is_remote_session=payload.is_remote_session,
+            is_rdp_session=payload.is_rdp_session,
+            idle_seconds=payload.idle_seconds,
+            input_desktop_name=payload.input_desktop_name,
+            session_connect_state=payload.session_connect_state,
             upload_status="pending",
             ocr_status="pending",
             analysis_status="pending",
         )
+
+    def _safe_foreground_window(
+        self,
+        foreground_window: HeartbeatForegroundWindow | None,
+    ) -> dict[str, Any] | None:
+        if foreground_window is None:
+            return None
+        return {
+            "collected_at": foreground_window.collected_at.isoformat() if foreground_window.collected_at else None,
+            "process_name": foreground_window.process_name,
+        }
+
+    def _safe_session_state(
+        self,
+        session_state: HeartbeatSessionState | None,
+    ) -> dict[str, Any] | None:
+        if session_state is None:
+            return None
+        return {
+            "collected_at": session_state.collected_at.isoformat() if session_state.collected_at else None,
+            "is_locked": session_state.is_locked,
+            "is_remote_session": session_state.is_remote_session,
+            "is_rdp_session": session_state.is_rdp_session,
+            "is_active_session": session_state.is_active_session,
+            "is_console_session": session_state.is_console_session,
+            "active_console_session_id": session_state.active_console_session_id,
+            "idle_seconds": session_state.idle_seconds,
+            "input_desktop_name": session_state.input_desktop_name,
+            "session_connect_state": session_state.session_connect_state,
+        }
+
+    def _safe_input_activity(
+        self,
+        input_activity: HeartbeatInputActivity | None,
+    ) -> dict[str, Any] | None:
+        if input_activity is None:
+            return None
+        return {
+            "collected_from": input_activity.collected_from.isoformat() if input_activity.collected_from else None,
+            "collected_to": input_activity.collected_to.isoformat() if input_activity.collected_to else None,
+            "keyboard_event_count": input_activity.keyboard_event_count,
+            "mouse_event_count": input_activity.mouse_event_count,
+            "mouse_move_count": input_activity.mouse_move_count,
+            "mouse_click_count": input_activity.mouse_click_count,
+            "mouse_wheel_count": input_activity.mouse_wheel_count,
+            "window_switch_count": input_activity.window_switch_count,
+        }
 
     def _finalize_screenshot(
         self,
@@ -125,6 +182,9 @@ class AgentService:
                 agent_version=payload.agent_version,
                 screen_count=payload.screen_count,
                 last_heartbeat_at=now,
+                last_foreground_window_json=self._safe_foreground_window(payload.foreground_window),
+                last_session_state_json=self._safe_session_state(payload.session_state),
+                last_input_activity_json=self._safe_input_activity(payload.input_activity),
                 status=payload.status,
             )
             self.session.add(device)
@@ -137,6 +197,12 @@ class AgentService:
             device.screen_count = payload.screen_count
             device.status = payload.status
             device.last_heartbeat_at = now
+            if payload.foreground_window is not None:
+                device.last_foreground_window_json = self._safe_foreground_window(payload.foreground_window)
+            if payload.session_state is not None:
+                device.last_session_state_json = self._safe_session_state(payload.session_state)
+            if payload.input_activity is not None:
+                device.last_input_activity_json = self._safe_input_activity(payload.input_activity)
             device.updated_at = now
             self.session.add(device)
 

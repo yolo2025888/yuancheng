@@ -5,10 +5,23 @@ from uuid import UUID
 
 from sqlmodel import Session, select
 
-from app.models import BehaviorEvent, ScreenDiff, Screenshot
+from app.models import BehaviorEvent, Device, Employee, Policy, ScreenDiff, Screenshot
+from app.schemas.admin import (
+    DeviceItem,
+    DeviceListResponse,
+    EmployeeItem,
+    EmployeeListResponse,
+    PolicyItem,
+    PolicyListResponse,
+    PolicySummary,
+    SafeForegroundWindow,
+    SafeInputActivity,
+    SafeSessionState,
+)
 from app.schemas.query import (
     BehaviorEventDetail,
     BehaviorEventListResponse,
+    BehaviorEventReviewRequest,
     ScreenDiffSummary,
     ScreenshotItem,
     ScreenshotListResponse,
@@ -120,8 +133,14 @@ class QueryService:
             keyboard_count=screenshot.keyboard_count,
             mouse_click_count=screenshot.mouse_click_count,
             mouse_move_count=screenshot.mouse_move_count,
+            mouse_wheel_count=screenshot.mouse_wheel_count,
+            window_switch_count=screenshot.window_switch_count,
             is_locked=screenshot.is_locked,
             is_remote_session=screenshot.is_remote_session,
+            is_rdp_session=screenshot.is_rdp_session,
+            idle_seconds=screenshot.idle_seconds,
+            input_desktop_name=screenshot.input_desktop_name,
+            session_connect_state=screenshot.session_connect_state,
             phash=screenshot.phash,
             upload_status=screenshot.upload_status,
             ocr_status=screenshot.ocr_status,
@@ -273,6 +292,21 @@ class QueryService:
             return None
         return self._build_event_detail(event=event)
 
+    def review_event(self, event_id: UUID, payload: BehaviorEventReviewRequest) -> BehaviorEventDetail | None:
+        event = self.session.get(BehaviorEvent, event_id)
+        if event is None:
+            return None
+
+        if payload.status is not None:
+            event.status = payload.status
+        event.review_note = payload.review_note
+        event.reviewed_at = datetime.now(timezone.utc)
+        event.updated_at = event.reviewed_at
+        self.session.add(event)
+        self.session.commit()
+        self.session.refresh(event)
+        return self._build_event_detail(event=event)
+
     def list_screenshots(
         self,
         *,
@@ -310,4 +344,87 @@ class QueryService:
             screenshot=screenshot,
             diff=diff_map.get(screenshot.id),
             events=self._relevant_events([screenshot]),
+        )
+
+    def list_employees(self) -> EmployeeListResponse:
+        employees = self.session.exec(select(Employee).order_by(Employee.employee_no.asc(), Employee.name.asc())).all()
+        devices = self.session.exec(select(Device)).all()
+        active_policy = self.session.exec(
+            select(Policy).where(Policy.is_active.is_(True)).order_by(Policy.created_at.desc())
+        ).first()
+        policy_summary = PolicySummary.model_validate(active_policy) if active_policy is not None else None
+
+        active_device_counts: dict[UUID, int] = {}
+        for device in devices:
+            if device.employee_id is None or device.status == "offline":
+                continue
+            active_device_counts[device.employee_id] = active_device_counts.get(device.employee_id, 0) + 1
+
+        return EmployeeListResponse(
+            items=[
+                EmployeeItem(
+                    id=employee.id,
+                    name=employee.name,
+                    employee_no=employee.employee_no,
+                    department=employee.department,
+                    manager_name=employee.manager_name,
+                    job_role=employee.job_role,
+                    github_username=employee.github_username,
+                    status=employee.status,
+                    active_device_count=active_device_counts.get(employee.id, 0),
+                    policy_summary=policy_summary,
+                    created_at=employee.created_at,
+                    updated_at=employee.updated_at,
+                )
+                for employee in employees
+            ],
+            total=len(employees),
+        )
+
+    def list_devices(self) -> DeviceListResponse:
+        devices = self.session.exec(select(Device).order_by(Device.last_heartbeat_at.desc(), Device.hostname.asc())).all()
+        employees = self.session.exec(select(Employee)).all()
+        employees_by_id = {employee.id: employee for employee in employees}
+
+        items = []
+        for device in devices:
+            employee = employees_by_id.get(device.employee_id) if device.employee_id is not None else None
+            items.append(
+                DeviceItem(
+                    id=device.id,
+                    employee_id=device.employee_id,
+                    employee_name=employee.name if employee is not None else None,
+                    employee_no=employee.employee_no if employee is not None else None,
+                    hostname=device.hostname,
+                    os_type=device.os_type,
+                    agent_version=device.agent_version,
+                    screen_count=device.screen_count,
+                    status=device.status,
+                    last_heartbeat_at=device.last_heartbeat_at,
+                    last_foreground_window=(
+                        SafeForegroundWindow.model_validate(device.last_foreground_window_json)
+                        if device.last_foreground_window_json
+                        else None
+                    ),
+                    last_session_state=(
+                        SafeSessionState.model_validate(device.last_session_state_json)
+                        if device.last_session_state_json
+                        else None
+                    ),
+                    last_input_activity=(
+                        SafeInputActivity.model_validate(device.last_input_activity_json)
+                        if device.last_input_activity_json
+                        else None
+                    ),
+                    created_at=device.created_at,
+                    updated_at=device.updated_at,
+                )
+            )
+        return DeviceListResponse(items=items, total=len(items))
+
+    def list_policies(self) -> PolicyListResponse:
+        policies = self.session.exec(select(Policy).order_by(Policy.is_active.desc(), Policy.created_at.desc())).all()
+        return PolicyListResponse(
+            items=[PolicyItem.model_validate(policy) for policy in policies],
+            total=len(policies),
         )

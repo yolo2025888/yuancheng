@@ -38,6 +38,10 @@ public sealed class AgentApiClient : IAgentApiClient
             };
         }
 
+        var sessionState = request.SessionState;
+        var foregroundWindow = request.ForegroundWindow;
+        var inputActivity = request.InputActivity;
+
         var backendRequest = new
         {
             device_id = request.DeviceId,
@@ -47,40 +51,49 @@ public sealed class AgentApiClient : IAgentApiClient
             agent_version = request.AgentVersion,
             screen_count = request.ScreenCount,
             status = request.Status,
-            session_state = request.SessionState is null ? null : new
+            session_state = sessionState is null ? null : new
             {
-                collected_at = request.SessionState.CollectedAtUtc,
-                session_id = request.SessionState.SessionId,
-                user_name = request.SessionState.UserName,
-                is_locked = request.SessionState.IsLocked,
-                is_remote_session = request.SessionState.IsRemoteSession,
-                is_rdp_session = request.SessionState.IsRdpSession,
-                is_active_session = request.SessionState.IsActiveSession,
-                is_console_session = request.SessionState.IsConsoleSession,
-                active_console_session_id = request.SessionState.ActiveConsoleSessionId,
-                idle_seconds = request.SessionState.IdleSeconds,
-                input_desktop_name = request.SessionState.InputDesktopName,
-                session_connect_state = request.SessionState.SessionConnectState,
-                status_detail = request.SessionState.StatusDetail
+                collected_at = sessionState.CollectedAtUtc,
+                session_id = sessionState.SessionId,
+                user_name = sessionState.UserName,
+                is_locked = sessionState.IsLocked,
+                is_remote_session = sessionState.IsRemoteSession,
+                is_rdp_session = sessionState.IsRdpSession,
+                is_active_session = sessionState.IsActiveSession,
+                is_console_session = sessionState.IsConsoleSession,
+                active_console_session_id = sessionState.ActiveConsoleSessionId,
+                idle_seconds = sessionState.IdleSeconds,
+                input_desktop_name = sessionState.InputDesktopName,
+                session_connect_state = sessionState.SessionConnectState,
+                status_detail = sessionState.StatusDetail
             },
-            foreground_window = request.ForegroundWindow is null ? null : new
+            foreground_window = foregroundWindow is null ? null : new
             {
-                collected_at = request.ForegroundWindow.CollectedAtUtc,
-                process_name = request.ForegroundWindow.ProcessName,
-                executable_path = request.ForegroundWindow.ExecutablePath,
-                window_title = request.ForegroundWindow.WindowTitle
+                collected_at = foregroundWindow.CollectedAtUtc,
+                process_name = foregroundWindow.ProcessName,
+                executable_path = foregroundWindow.ExecutablePath,
+                window_title = foregroundWindow.WindowTitle
             },
-            input_activity = request.InputActivity is null ? null : new
+            input_activity = inputActivity is null ? null : new
             {
-                collected_from = request.InputActivity.CollectedFromUtc,
-                collected_to = request.InputActivity.CollectedToUtc,
-                keyboard_event_count = request.InputActivity.KeyboardEventCount,
-                mouse_event_count = request.InputActivity.MouseEventCount,
-                mouse_move_count = request.InputActivity.MouseMoveCount,
-                mouse_click_count = request.InputActivity.MouseClickCount,
-                mouse_wheel_count = request.InputActivity.MouseWheelCount,
-                window_switch_count = request.InputActivity.WindowSwitchCount
-            }
+                collected_from = inputActivity.CollectedFromUtc,
+                collected_to = inputActivity.CollectedToUtc,
+                keyboard_event_count = inputActivity.KeyboardEventCount,
+                mouse_event_count = inputActivity.MouseEventCount,
+                mouse_move_count = inputActivity.MouseMoveCount,
+                mouse_click_count = inputActivity.MouseClickCount,
+                mouse_wheel_count = inputActivity.MouseWheelCount,
+                window_switch_count = inputActivity.WindowSwitchCount
+            },
+            // Transitional flat mirrors keep older parsers working while newer backends
+            // consume the nested session_state/input_activity payloads.
+            mouse_wheel_count = inputActivity?.MouseWheelCount,
+            window_switch_count = inputActivity?.WindowSwitchCount,
+            is_remote_session = sessionState?.IsRemoteSession,
+            is_rdp_session = sessionState?.IsRdpSession,
+            idle_seconds = sessionState?.IdleSeconds,
+            input_desktop_name = sessionState?.InputDesktopName,
+            session_connect_state = sessionState?.SessionConnectState
         };
 
         using var response = await _httpClient.PostAsJsonAsync(
@@ -222,7 +235,12 @@ public sealed class AgentApiClient : IAgentApiClient
 
         using var response = await _httpClient.PostAsJsonAsync(
             $"/api/agent/screenshots/{request.ScreenshotId}/complete",
-            request,
+            new
+            {
+                image_uri = request.ImageUri,
+                thumb_uri = request.ThumbUri,
+                phash = request.ImageSha256
+            },
             cancellationToken);
 
         response.EnsureSuccessStatusCode();

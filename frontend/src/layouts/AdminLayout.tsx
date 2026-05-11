@@ -1,4 +1,4 @@
-import { Layout, Menu, Space, Typography, Grid, Avatar, Badge } from 'antd';
+import { Avatar, Badge, Grid, Layout, Menu, Space, Typography } from 'antd';
 import type { ReactNode } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 
@@ -25,23 +25,13 @@ export function AdminLayout({ children }: AdminLayoutProps) {
 
   return (
     <Layout className="app-shell">
-      <Sider
-        width={256}
-        collapsible
-        collapsed={collapsed}
-        trigger={null}
-        breakpoint="lg"
-      >
+      <Sider width={256} collapsible collapsed={collapsed} trigger={null} breakpoint="lg">
         <div className="brand-block">
           <div className="brand-mark">EM</div>
           {!collapsed ? (
             <Space direction="vertical" size={0}>
-              <Typography.Text className="brand-title">
-                行为监控后台
-              </Typography.Text>
-              <Typography.Text className="brand-subtitle">
-                Employee Monitor
-              </Typography.Text>
+              <Typography.Text className="brand-title">Admin Console</Typography.Text>
+              <Typography.Text className="brand-subtitle">Employee Monitor</Typography.Text>
             </Space>
           ) : null}
         </div>
@@ -60,19 +50,19 @@ export function AdminLayout({ children }: AdminLayoutProps) {
       <Layout>
         <Header className="app-header">
           <div>
-            <Typography.Text className="header-kicker">MVP 骨架</Typography.Text>
-            <Typography.Title level={4}>企业远程工作监控管理台</Typography.Title>
+            <Typography.Text className="header-kicker">Phase 3</Typography.Text>
+            <Typography.Title level={4}>Remote workforce monitoring admin</Typography.Title>
           </div>
           <Space size={18}>
             <div className="header-meta">
-              <Typography.Text>环境</Typography.Text>
-              <strong>Mock Data</strong>
+              <Typography.Text>Mode</Typography.Text>
+              <strong>Live API + fallback</strong>
             </div>
             <div className="header-meta">
-              <Typography.Text>告警</Typography.Text>
-              <Badge status="processing" text="11 条待处理" />
+              <Typography.Text>Queue</Typography.Text>
+              <Badge status="processing" text="Admin review active" />
             </div>
-            <Avatar style={{ backgroundColor: '#0f766e' }}>管</Avatar>
+            <Avatar style={{ backgroundColor: '#0f766e' }}>AD</Avatar>
           </Space>
         </Header>
         <Content className="app-content">{children}</Content>

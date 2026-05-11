@@ -1,5 +1,7 @@
 {
   "AgentService": {
+    "_comment": "Keep this service non-interactive. It uploads helper snapshots and must not capture raw input or private content on its own.",
+    "_contractNote": "SessionHelperPipeName must match SessionHelper:PipeName. DryRun=true is the safest default for local contract and deployment testing.",
     "ApiBaseUrl": "https://backend.example.internal",
     "ApiToken": "replace-with-device-or-agent-token",
     "DryRun": true,
@@ -12,6 +14,7 @@
     "PolicyRefreshIntervalSeconds": 300,
     "UploadPollIntervalSeconds": 5,
     "UploadBatchSize": 2,
+    "_deploymentNote": "After local DryRun verification, set DryRun=false and validate heartbeat plus screenshot upload against the target backend.",
     "DefaultPolicy": {
       "Version": "bootstrap",
       "CaptureEnabled": true,
