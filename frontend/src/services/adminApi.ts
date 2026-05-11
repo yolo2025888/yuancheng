@@ -167,6 +167,11 @@ type EventApiListResponse = {
   total: number;
 };
 
+type EventListQuery = {
+  status?: string;
+  severity?: string;
+};
+
 type ReviewQueueApiItem = Record<string, unknown>;
 
 type TimelineApiItem = Record<string, unknown> & {
@@ -817,12 +822,13 @@ export const adminApi = {
     };
   },
 
-  async getEvents(): Promise<ApiResult<EventRecord[]>> {
+  async getEvents(query: EventListQuery = {}): Promise<ApiResult<EventRecord[]>> {
+    const endpoint = buildEventsEndpoint(query);
     try {
-      const payload = await fetchEventsRaw();
+      const payload = await fetchEventsRaw(query);
       return {
         data: payload.items.map(mapEventRecord).sort(compareEvents),
-        apiStatus: liveStatus('/api/events', `Loaded ${payload.total} events`)
+        apiStatus: liveStatus(endpoint, `Loaded ${payload.total} events`)
       };
     } catch (error) {
       const status = readErrorStatus(error);
@@ -834,14 +840,14 @@ export const adminApi = {
             state: 'unavailable',
             label: 'Access denied',
             detail: `Event list access denied: ${getErrorMessage(error)}`,
-            endpoint: '/api/events'
+            endpoint
           }
         };
       }
 
       return {
         data: buildMockEventRecords().sort(compareEvents),
-        apiStatus: fallbackStatus('/api/events', getErrorMessage(error))
+        apiStatus: fallbackStatus(endpoint, getErrorMessage(error))
       };
     }
   },
@@ -890,7 +896,8 @@ export const adminApi = {
   async reviewEvent(
     eventId: string,
     status: EventStatus,
-    reviewNote?: string
+    reviewNote?: string,
+    refreshQuery: EventListQuery = {}
   ): Promise<{ apiStatus: ApiStatus; events?: EventRecord[] }> {
     const endpoint = `/api/events/${eventId}/review`;
 
@@ -905,7 +912,7 @@ export const adminApi = {
         }
       });
 
-      const refreshed = await this.getEvents();
+      const refreshed = await this.getEvents(refreshQuery);
       return {
         apiStatus:
           refreshed.apiStatus.source === 'live'
@@ -1260,10 +1267,22 @@ export const adminApi = {
   }
 };
 
-async function fetchEventsRaw() {
-  return apiClient<EventApiListResponse>(
-    `/api/events?from=${today}T00:00:00Z&to=${today}T23:59:59Z`
-  );
+async function fetchEventsRaw(query: EventListQuery = {}) {
+  return apiClient<EventApiListResponse>(buildEventsEndpoint(query));
+}
+
+function buildEventsEndpoint(query: EventListQuery = {}) {
+  const params = new URLSearchParams({
+    from: `${today}T00:00:00Z`,
+    to: `${today}T23:59:59Z`
+  });
+  if (query.status && query.status !== 'all') {
+    params.set('status', query.status);
+  }
+  if (query.severity && query.severity !== 'all') {
+    params.set('severity', query.severity);
+  }
+  return `/api/events?${params.toString()}`;
 }
 
 async function discoverEmployeeId() {

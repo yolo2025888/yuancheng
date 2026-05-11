@@ -541,6 +541,48 @@ def test_event_review_updates_status_and_note(client: TestClient, seeded_device:
     assert listed_event["reviewer_username"] == app.state.settings.bootstrap_admin_username
 
 
+def test_events_endpoint_filters_reviewable_status_and_severity(
+    client: TestClient,
+    seeded_device: dict[str, str],
+    auth_headers,
+) -> None:
+    headers = auth_headers(bootstrap=True)
+    employee_id = UUID(seeded_device["employee_id"])
+    device_id = UUID(seeded_device["device_id"])
+
+    with Session(client.app.state.engine) as session:
+        for event_type, severity, status_value in (
+            ("needs_attention", "high", "open"),
+            ("active_review", "medium", "reviewing"),
+            ("already_done", "high", "reviewed"),
+            ("low_signal", "low", "open"),
+        ):
+            session.add(
+                BehaviorEvent(
+                    employee_id=employee_id,
+                    device_id=device_id,
+                    event_type=event_type,
+                    severity=severity,
+                    start_at=datetime(2026, 5, 11, 13, 0, tzinfo=timezone.utc),
+                    status=status_value,
+                    details_json={},
+                )
+            )
+        session.commit()
+
+    reviewable_response = client.get("/api/events?status=reviewable", headers=headers)
+    high_reviewable_response = client.get("/api/events?status=reviewable&severity=high", headers=headers)
+
+    assert reviewable_response.status_code == 200
+    assert {item["event_type"] for item in reviewable_response.json()["items"]} == {
+        "needs_attention",
+        "active_review",
+        "low_signal",
+    }
+    assert high_reviewable_response.status_code == 200
+    assert [item["event_type"] for item in high_reviewable_response.json()["items"]] == ["needs_attention"]
+
+
 def test_sqlite_schema_ensure_adds_new_columns_to_existing_db(tmp_path: Path) -> None:
     database_path = tmp_path / "legacy.db"
     connection = sqlite3.connect(database_path)

@@ -1,5 +1,6 @@
-import { Button, Card, Space, Table, Tag, Typography, message } from 'antd';
+import { Button, Card, Select, Space, Table, Tag, Typography, message } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 
 import { useAuth } from '../auth/AuthContext';
 import { ApiStatusNotice } from '../components/ApiStatusNotice';
@@ -13,19 +14,23 @@ const REVIEW_ACTIONS: EventStatus[] = ['reviewing', 'reviewed', 'confirmed', 'ig
 
 export function EventsPage() {
   const { canAccess, permissionsResolved } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [rows, setRows] = useState<EventRecord[]>([]);
   const [apiStatus, setApiStatus] = useState<ApiStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [pendingIds, setPendingIds] = useState<Record<string, boolean>>({});
   const [messageApi, contextHolder] = message.useMessage();
 
+  const statusFilter = searchParams.get('status') || 'reviewable';
+  const severityFilter = searchParams.get('severity') || 'all';
+
   const loadEvents = useCallback(async () => {
     setLoading(true);
-    const result = await adminApi.getEvents();
+    const result = await adminApi.getEvents({ status: statusFilter, severity: severityFilter });
     setRows(result.data);
     setApiStatus(result.apiStatus);
     setLoading(false);
-  }, []);
+  }, [severityFilter, statusFilter]);
 
   useEffect(() => {
     void loadEvents();
@@ -53,7 +58,10 @@ export function EventsPage() {
         )
       );
 
-      const result = await adminApi.reviewEvent(record.id, nextStatus);
+      const result = await adminApi.reviewEvent(record.id, nextStatus, undefined, {
+        status: statusFilter,
+        severity: severityFilter
+      });
       setApiStatus(result.apiStatus);
 
       if (result.events) {
@@ -69,7 +77,16 @@ export function EventsPage() {
         return next;
       });
     },
-    [messageApi]
+    [messageApi, severityFilter, statusFilter]
+  );
+
+  const updateFilter = useCallback(
+    (key: 'status' | 'severity', value: string) => {
+      const next = new URLSearchParams(searchParams);
+      next.set(key, value);
+      setSearchParams(next, { replace: true });
+    },
+    [searchParams, setSearchParams]
   );
 
   return (
@@ -81,6 +98,33 @@ export function EventsPage() {
         extra={
           <Space size={8} wrap>
             <Tag color="orange">{reviewableCount} need review</Tag>
+            <Select
+              size="small"
+              value={statusFilter}
+              style={{ width: 150 }}
+              onChange={(value) => updateFilter('status', value)}
+              options={[
+                { value: 'reviewable', label: 'Need review' },
+                { value: 'all', label: 'All statuses' },
+                { value: 'reviewed', label: 'Reviewed' },
+                { value: 'confirmed', label: 'Confirmed' },
+                { value: 'ignored', label: 'Ignored' },
+                { value: 'closed', label: 'Closed' }
+              ]}
+            />
+            <Select
+              size="small"
+              value={severityFilter}
+              style={{ width: 130 }}
+              onChange={(value) => updateFilter('severity', value)}
+              options={[
+                { value: 'all', label: 'All severity' },
+                { value: 'critical', label: 'Critical' },
+                { value: 'high', label: 'High' },
+                { value: 'medium', label: 'Medium' },
+                { value: 'low', label: 'Low' }
+              ]}
+            />
             <Button size="small" onClick={() => void loadEvents()} loading={loading}>
               Reload
             </Button>

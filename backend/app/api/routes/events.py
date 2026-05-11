@@ -18,6 +18,7 @@ router = APIRouter(prefix="/api/events", tags=["events"])
 def list_events(
     employee_id: UUID | None = Query(default=None),
     severity: str | None = Query(default=None),
+    status: str | None = Query(default=None),
     event_type: str | None = Query(default=None),
     start_from: datetime | None = Query(default=None, alias="from"),
     end_to: datetime | None = Query(default=None, alias="to"),
@@ -27,6 +28,7 @@ def list_events(
     return QueryService(session).list_events(
         employee_id=employee_id,
         severity=severity,
+        status=status,
         event_type=event_type,
         start_from=start_from,
         end_to=end_to,

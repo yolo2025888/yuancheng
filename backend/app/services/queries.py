@@ -380,6 +380,7 @@ class QueryService:
         self,
         employee_id: UUID | None,
         severity: str | None,
+        status: str | None,
         event_type: str | None,
         start_from: datetime | None,
         end_to: datetime | None,
@@ -389,6 +390,12 @@ class QueryService:
             statement = statement.where(BehaviorEvent.employee_id == employee_id)
         if severity is not None:
             statement = statement.where(BehaviorEvent.severity == severity)
+        if status is not None:
+            normalized_status = status.strip().casefold()
+            if normalized_status == "reviewable":
+                statement = statement.where(BehaviorEvent.status.in_(REVIEWABLE_EVENT_STATUSES))
+            else:
+                statement = statement.where(BehaviorEvent.status == normalized_status)
         if event_type is not None:
             statement = statement.where(BehaviorEvent.event_type == event_type)
         if start_from is not None:

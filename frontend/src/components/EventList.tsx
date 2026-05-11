@@ -28,7 +28,7 @@ export function EventList({ items, reviewQueue, reviewQueueApiStatus }: EventLis
               {reviewQueueApiStatus.source === 'live' ? 'Live queue' : 'Fallback queue'}
             </Tag>
           ) : null}
-          <Link to="/events">
+          <Link to="/events?status=reviewable">
             <Button type="link">Open Events</Button>
           </Link>
         </Space>
