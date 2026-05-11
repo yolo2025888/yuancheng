@@ -1,0 +1,14 @@
+{
+  "SessionHelper": {
+    "PipeName": "employee-behavior-agent",
+    "EnableTrayIcon": true,
+    "RunInConsole": false,
+    "SampleLogIntervalSeconds": 60
+  },
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft": "Warning"
+    }
+  }
+}

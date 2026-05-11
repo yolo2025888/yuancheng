@@ -1,0 +1,30 @@
+{
+  "AgentService": {
+    "ApiBaseUrl": "https://backend.example.internal",
+    "ApiToken": "replace-with-device-or-agent-token",
+    "DryRun": true,
+    "DeviceIdPath": "C:\\ProgramData\\EmployeeBehaviorAgent\\device-id.json",
+    "SessionHelperPipeName": "employee-behavior-agent",
+    "HeartbeatIntervalSeconds": 30,
+    "PolicyRefreshIntervalSeconds": 300,
+    "UploadPollIntervalSeconds": 5,
+    "UploadBatchSize": 2,
+    "DefaultPolicy": {
+      "Version": "bootstrap",
+      "CaptureEnabled": true,
+      "ScreenshotIntervalSeconds": 10,
+      "NoChangeThreshold": 6,
+      "HighRiskDurationMinutes": 5,
+      "GithubRiskWeight": "high",
+      "FileTransferRiskWeight": "high",
+      "NormalApps": [ "IDE", "Terminal", "Browser", "Git Client", "Database Tool" ],
+      "LowChangeContexts": [ "documentation", "terminal", "code_review" ]
+    }
+  },
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft": "Warning"
+    }
+  }
+}
