@@ -1,5 +1,6 @@
 import {
   AlertOutlined,
+  KeyOutlined,
   ClockCircleOutlined,
   DashboardOutlined,
   DeploymentUnitOutlined,
@@ -12,6 +13,7 @@ import {
 import { createBrowserRouter } from 'react-router-dom';
 
 import App from './App';
+import { AccessRolesPage } from './pages/AccessRoles';
 import { AuditLogsPage } from './pages/AuditLogs';
 import { DashboardPage } from './pages/Dashboard';
 import { DevicesPage } from './pages/Devices';
@@ -74,6 +76,12 @@ export const navRoutes: NavRoute[] = [
     icon: <UnorderedListOutlined />
   },
   {
+    key: 'access-roles',
+    label: 'Access Roles',
+    path: '/access-roles',
+    icon: <KeyOutlined />
+  },
+  {
     key: 'policies',
     label: 'Policies',
     path: '/policies',
@@ -105,6 +113,7 @@ export const router = createBrowserRouter([
       { path: 'timeline', element: <TimelinePage /> },
       { path: 'events', element: <EventsPage /> },
       { path: 'screenshot-detail', element: <ScreenshotDetailPage /> },
+      { path: 'access-roles', element: <AccessRolesPage /> },
       { path: 'policies', element: <PoliciesPage /> },
       { path: 'audit-logs', element: <AuditLogsPage /> },
       { path: 'github-risk', element: <GitHubRiskPage /> }

@@ -44,6 +44,33 @@ export type HeatmapPoint = {
   status: string;
 };
 
+export type RiskScoreRecord = {
+  key: string;
+  employee: string;
+  employeeNo?: string;
+  department: string;
+  role: string;
+  position?: string;
+  slot: string;
+  score: number;
+  riskLevel: number;
+  status: string;
+  eventCount: number;
+  policyName?: string;
+};
+
+export type AccessMatrixRecord = {
+  key: string;
+  role: string;
+  modules: string[];
+  actions: string[];
+  departments: string[];
+  positions: string[];
+  employees: string[];
+  employeeCount: number;
+  policyNames: string[];
+};
+
 export type EventSeverity = 'low' | 'medium' | 'high' | 'critical';
 
 export type EventStatus =

@@ -143,3 +143,99 @@ class AuditLogItem(BaseModel):
 class AuditLogListResponse(BaseModel):
     items: list[AuditLogItem]
     total: int
+
+
+class RiskFactorItem(BaseModel):
+    code: str
+    label: str
+    points: int = Field(ge=0)
+    reason: str
+
+
+class EmployeeRiskScoreItem(BaseModel):
+    employee_id: UUID
+    employee_no: str
+    employee_name: str
+    department: str | None = None
+    job_role: str | None = None
+    score: int = Field(ge=0, le=100)
+    label: str
+    reasons: list[str] = Field(default_factory=list)
+    active_device_count: int = 0
+    total_device_count: int = 0
+    latest_heartbeat_at: datetime | None = None
+    latest_screenshot_at: datetime | None = None
+    open_event_count: int = 0
+    high_severity_event_count: int = 0
+    stalled_event_count: int = 0
+    policy_name: str | None = None
+    policy_version: str | None = None
+    has_targeted_policy: bool = False
+    factors: list[RiskFactorItem] = Field(default_factory=list)
+
+
+class EmployeeRiskScoreListResponse(BaseModel):
+    items: list[EmployeeRiskScoreItem]
+    total: int
+    generated_at: datetime
+
+
+class RiskLevelBreakdown(BaseModel):
+    low: int = 0
+    medium: int = 0
+    high: int = 0
+    critical: int = 0
+
+
+class DashboardPolicyCoverage(BaseModel):
+    active_policy_count: int
+    targeted_active_policy_count: int
+    employees_with_targeted_policy: int
+    employees_default_only: int
+
+
+class DashboardSummaryResponse(BaseModel):
+    generated_at: datetime
+    employee_count: int
+    active_employee_count: int
+    device_count: int
+    online_device_count: int
+    stale_device_count: int
+    offline_device_count: int
+    screenshot_count_24h: int
+    open_event_count: int
+    unresolved_high_risk_event_count: int
+    risk_distribution: RiskLevelBreakdown
+    policy_coverage: DashboardPolicyCoverage
+    top_risks: list[EmployeeRiskScoreItem] = Field(default_factory=list)
+
+
+class AccessCapabilityItem(BaseModel):
+    key: str
+    label: str
+    description: str
+
+
+class AccessRoleUserItem(BaseModel):
+    id: UUID
+    username: str
+    display_name: str | None = None
+    email: str | None = None
+    status: str
+
+
+class AccessRoleMatrixItem(BaseModel):
+    role_id: UUID | None = None
+    name: str
+    description: str | None = None
+    source: str
+    permission_keys: list[str] = Field(default_factory=list)
+    member_count: int = 0
+    users: list[AccessRoleUserItem] = Field(default_factory=list)
+
+
+class AccessMatrixResponse(BaseModel):
+    generated_at: datetime
+    capabilities: list[AccessCapabilityItem]
+    roles: list[AccessRoleMatrixItem]
+    unassigned_users: list[AccessRoleUserItem] = Field(default_factory=list)

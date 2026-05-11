@@ -5,9 +5,7 @@ type EmployeeHeatmapChartProps = {
   data: HeatmapPoint[];
 };
 
-export function EmployeeHeatmapChart({
-  data
-}: EmployeeHeatmapChartProps) {
+export function EmployeeHeatmapChart({ data }: EmployeeHeatmapChartProps) {
   const employees = Array.from(new Set(data.map((item) => item.employee)));
   const slots = Array.from(new Set(data.map((item) => item.slot)));
 
@@ -15,12 +13,12 @@ export function EmployeeHeatmapChart({
     const tuple = (params.data ?? []) as [number, number, number, string];
     const [slotIndex, employeeIndex, riskLevel, status] = tuple;
 
-    return `${employees[employeeIndex]}<br/>${slots[slotIndex]}<br/>${status} / 级别 ${riskLevel}`;
+    return `${employees[employeeIndex]}<br/>${slots[slotIndex]}<br/>${status} / level ${riskLevel}`;
   };
 
   return (
     <EChartPanel
-      title="员工 x 时间热力图"
+      title="Employee Risk Heatmap"
       option={{
         tooltip: {
           position: 'top',

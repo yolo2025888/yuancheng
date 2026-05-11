@@ -14,6 +14,7 @@ import {
 } from '../mock/data';
 import { apiClient, getErrorMessage } from './apiClient';
 import type {
+  AccessMatrixRecord,
   ApiResult,
   ApiStatus,
   AuditLogRecord,
@@ -24,20 +25,28 @@ import type {
   EventRecord,
   EventSeverity,
   EventStatus,
+  HeatmapPoint,
   KpiMetric,
   LinkedRiskRecord,
   PolicyMutationInput,
   PolicyRecord,
   RealtimeStatusRecord,
+  RiskScoreRecord,
   ScreenshotComparison,
   ScreenshotListItem,
+  StatusBucket,
   TimelineSegment
 } from '../types/models';
 
 type DashboardData = {
   kpis: KpiMetric[];
-  workStatusSeries: typeof workStatusSeries;
-  employeeHeatmap: typeof employeeHeatmap;
+  workStatusSeries: StatusBucket[];
+  employeeHeatmap: HeatmapPoint[];
+  riskScores: RiskScoreRecord[];
+  accessMatrix: AccessMatrixRecord[];
+  dashboardApiStatus: ApiStatus;
+  riskApiStatus: ApiStatus;
+  accessApiStatus: ApiStatus;
   events: EventRecord[];
   eventApiStatus: ApiStatus;
   backendHealth: BackendHealth;
@@ -62,6 +71,12 @@ type EmployeeListData = ApiResult<EmployeeRecord[]>;
 type DeviceListData = ApiResult<DeviceRecord[]>;
 type PolicyListData = ApiResult<PolicyRecord[]>;
 type AuditLogListData = ApiResult<AuditLogRecord[]>;
+type DashboardSummaryData = ApiResult<{
+  kpis: KpiMetric[];
+  workStatusSeries: StatusBucket[];
+}>;
+type RiskScoreListData = ApiResult<RiskScoreRecord[]>;
+type AccessMatrixListData = ApiResult<AccessMatrixRecord[]>;
 type PolicyMutationResult = { apiStatus: ApiStatus; data?: PolicyRecord[] };
 type PolicyStateAction = 'activate' | 'deactivate' | 'set_active';
 type PolicyMutationAttempt = {
@@ -218,14 +233,101 @@ const unavailableStatus = (endpoint: string, detail: string): ApiStatus => ({
 export const adminApi = {
   async getDashboardData(): Promise<DashboardData> {
     const [eventResult, backendHealth] = await Promise.all([this.getEvents(), this.getHealth()]);
+    const [summaryResult, riskResult, accessResult] = await Promise.all([
+      this.getDashboardSummary(eventResult.data),
+      this.getRiskScores(),
+      this.getAccessMatrix()
+    ]);
 
-  return {
-      kpis: buildDashboardKpis(eventResult.data),
-      workStatusSeries,
-      employeeHeatmap,
+    return {
+      kpis: summaryResult.data.kpis,
+      workStatusSeries: summaryResult.data.workStatusSeries,
+      employeeHeatmap: buildHeatmapFromRiskScores(riskResult.data),
+      riskScores: sortRiskScores(riskResult.data),
+      accessMatrix: accessResult.data,
+      dashboardApiStatus: summaryResult.apiStatus,
+      riskApiStatus: riskResult.apiStatus,
+      accessApiStatus: accessResult.apiStatus,
       events: eventResult.data,
       eventApiStatus: eventResult.apiStatus,
       backendHealth
+    };
+  },
+
+  async getDashboardSummary(fallbackEvents: EventRecord[] = []): Promise<DashboardSummaryData> {
+    const endpoint = '/api/dashboard/summary';
+
+    try {
+      const payload = await apiClient<unknown>(endpoint);
+      const root = unwrapPrimaryRecord(payload);
+      const kpis = mapDashboardSummaryKpis(root, fallbackEvents);
+      const liveSeries = extractStatusBuckets(root);
+
+      return {
+        data: {
+          kpis,
+          workStatusSeries: liveSeries.length > 0 ? liveSeries : workStatusSeries
+        },
+        apiStatus: liveStatus(endpoint, 'Dashboard summary loaded')
+      };
+    } catch (error) {
+      return {
+        data: {
+          kpis: buildDashboardKpis(fallbackEvents),
+          workStatusSeries
+        },
+        apiStatus: fallbackStatus(endpoint, getErrorMessage(error))
+      };
+    }
+  },
+
+  async getRiskScores(): Promise<RiskScoreListData> {
+    const endpoint = '/api/risk/scores';
+
+    try {
+      const payload = await apiClient<unknown>(endpoint);
+      const scores = mapRiskScoreRecords(payload);
+
+      return {
+        data: sortRiskScores(scores),
+        apiStatus: liveStatus(endpoint, `Loaded ${scores.length} risk score rows`)
+      };
+    } catch (error) {
+      const fallbackScores = buildMockRiskScores();
+
+      return {
+        data: fallbackScores,
+        apiStatus: fallbackStatus(endpoint, getErrorMessage(error))
+      };
+    }
+  },
+
+  async getAccessMatrix(): Promise<AccessMatrixListData> {
+    const endpoints = ['/api/access/matrix', '/api/access-matrix'];
+    let lastError: unknown;
+
+    for (const endpoint of endpoints) {
+      try {
+        const payload = await apiClient<unknown>(endpoint);
+        const records = mapAccessMatrixRecords(payload);
+
+        if (records.length === 0) {
+          throw new Error('Access matrix payload did not contain usable role rows');
+        }
+
+        return {
+          data: sortAccessMatrix(records),
+          apiStatus: liveStatus(endpoint, `Loaded ${records.length} access-role rows`)
+        };
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    const fallbackRecords = buildMockAccessMatrix();
+    return {
+      data: fallbackRecords,
+      apiStatus: fallbackStatus(endpoints[0], getErrorMessage(lastError))
     };
   },
 
@@ -959,6 +1061,649 @@ function buildDashboardKpis(eventItems: EventRecord[]): KpiMetric[] {
       delta: noChangeCount > 0 ? `${noChangeCount} no-change streak` : 'No no-change streak',
       tone: noChangeCount > 0 ? 'warning' : 'positive'
     };
+  });
+}
+
+function mapDashboardSummaryKpis(
+  root: Record<string, unknown> | undefined,
+  fallbackEvents: EventRecord[]
+): KpiMetric[] {
+  if (!root) {
+    return buildDashboardKpis(fallbackEvents);
+  }
+
+  const countSources = collectRecordSources(
+    root,
+    pickRecords(root, ['summary', 'counts', 'metrics', 'totals', 'overview']),
+    pickRecords(root, ['data', 'stats', 'dashboard'])
+  );
+  const fallbackKpis = buildDashboardKpis(fallbackEvents);
+  const onlineDevices = readNumberFromSources(countSources, [
+    'online_devices',
+    'online_device_count',
+    'onlineDevices',
+    'devices_online'
+  ]);
+  const totalDevices = readNumberFromSources(countSources, ['total_devices', 'device_count', 'totalDevices']);
+  const activeEmployees = readNumberFromSources(countSources, [
+    'active_employees',
+    'active_employee_count',
+    'activeEmployees',
+    'employees_active'
+  ]);
+  const totalEmployees = readNumberFromSources(countSources, [
+    'total_employees',
+    'employee_count',
+    'totalEmployees'
+  ]);
+  const highRiskEvents = readNumberFromSources(countSources, [
+    'high_risk_events',
+    'unresolved_high_risk_event_count',
+    'open_risk_count',
+    'risk_event_count',
+    'highRiskEvents'
+  ]);
+  const reviewQueue = readNumberFromSources(countSources, [
+    'review_queue',
+    'open_event_count',
+    'reviewing_events',
+    'pending_reviews',
+    'pending_review_count'
+  ]);
+  const githubRiskEvents = readNumberFromSources(countSources, [
+    'github_risk_events',
+    'github_event_count',
+    'github_flagged_events',
+    'githubRisks'
+  ]);
+  const watchEmployees = readNumberFromSources(countSources, [
+    'watch_employees',
+    'watchlist_employees',
+    'employees_at_watch',
+    'watch_count'
+  ]);
+
+  return [
+    {
+      key: 'online',
+      title: 'Online devices',
+      value: String(onlineDevices ?? fallbackNumericKpi(fallbackKpis, 'online')),
+      delta:
+        totalDevices !== undefined
+          ? `of ${totalDevices} devices`
+          : fallbackDeltaKpi(fallbackKpis, 'online'),
+      tone: 'positive'
+    },
+    {
+      key: 'active',
+      title: 'Active employees',
+      value: String(activeEmployees ?? totalEmployees ?? fallbackNumericKpi(fallbackKpis, 'active')),
+      delta:
+        totalEmployees !== undefined
+          ? `of ${totalEmployees} employees`
+          : fallbackDeltaKpi(fallbackKpis, 'active'),
+      tone: 'positive'
+    },
+    {
+      key: 'risk',
+      title: 'High-risk events',
+      value: String(highRiskEvents ?? fallbackNumericKpi(fallbackKpis, 'risk')),
+      delta:
+        reviewQueue !== undefined
+          ? `${reviewQueue} in review`
+          : watchEmployees !== undefined
+            ? `${watchEmployees} watchlist`
+            : fallbackDeltaKpi(fallbackKpis, 'risk'),
+      tone: (highRiskEvents ?? 0) > 0 ? 'warning' : 'positive'
+    },
+    {
+      key: 'github',
+      title: 'GitHub risk events',
+      value: String(githubRiskEvents ?? 0),
+      delta:
+        githubRiskEvents === undefined
+          ? 'Not connected'
+          : watchEmployees !== undefined
+          ? `${watchEmployees} employees flagged`
+          : fallbackDeltaKpi(fallbackKpis, 'github'),
+      tone: (githubRiskEvents ?? 0) > 0 ? 'danger' : 'default'
+    }
+  ];
+}
+
+function extractStatusBuckets(root: Record<string, unknown> | undefined): StatusBucket[] {
+  if (!root) {
+    return [];
+  }
+
+  const directItems =
+    extractUnknownItems(
+      root.activity_distribution ??
+        root.activityDistribution ??
+        root.work_status_series ??
+        root.status_buckets ??
+        root.series
+    ) ?? extractUnknownItems(root, ['activity_distribution', 'activityDistribution', 'work_status_series', 'series']);
+
+  if (directItems && directItems.length > 0) {
+    return directItems
+      .map((item: unknown, index: number) => mapStatusBucket(item, index))
+      .filter((bucket: StatusBucket | null): bucket is StatusBucket => bucket !== null);
+  }
+
+  const distributionRecord = pickRecords(root, [
+    'activity_distribution',
+    'activityDistribution',
+    'status_distribution'
+  ]);
+  if (distributionRecord) {
+    return Object.entries(distributionRecord)
+      .map(([slot, value], index) => mapStatusBucket({ slot, ...(asRecord(value) ?? {}) }, index))
+      .filter((bucket): bucket is StatusBucket => bucket !== null);
+  }
+
+  return [];
+}
+
+function mapStatusBucket(item: unknown, index: number): StatusBucket | null {
+  const record = asRecord(item);
+  if (!record) {
+    return null;
+  }
+
+  const counts = pickRecords(record, ['counts', 'distribution', 'status_counts']);
+  const sources = collectRecordSources(record, counts);
+  const values: StatusBucket = {
+    slot:
+      firstString(
+        readString(record, ['slot', 'time', 'label', 'hour']),
+        readString(counts, ['slot', 'time', 'label', 'hour'])
+      ) ?? `${String(index + 1).padStart(2, '0')}:00`,
+    coding: readNumberFromSources(sources, ['coding', 'code', 'development']) ?? 0,
+    review: readNumberFromSources(sources, ['review', 'code_review', 'pr_review']) ?? 0,
+    meeting: readNumberFromSources(sources, ['meeting', 'meetings']) ?? 0,
+    documentation: readNumberFromSources(sources, ['documentation', 'docs', 'writing']) ?? 0,
+    communication: readNumberFromSources(sources, ['communication', 'chat', 'messaging', 'collaboration']) ?? 0,
+    idle: readNumberFromSources(sources, ['idle', 'inactive']) ?? 0,
+    locked: readNumberFromSources(sources, ['locked', 'lock_screen', 'away']) ?? 0
+  };
+
+  const total =
+    values.coding +
+    values.review +
+    values.meeting +
+    values.documentation +
+    values.communication +
+    values.idle +
+    values.locked;
+
+  return total > 0 ? values : null;
+}
+
+function mapRiskScoreRecords(payload: unknown): RiskScoreRecord[] {
+  const items = extractUnknownItems(payload, ['items', 'rows', 'records', 'scores', 'employees', 'results', 'data']);
+  if (!items || items.length === 0) {
+    return [];
+  }
+
+  return items.flatMap((item: unknown, index: number) => expandRiskScoreRecord(item, index));
+}
+
+function expandRiskScoreRecord(item: unknown, index: number): RiskScoreRecord[] {
+  const record = asRecord(item);
+  if (!record) {
+    return [];
+  }
+
+  const slotItems = extractUnknownItems(record, ['history', 'slots', 'timeline', 'buckets']);
+  if (slotItems && slotItems.length > 0) {
+    const expanded = slotItems
+      .map((slotItem: unknown, slotIndex: number) => mapRiskScoreRecord(slotItem, index, slotIndex, record))
+      .filter((entry: RiskScoreRecord | null): entry is RiskScoreRecord => entry !== null);
+
+    if (expanded.length > 0) {
+      return expanded;
+    }
+  }
+
+  const mapped = mapRiskScoreRecord(record, index);
+  return mapped ? [mapped] : [];
+}
+
+function mapRiskScoreRecord(
+  item: unknown,
+  index: number,
+  slotIndex = 0,
+  parent?: Record<string, unknown>
+): RiskScoreRecord | null {
+  const record = asRecord(item);
+  if (!record) {
+    return null;
+  }
+
+  const employee = pickRecords(record, ['employee', 'employee_summary']) ?? pickRecords(parent, ['employee']);
+  const policy = pickRecords(record, ['policy', 'policy_summary']) ?? pickRecords(parent, ['policy', 'policy_summary']);
+  const employeeName =
+    firstString(
+      readString(record, ['employee_name', 'employee', 'name', 'display_name']),
+      readString(employee, ['name', 'display_name', 'employee_name']),
+      readString(parent, ['employee_name'])
+    ) ?? `Employee ${index + 1}`;
+  const scoreValue = normalizeRiskScoreValue(
+    readNumber(record, ['score', 'risk_score', 'riskScore', 'current_score', 'value']) ??
+      readNumber(parent, ['score', 'risk_score', 'riskScore'])
+  );
+  const riskLevel = normalizeRiskLevel(
+    readNumber(record, ['risk_level', 'riskLevel', 'level']) ??
+      readNumber(parent, ['risk_level', 'riskLevel', 'level']),
+    scoreValue,
+    firstString(readString(record, ['status', 'band', 'state']), readString(parent, ['status', 'band', 'state']))
+  );
+
+  return {
+    key:
+      firstString(
+        readString(record, ['id', 'key']),
+        readString(parent, ['id', 'key'])
+      ) ?? `${employeeName}-${index + 1}-${slotIndex + 1}`,
+    employee: employeeName,
+    employeeNo:
+      firstString(
+        readString(record, ['employee_no', 'employeeNo']),
+        readString(employee, ['employee_no', 'employeeNo', 'code'])
+      ) ?? undefined,
+    department:
+      firstString(
+        readString(record, ['department', 'department_name']),
+        readString(employee, ['department', 'department_name']),
+        readString(parent, ['department'])
+      ) ?? 'Unassigned',
+    role:
+      firstString(
+        readString(record, ['role', 'job_role', 'employee_role']),
+        readString(employee, ['role', 'job_role', 'job_family']),
+        readString(parent, ['role', 'job_role'])
+      ) ?? 'General',
+    position:
+      firstString(
+        readString(record, ['position', 'job_title', 'title']),
+        readString(employee, ['position', 'job_title', 'title']),
+        readString(parent, ['position', 'job_title'])
+      ) ?? undefined,
+    slot:
+      firstString(
+        readString(record, ['slot', 'time_slot', 'time', 'label', 'hour']),
+        readString(parent, ['slot', 'time_slot'])
+      ) ?? 'Current',
+    score: scoreValue,
+    riskLevel,
+    status:
+      firstString(
+        readString(record, ['status', 'band', 'state']),
+        readString(parent, ['status', 'band', 'state']),
+        riskStatusLabel(riskLevel)
+      ) ?? 'Normal',
+    eventCount:
+      readNumber(record, ['event_count', 'risk_count', 'open_risk_count', 'count']) ??
+      readNumber(parent, ['event_count', 'risk_count', 'open_risk_count', 'count']) ??
+      0,
+    policyName:
+      firstString(
+        readString(record, ['policy_name']),
+        readString(policy, ['name', 'policy_name']),
+        readString(parent, ['policy_name'])
+      ) ?? undefined
+  };
+}
+
+function buildHeatmapFromRiskScores(scores: RiskScoreRecord[]): HeatmapPoint[] {
+  if (scores.length === 0) {
+    return [];
+  }
+
+  const merged = new Map<string, HeatmapPoint>();
+
+  for (const item of scores) {
+    const key = `${item.employee}::${item.slot}`;
+    const next: HeatmapPoint = {
+      employee: item.employee,
+      slot: item.slot,
+      riskLevel: item.riskLevel,
+      status: `${formatLabel(item.status)} / score ${Math.round(item.score)}`
+    };
+    const current = merged.get(key);
+
+    if (!current || current.riskLevel <= next.riskLevel) {
+      merged.set(key, next);
+    }
+  }
+
+  return Array.from(merged.values());
+}
+
+function buildMockRiskScores(): RiskScoreRecord[] {
+  return employeeHeatmap.map((point, index) => {
+    const employeeRecord = employees.find((item) => item.name === point.employee);
+
+    return {
+      key: `mock-risk-score-${index + 1}`,
+      employee: point.employee,
+      employeeNo: employeeRecord?.employeeNo,
+      department: employeeRecord?.department ?? 'Unassigned',
+      role: employeeRecord?.role ?? 'General',
+      position: employeeRecord?.position,
+      slot: point.slot,
+      score: point.riskLevel * 25,
+      riskLevel: point.riskLevel,
+      status: point.status,
+      eventCount: employeeRecord?.todayRisk ?? 0,
+      policyName: employeeRecord?.policyName
+    };
+  });
+}
+
+function mapAccessMatrixRecords(payload: unknown): AccessMatrixRecord[] {
+  const items = extractUnknownItems(payload, ['items', 'rows', 'records', 'roles', 'matrix', 'data']);
+  if (items && items.length > 0) {
+    return items
+      .map((item: unknown, index: number) => mapAccessMatrixRecord(item, index))
+      .filter((record: AccessMatrixRecord | null): record is AccessMatrixRecord => record !== null);
+  }
+
+  const root = unwrapPrimaryRecord(payload);
+  if (!root) {
+    return [];
+  }
+
+  return Object.entries(root)
+    .map(([role, value], index) => mapAccessMatrixRecord({ role, ...(asRecord(value) ?? {}) }, index))
+    .filter((record): record is AccessMatrixRecord => record !== null);
+}
+
+function mapAccessMatrixRecord(item: unknown, index: number): AccessMatrixRecord | null {
+  const record = asRecord(item);
+  if (!record) {
+    return null;
+  }
+
+  const roleRecord = asRecord(record.role);
+  const permissionItems = extractUnknownItems(record, ['permissions', 'grants', 'access', 'permission_matrix']);
+  const permissionKeys = readStringArray(record, ['permission_keys', 'permissionKeys']) ?? [];
+  const employeeItems = readArray(record, ['employees', 'members', 'employee_list']);
+  const policyItems = readArray(record, ['policies', 'policy_list']);
+  const modules = dedupeLabels(
+    collectStringList(
+      readStringArray(record, ['modules', 'allowed_modules', 'views']),
+      permissionItems ? extractPermissionModules(permissionItems) : undefined,
+      modulesFromPermissionKeys(permissionKeys)
+    )
+  );
+  const actions = dedupeLabels(
+    collectStringList(
+      readStringArray(record, ['actions', 'allowed_actions']),
+      permissionItems ? extractPermissionActions(permissionItems) : undefined,
+      actionsFromPermissionKeys(permissionKeys)
+    )
+  );
+  const employeesList = dedupeLabels(
+    collectStringList(
+      readStringArray(record, ['employees', 'employee_names', 'members']),
+      employeeItems ? extractFieldList(employeeItems, ['name', 'display_name', 'employee_name']) : undefined
+    )
+  );
+  const departments = dedupeLabels(
+    collectStringList(
+      readStringArray(record, ['departments', 'target_departments']),
+      employeeItems ? extractFieldList(employeeItems, ['department', 'department_name']) : undefined
+    )
+  );
+  const positions = dedupeLabels(
+    collectStringList(
+      readStringArray(record, ['positions', 'target_positions']),
+      employeeItems ? extractFieldList(employeeItems, ['position', 'job_title', 'title']) : undefined
+    )
+  );
+  const policyNames = dedupeLabels(
+    collectStringList(
+      readStringArray(record, ['policy_names']),
+      policyItems ? extractFieldList(policyItems, ['name', 'policy_name']) : undefined
+    )
+  );
+  const role =
+    firstString(readString(record, ['role', 'job_role', 'name', 'label']), readString(roleRecord, ['name', 'label'])) ??
+    `Role ${index + 1}`;
+
+  return {
+    key: readString(record, ['id', 'key']) ?? `${role}-${index + 1}`,
+    role,
+    modules,
+    actions,
+    departments,
+    positions,
+    employees: employeesList,
+    employeeCount:
+      readNumber(record, ['employee_count', 'assigned_employee_count', 'member_count']) ?? employeesList.length,
+    policyNames
+  };
+}
+
+function buildMockAccessMatrix(): AccessMatrixRecord[] {
+  const roles = Array.from(new Set([...employees.map((item) => item.role), ...policies.flatMap((item) => item.roles)]));
+
+  return roles.map((role, index) => {
+    const relatedEmployees = employees.filter((item) => item.role === role);
+    const relatedPolicies = policies.filter((item) => item.roles.includes(role) || item.role === role);
+
+    return {
+      key: `mock-access-${index + 1}`,
+      role,
+      modules: buildDefaultModulesForRole(role),
+      actions: buildDefaultActionsForRole(role),
+      departments: dedupeLabels([
+        ...relatedEmployees.map((item) => item.department),
+        ...relatedPolicies.flatMap((item) => item.departments)
+      ]),
+      positions: dedupeLabels([
+        ...relatedEmployees.map((item) => item.position ?? ''),
+        ...relatedPolicies.flatMap((item) => item.positions)
+      ]),
+      employees: relatedEmployees.map((item) => item.name),
+      employeeCount: relatedEmployees.length,
+      policyNames: dedupeLabels(relatedPolicies.map((item) => item.name))
+    };
+  });
+}
+
+function buildDefaultModulesForRole(role: string) {
+  const normalized = role.toLowerCase();
+  const modules = ['Dashboard', 'Employees', 'Timeline', 'Events'];
+
+  if (normalized.includes('operation') || normalized.includes('sre')) {
+    modules.push('Realtime Status', 'Devices');
+  }
+
+  if (normalized.includes('security')) {
+    modules.push('Screenshot Detail', 'GitHub Risk', 'Audit Logs');
+  }
+
+  if (normalized.includes('quality')) {
+    modules.push('Policies', 'Audit Logs');
+  }
+
+  if (normalized.includes('engineering')) {
+    modules.push('Screenshot Detail');
+  }
+
+  return dedupeLabels(modules);
+}
+
+function buildDefaultActionsForRole(role: string) {
+  const normalized = role.toLowerCase();
+  const actions = ['View', 'Filter', 'Review'];
+
+  if (normalized.includes('operation') || normalized.includes('sre')) {
+    actions.push('Acknowledge', 'Assign Policy');
+  }
+
+  if (normalized.includes('security')) {
+    actions.push('Export', 'Escalate');
+  }
+
+  if (normalized.includes('quality')) {
+    actions.push('Adjust Policy');
+  }
+
+  return dedupeLabels(actions);
+}
+
+function extractPermissionModules(items: unknown[]) {
+  return items
+    .flatMap((item) => {
+      const record = asRecord(item);
+      if (!record) {
+        return [];
+      }
+
+      const permission = readString(record, ['permission']);
+      const explicitModule = readString(record, ['module', 'resource', 'name']);
+      const parsedModule = permission?.includes('.') ? permission.split('.')[0] : undefined;
+
+      return [explicitModule, parsedModule].filter((value): value is string => Boolean(value));
+    })
+    .map(formatLabel);
+}
+
+function extractPermissionActions(items: unknown[]) {
+  return items
+    .flatMap((item) => {
+      const record = asRecord(item);
+      if (!record) {
+        return [];
+      }
+
+      const explicitAction = readString(record, ['action', 'verb']);
+      const permission = readString(record, ['permission']);
+      const parsedAction = permission?.includes('.') ? permission.split('.').slice(1).join('.') : undefined;
+      const actionList = readStringArray(record, ['actions', 'verbs']);
+
+      return [explicitAction, parsedAction, ...(actionList ?? [])].filter(
+        (value): value is string => Boolean(value)
+      );
+    })
+    .map(formatLabel);
+}
+
+function modulesFromPermissionKeys(permissionKeys: string[]) {
+  return permissionKeys
+    .map((permissionKey) => permissionKey.split('.')[0])
+    .filter(Boolean)
+    .map(formatLabel);
+}
+
+function actionsFromPermissionKeys(permissionKeys: string[]) {
+  return permissionKeys
+    .map((permissionKey) => permissionKey.split('.').slice(1).join('_') || 'view')
+    .filter(Boolean)
+    .map(formatLabel);
+}
+
+function extractFieldList(items: unknown[], keys: string[]) {
+  return items
+    .map((item) => readString(asRecord(item), keys))
+    .filter((value): value is string => Boolean(value));
+}
+
+function normalizeRiskScoreValue(value?: number) {
+  if (value === undefined || Number.isNaN(value)) {
+    return 0;
+  }
+
+  return value <= 1 ? value * 100 : value;
+}
+
+function normalizeRiskLevel(explicitLevel: number | undefined, score: number, status?: string) {
+  if (explicitLevel !== undefined && Number.isFinite(explicitLevel)) {
+    return Math.max(0, Math.min(4, Math.round(explicitLevel)));
+  }
+
+  const normalizedStatus = status?.trim().toLowerCase();
+  if (normalizedStatus?.includes('critical') || normalizedStatus?.includes('high')) {
+    return 4;
+  }
+
+  if (normalizedStatus?.includes('watch') || normalizedStatus?.includes('medium')) {
+    return 3;
+  }
+
+  if (normalizedStatus?.includes('low')) {
+    return 1;
+  }
+
+  if (score >= 80) {
+    return 4;
+  }
+
+  if (score >= 60) {
+    return 3;
+  }
+
+  if (score >= 30) {
+    return 2;
+  }
+
+  if (score > 0) {
+    return 1;
+  }
+
+  return 0;
+}
+
+function riskStatusLabel(level: number) {
+  if (level >= 4) {
+    return 'High risk';
+  }
+
+  if (level >= 3) {
+    return 'Watch';
+  }
+
+  if (level >= 1) {
+    return 'Normal';
+  }
+
+  return 'Low';
+}
+
+function fallbackNumericKpi(kpis: KpiMetric[], key: string) {
+  const match = kpis.find((item) => item.key === key);
+  return Number(match?.value ?? 0);
+}
+
+function fallbackDeltaKpi(kpis: KpiMetric[], key: string) {
+  return kpis.find((item) => item.key === key)?.delta ?? '--';
+}
+
+function sortRiskScores(scores: RiskScoreRecord[]) {
+  return [...scores].sort((left, right) => {
+    if (right.riskLevel !== left.riskLevel) {
+      return right.riskLevel - left.riskLevel;
+    }
+
+    if (right.score !== left.score) {
+      return right.score - left.score;
+    }
+
+    return left.employee.localeCompare(right.employee);
+  });
+}
+
+function sortAccessMatrix(records: AccessMatrixRecord[]) {
+  return [...records].sort((left, right) => {
+    if (right.employeeCount !== left.employeeCount) {
+      return right.employeeCount - left.employeeCount;
+    }
+
+    return left.role.localeCompare(right.role);
   });
 }
 
@@ -1723,6 +2468,55 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
   }
 
   return undefined;
+}
+
+function unwrapPrimaryRecord(payload: unknown) {
+  const record = asRecord(payload);
+  if (!record) {
+    return undefined;
+  }
+
+  return pickRecords(record, ['data', 'summary', 'result', 'dashboard']) ?? record;
+}
+
+function extractUnknownItems(payload: unknown, keys: string[] = ['items']): unknown[] | undefined {
+  if (Array.isArray(payload)) {
+    return payload;
+  }
+
+  const record = asRecord(payload);
+  if (!record) {
+    return undefined;
+  }
+
+  for (const key of keys) {
+    const directValue = record[key];
+    if (Array.isArray(directValue)) {
+      return directValue;
+    }
+
+    const nestedValue = asRecord(directValue);
+    if (!nestedValue) {
+      continue;
+    }
+
+    const nestedItems: unknown[] | undefined = extractUnknownItems(nestedValue, [
+      'items',
+      'rows',
+      'records',
+      'results',
+      'data'
+    ]);
+    if (nestedItems && nestedItems.length > 0) {
+      return nestedItems;
+    }
+  }
+
+  return undefined;
+}
+
+function collectRecordSources(...values: Array<Record<string, unknown> | undefined>) {
+  return values.filter((value): value is Record<string, unknown> => Boolean(value));
 }
 
 function nestedRecord(source: Record<string, unknown> | undefined, key: string) {

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -10,7 +10,7 @@ from sqlmodel import Session, select
 
 from app.core.config import Settings
 from app.main import create_app
-from app.models import AuditLog, BehaviorEvent, Device, Employee, Policy
+from app.models import AuditLog, BehaviorEvent, Device, Employee, Policy, Role, Screenshot, User
 
 
 def test_admin_list_apis_return_employees_devices_and_policies(
@@ -327,3 +327,264 @@ def test_sqlite_schema_ensure_adds_new_columns_to_existing_db(tmp_path: Path) ->
         "input_desktop_name",
         "session_connect_state",
     } <= screenshot_columns
+
+
+def test_dashboard_summary_reports_real_counts_and_top_risks(
+    client: TestClient,
+    seeded_device: dict[str, str],
+) -> None:
+    app = client.app
+    now = datetime.now(timezone.utc)
+    alice_id = UUID(seeded_device["employee_id"])
+    alice_device_id = UUID(seeded_device["device_id"])
+    bob_id = uuid4()
+    bob_device_id = uuid4()
+
+    with Session(app.state.engine) as session:
+        alice = session.get(Employee, alice_id)
+        assert alice is not None
+        alice.job_role = "Engineer"
+        alice.department = "Engineering"
+
+        bob = Employee(
+            id=bob_id,
+            name="Bob",
+            employee_no="E-002",
+            department="Support",
+            job_role="Support Specialist",
+            status="active",
+        )
+        bob_device = Device(
+            id=bob_device_id,
+            employee_id=bob_id,
+            hostname="SUP-PC-002",
+            os_type="windows",
+            agent_version="0.1.0",
+            screen_count=1,
+            last_heartbeat_at=now,
+            status="offline",
+        )
+        targeted_policy = Policy(
+            name="engineering-ops",
+            version="2026.05",
+            screenshot_interval_seconds=10,
+            no_change_threshold=4,
+            retention_days=30,
+            is_active=True,
+            rules_json={"roles": ["engineer"], "departments": ["engineering"]},
+        )
+        screenshot = Screenshot(
+            employee_id=alice_id,
+            device_id=alice_device_id,
+            captured_at=now.replace(microsecond=0) - timedelta(minutes=20),
+            screen_index=0,
+            image_uri="/storage/screens/alice.png",
+            thumb_uri="/storage/thumbs/alice.png",
+            width=1920,
+            height=1080,
+            foreground_process="Cursor.exe",
+            window_title="Project Dashboard",
+            keyboard_count=12,
+            mouse_click_count=4,
+            mouse_move_count=8,
+            mouse_wheel_count=1,
+            window_switch_count=2,
+            is_locked=False,
+            is_remote_session=False,
+            is_rdp_session=False,
+            idle_seconds=12,
+            upload_status="uploaded",
+            ocr_status="skipped",
+            analysis_status="complete",
+        )
+        event = BehaviorEvent(
+            employee_id=alice_id,
+            device_id=alice_device_id,
+            event_type="no_change_streak_triggered",
+            severity="high",
+            start_at=now.replace(microsecond=0) - timedelta(minutes=30),
+            streak_count=6,
+            status="open",
+            reason="No visual changes detected across repeated captures.",
+            details_json={"screen_index": 0},
+        )
+        session.add(bob)
+        session.add(bob_device)
+        session.add(targeted_policy)
+        session.add(screenshot)
+        session.add(event)
+        session.commit()
+
+    response = client.get("/api/dashboard/summary")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["employee_count"] == 2
+    assert payload["active_employee_count"] == 2
+    assert payload["device_count"] == 2
+    assert payload["online_device_count"] == 1
+    assert payload["stale_device_count"] == 0
+    assert payload["offline_device_count"] == 1
+    assert payload["screenshot_count_24h"] == 1
+    assert payload["open_event_count"] == 1
+    assert payload["unresolved_high_risk_event_count"] == 1
+    assert payload["policy_coverage"] == {
+        "active_policy_count": 2,
+        "targeted_active_policy_count": 1,
+        "employees_with_targeted_policy": 1,
+        "employees_default_only": 1,
+    }
+    assert payload["risk_distribution"]["high"] == 1
+    assert payload["risk_distribution"]["medium"] == 1
+    assert payload["top_risks"][0]["employee_name"] == "Alice"
+    assert payload["top_risks"][0]["label"] == "high"
+    assert any("No-change activity" in reason for reason in payload["top_risks"][0]["reasons"])
+
+
+def test_risk_scores_endpoint_returns_transparent_employee_scores(
+    client: TestClient,
+    seeded_device: dict[str, str],
+) -> None:
+    app = client.app
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    employee_id = UUID(seeded_device["employee_id"])
+    device_id = UUID(seeded_device["device_id"])
+
+    with Session(app.state.engine) as session:
+        employee = session.get(Employee, employee_id)
+        assert employee is not None
+        employee.job_role = "Engineer"
+        employee.department = "Engineering"
+
+        device = session.get(Device, device_id)
+        assert device is not None
+        device.last_heartbeat_at = now - timedelta(minutes=45)
+        device.status = "online"
+
+        policy = Policy(
+            name="sales-only",
+            version="2026.05",
+            screenshot_interval_seconds=15,
+            no_change_threshold=4,
+            retention_days=30,
+            is_active=True,
+            rules_json={"roles": ["sales"]},
+        )
+        event = BehaviorEvent(
+            employee_id=employee_id,
+            device_id=device_id,
+            event_type="no_change_streak_triggered",
+            severity="high",
+            start_at=now - timedelta(hours=1),
+            streak_count=7,
+            status="open",
+            reason="Repeated identical screenshots exceeded threshold.",
+            details_json={"screen_index": 0, "threshold": 4},
+        )
+        session.add(policy)
+        session.add(event)
+        session.commit()
+
+    response = client.get("/api/risk/scores", params={"limit": 1})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 1
+    assert len(payload["items"]) == 1
+    item = payload["items"][0]
+    assert item["employee_id"] == str(employee_id)
+    assert item["employee_name"] == "Alice"
+    assert item["score"] >= 75
+    assert item["label"] == "critical"
+    assert item["open_event_count"] == 1
+    assert item["high_severity_event_count"] == 1
+    assert item["stalled_event_count"] == 1
+    assert item["policy_name"] == "default"
+    assert item["policy_version"] == "mvp"
+    assert item["has_targeted_policy"] is False
+    factor_codes = {factor["code"] for factor in item["factors"]}
+    assert {
+        "behavior_events",
+        "no_change_streak",
+        "heartbeat_aged",
+        "screenshot_missing",
+        "policy_coverage",
+    } <= factor_codes
+    assert all(isinstance(reason, str) and reason for reason in item["reasons"])
+
+
+def test_access_matrix_endpoint_returns_roles_users_and_recommended_planning_matrix(client: TestClient) -> None:
+    app = client.app
+    admin_role_id = uuid4()
+    reviewer_role_id = uuid4()
+    assigned_user_id = uuid4()
+    unassigned_user_id = uuid4()
+
+    with Session(app.state.engine) as session:
+        session.add(
+            Role(
+                id=admin_role_id,
+                name="Admin",
+                description="Platform administrators",
+            )
+        )
+        session.add(
+            Role(
+                id=reviewer_role_id,
+                name="Reviewer",
+                description="Investigates escalations",
+            )
+        )
+        session.add(
+            User(
+                id=assigned_user_id,
+                username="alice.admin",
+                display_name="Alice Admin",
+                email="alice@example.com",
+                password_hash="secret-1",
+                role_id=admin_role_id,
+                status="active",
+            )
+        )
+        session.add(
+            User(
+                id=unassigned_user_id,
+                username="bob.pending",
+                display_name="Bob Pending",
+                email="bob@example.com",
+                password_hash="secret-2",
+                role_id=None,
+                status="pending",
+            )
+        )
+        session.commit()
+
+    response = client.get("/api/access/matrix")
+    legacy_response = client.get("/api/access-matrix")
+
+    assert response.status_code == 200
+    assert legacy_response.status_code == 200
+    payload = response.json()
+    assert legacy_response.json()["roles"] == payload["roles"]
+    admin_role = next(role for role in payload["roles"] if role["name"] == "Admin")
+    assert admin_role["source"] == "existing"
+    assert admin_role["member_count"] == 1
+    assert admin_role["users"][0]["username"] == "alice.admin"
+    assert "password_hash" not in admin_role["users"][0]
+    assert "dashboard.view" in admin_role["permission_keys"]
+
+    reviewer_role = next(role for role in payload["roles"] if role["name"] == "Reviewer")
+    assert reviewer_role["source"] == "existing"
+    assert "events.review" in reviewer_role["permission_keys"]
+
+    recommended_roles = {role["name"] for role in payload["roles"] if role["source"] == "recommended"}
+    assert {"Compliance", "Manager", "Risk Analyst"} <= recommended_roles
+    assert payload["unassigned_users"] == [
+        {
+            "id": str(unassigned_user_id),
+            "username": "bob.pending",
+            "display_name": "Bob Pending",
+            "email": "bob@example.com",
+            "status": "pending",
+        }
+    ]

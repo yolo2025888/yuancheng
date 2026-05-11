@@ -61,6 +61,15 @@ body {
   opacity: 0.7;
 }
 
+.ant-layout-sider-collapsed .brand-block {
+  justify-content: center;
+  padding-inline: 0;
+}
+
+.ant-layout-sider-collapsed .brand-block .ant-space {
+  display: none;
+}
+
 .app-header {
   position: sticky;
   top: 0;

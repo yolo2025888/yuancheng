@@ -1,21 +1,32 @@
 from __future__ import annotations
 
+from collections import defaultdict
 from datetime import date, datetime, time, timezone
 from uuid import UUID
 
 from sqlmodel import Session, select
 
-from app.models import AuditLog, BehaviorEvent, Device, Employee, Policy, ScreenDiff, Screenshot
+from app.models import AuditLog, BehaviorEvent, Device, Employee, Policy, Role, ScreenDiff, Screenshot, User
 from app.schemas.admin import (
+    AccessCapabilityItem,
+    AccessMatrixResponse,
+    AccessRoleMatrixItem,
+    AccessRoleUserItem,
     AuditLogItem,
     AuditLogListResponse,
+    DashboardPolicyCoverage,
+    DashboardSummaryResponse,
     DeviceItem,
     DeviceListResponse,
+    EmployeeRiskScoreItem,
+    EmployeeRiskScoreListResponse,
     EmployeeItem,
     EmployeeListResponse,
     PolicyItem,
     PolicyListResponse,
     PolicySummary,
+    RiskFactorItem,
+    RiskLevelBreakdown,
     SafeForegroundWindow,
     SafeInputActivity,
     SafeSessionState,
@@ -34,6 +45,104 @@ from app.schemas.query import (
     TimelineItem,
     TimelineResponse,
     TimelineRiskEvent,
+)
+
+SEVERITY_WEIGHTS = {
+    "low": 8,
+    "medium": 18,
+    "high": 30,
+    "critical": 42,
+}
+
+STATUS_MULTIPLIERS = {
+    "open": 1.0,
+    "in_progress": 0.85,
+    "reviewed": 0.6,
+    "resolved": 0.25,
+    "dismissed": 0.15,
+}
+
+STALE_DEVICE_AFTER_SECONDS = 10 * 60
+AGED_DEVICE_AFTER_SECONDS = 30 * 60
+ACCESS_CAPABILITY_DEFINITIONS = (
+    {
+        "key": "dashboard.view",
+        "label": "Dashboard summary",
+        "description": "View aggregate employee, device, and risk summary metrics.",
+    },
+    {
+        "key": "risk_scores.view",
+        "label": "Risk scores",
+        "description": "View employee-level risk scores, labels, and scoring reasons.",
+    },
+    {
+        "key": "events.review",
+        "label": "Event review",
+        "description": "Review behavior events and update their workflow status.",
+    },
+    {
+        "key": "screenshots.view",
+        "label": "Screenshot metadata",
+        "description": "View screenshot and window metadata captured from company-owned devices.",
+    },
+    {
+        "key": "policies.manage",
+        "label": "Policy management",
+        "description": "Create, update, and activate monitoring policy definitions.",
+    },
+    {
+        "key": "audit_logs.view",
+        "label": "Audit logs",
+        "description": "View policy and review audit log entries.",
+    },
+    {
+        "key": "directory.view",
+        "label": "Employee directory",
+        "description": "View employee and company device assignment records.",
+    },
+    {
+        "key": "access_matrix.view",
+        "label": "Access planning",
+        "description": "View the recommended role and permission planning matrix.",
+    },
+)
+ACCESS_ROLE_TEMPLATES = (
+    {
+        "name": "Admin",
+        "description": "Operations owner with full visibility into monitoring, policy, and audit surfaces.",
+        "permission_keys": [definition["key"] for definition in ACCESS_CAPABILITY_DEFINITIONS],
+    },
+    {
+        "name": "Risk Analyst",
+        "description": "Investigates elevated risk signals and reviews event workflows.",
+        "permission_keys": [
+            "dashboard.view",
+            "risk_scores.view",
+            "events.review",
+            "screenshots.view",
+            "directory.view",
+        ],
+    },
+    {
+        "name": "Manager",
+        "description": "Sees aggregate team health and employee risk posture without policy editing access.",
+        "permission_keys": [
+            "dashboard.view",
+            "risk_scores.view",
+            "directory.view",
+        ],
+    },
+    {
+        "name": "Compliance",
+        "description": "Audits policy coverage, review activity, and access planning decisions.",
+        "permission_keys": [
+            "dashboard.view",
+            "audit_logs.view",
+            "policies.manage",
+            "access_matrix.view",
+            "directory.view",
+        ],
+    },
 )
 
 
@@ -437,6 +546,434 @@ class QueryService:
                 )
             )
         return DeviceListResponse(items=items, total=len(items))
+
+    def _risk_label(self, score: int) -> str:
+        if score >= 75:
+            return "critical"
+        if score >= 50:
+            return "high"
+        if score >= 25:
+            return "medium"
+        return "low"
+
+    def _format_elapsed(self, delta_seconds: float) -> str:
+        seconds = max(int(delta_seconds), 0)
+        if seconds < 60:
+            return f"{seconds} seconds"
+        minutes = seconds // 60
+        if minutes < 60:
+            unit = "minute" if minutes == 1 else "minutes"
+            return f"{minutes} {unit}"
+        hours = minutes // 60
+        if hours < 24:
+            unit = "hour" if hours == 1 else "hours"
+            return f"{hours} {unit}"
+        days = hours // 24
+        unit = "day" if days == 1 else "days"
+        return f"{days} {unit}"
+
+    def _access_template_for_role(self, role_name: str | None) -> dict[str, object]:
+        normalized_name = (role_name or "").strip().casefold()
+        for template in ACCESS_ROLE_TEMPLATES:
+            if template["name"].casefold() == normalized_name:
+                return template
+
+        if "admin" in normalized_name:
+            return ACCESS_ROLE_TEMPLATES[0]
+        if any(token in normalized_name for token in ("risk", "review", "analyst")):
+            return ACCESS_ROLE_TEMPLATES[1]
+        if any(token in normalized_name for token in ("manager", "lead", "supervisor")):
+            return ACCESS_ROLE_TEMPLATES[2]
+        if any(token in normalized_name for token in ("compliance", "audit", "security")):
+            return ACCESS_ROLE_TEMPLATES[3]
+
+        return {
+            "name": role_name or "Observer",
+            "description": "Read-only observer for aggregate dashboard and directory planning surfaces.",
+            "permission_keys": ["dashboard.view", "directory.view"],
+        }
+
+    def _build_employee_risk_score(
+        self,
+        *,
+        employee: Employee,
+        devices: list[Device],
+        events: list[BehaviorEvent],
+        latest_screenshot: Screenshot | None,
+        generated_at: datetime,
+        resolved_policy: Policy,
+        has_targeted_policy: bool,
+        targeted_active_policy_count: int,
+    ) -> EmployeeRiskScoreItem:
+        factors: list[RiskFactorItem] = []
+
+        open_event_count = sum(1 for event in events if event.status == "open")
+        unresolved_high_event_count = sum(
+            1
+            for event in events
+            if event.severity in {"high", "critical"} and event.status not in {"resolved", "dismissed"}
+        )
+        event_points = min(
+            55,
+            sum(
+                round(
+                    SEVERITY_WEIGHTS.get(event.severity, SEVERITY_WEIGHTS["medium"])
+                    * STATUS_MULTIPLIERS.get(event.status, 0.7)
+                )
+                for event in events
+            ),
+        )
+        if event_points > 0:
+            if open_event_count and unresolved_high_event_count:
+                reason = (
+                    f"{open_event_count} open behavior events include "
+                    f"{unresolved_high_event_count} unresolved high-severity signals."
+                )
+            elif open_event_count:
+                reason = f"{open_event_count} open behavior events still need admin review."
+            else:
+                reason = f"{len(events)} behavior events contribute to the current score."
+            factors.append(
+                RiskFactorItem(
+                    code="behavior_events",
+                    label="Behavior events",
+                    points=event_points,
+                    reason=reason,
+                )
+            )
+
+        stalled_events = [
+            event
+            for event in events
+            if event.event_type == "no_change_streak_triggered" and event.status not in {"resolved", "dismissed"}
+        ]
+        if stalled_events:
+            max_streak = max(event.streak_count for event in stalled_events)
+            stalled_points = min(20, 8 + max(max_streak, 0))
+            factors.append(
+                RiskFactorItem(
+                    code="no_change_streak",
+                    label="No-change activity",
+                    points=stalled_points,
+                    reason=(
+                        f"No-change activity has persisted for {max_streak} capture"
+                        f"{'' if max_streak == 1 else 's'}."
+                    ),
+                )
+            )
+
+        total_device_count = len(devices)
+        active_device_count = sum(1 for device in devices if device.status == "online")
+        latest_heartbeat_at = max(
+            (ensure_utc(device.last_heartbeat_at) for device in devices if device.last_heartbeat_at is not None),
+            default=None,
+        )
+        if total_device_count == 0:
+            factors.append(
+                RiskFactorItem(
+                    code="device_assignment",
+                    label="Device assignment",
+                    points=20,
+                    reason="No company-owned device is currently assigned to this employee.",
+                )
+            )
+        elif active_device_count == 0:
+            factors.append(
+                RiskFactorItem(
+                    code="device_connectivity",
+                    label="Device connectivity",
+                    points=18,
+                    reason="All assigned company-owned devices are currently offline.",
+                )
+            )
+        elif latest_heartbeat_at is None:
+            factors.append(
+                RiskFactorItem(
+                    code="heartbeat_missing",
+                    label="Device heartbeat",
+                    points=10,
+                    reason="No heartbeat metadata has been received from the assigned devices.",
+                )
+            )
+        else:
+            heartbeat_age_seconds = (generated_at - latest_heartbeat_at).total_seconds()
+            if heartbeat_age_seconds > AGED_DEVICE_AFTER_SECONDS:
+                factors.append(
+                    RiskFactorItem(
+                        code="heartbeat_aged",
+                        label="Device heartbeat",
+                        points=16,
+                        reason=f"The most recent heartbeat is {self._format_elapsed(heartbeat_age_seconds)} old.",
+                    )
+                )
+            elif heartbeat_age_seconds > STALE_DEVICE_AFTER_SECONDS:
+                factors.append(
+                    RiskFactorItem(
+                        code="heartbeat_stale",
+                        label="Device heartbeat",
+                        points=8,
+                        reason=f"The most recent heartbeat is {self._format_elapsed(heartbeat_age_seconds)} old.",
+                    )
+                )
+
+        latest_screenshot_at = ensure_utc(latest_screenshot.captured_at) if latest_screenshot is not None else None
+        stale_screenshot_after_seconds = max(resolved_policy.screenshot_interval_seconds * 90, 15 * 60)
+        aged_screenshot_after_seconds = max(resolved_policy.screenshot_interval_seconds * 360, 60 * 60)
+        if latest_screenshot_at is None:
+            factors.append(
+                RiskFactorItem(
+                    code="screenshot_missing",
+                    label="Screenshot recency",
+                    points=12,
+                    reason="No screenshot metadata has been received for this employee yet.",
+                )
+            )
+        else:
+            screenshot_age_seconds = (generated_at - latest_screenshot_at).total_seconds()
+            if screenshot_age_seconds > aged_screenshot_after_seconds:
+                factors.append(
+                    RiskFactorItem(
+                        code="screenshot_aged",
+                        label="Screenshot recency",
+                        points=16,
+                        reason=f"The latest screenshot metadata is {self._format_elapsed(screenshot_age_seconds)} old.",
+                    )
+                )
+            elif screenshot_age_seconds > stale_screenshot_after_seconds:
+                factors.append(
+                    RiskFactorItem(
+                        code="screenshot_stale",
+                        label="Screenshot recency",
+                        points=8,
+                        reason=f"The latest screenshot metadata is {self._format_elapsed(screenshot_age_seconds)} old.",
+                    )
+                )
+
+        if targeted_active_policy_count > 0 and not has_targeted_policy:
+            reason = "Only the default monitoring policy currently applies to this employee."
+            if not employee.job_role and not employee.department:
+                reason = "Role and department metadata are missing, so targeted policy coverage cannot be verified."
+            factors.append(
+                RiskFactorItem(
+                    code="policy_coverage",
+                    label="Policy coverage",
+                    points=8,
+                    reason=reason,
+                )
+            )
+
+        score = min(100, sum(factor.points for factor in factors))
+        sorted_factors = sorted(factors, key=lambda factor: (-factor.points, factor.label))
+        reasons = [factor.reason for factor in sorted_factors[:3]]
+        if not reasons:
+            reasons = ["No elevated risk signals detected from current activity metadata."]
+
+        return EmployeeRiskScoreItem(
+            employee_id=employee.id,
+            employee_no=employee.employee_no,
+            employee_name=employee.name,
+            department=employee.department,
+            job_role=employee.job_role,
+            score=score,
+            label=self._risk_label(score),
+            reasons=reasons,
+            active_device_count=active_device_count,
+            total_device_count=total_device_count,
+            latest_heartbeat_at=latest_heartbeat_at,
+            latest_screenshot_at=latest_screenshot_at,
+            open_event_count=open_event_count,
+            high_severity_event_count=unresolved_high_event_count,
+            stalled_event_count=len(stalled_events),
+            policy_name=resolved_policy.name,
+            policy_version=resolved_policy.version,
+            has_targeted_policy=has_targeted_policy,
+            factors=sorted_factors,
+        )
+
+    def _build_risk_snapshot(self) -> tuple[datetime, list[EmployeeRiskScoreItem], dict[str, int], list[Device], list[BehaviorEvent], list[Screenshot]]:
+        generated_at = datetime.now(timezone.utc)
+        employees = self.session.exec(select(Employee).order_by(Employee.employee_no.asc(), Employee.name.asc())).all()
+        devices = self.session.exec(select(Device).order_by(Device.hostname.asc())).all()
+        events = self.session.exec(select(BehaviorEvent).order_by(BehaviorEvent.start_at.desc())).all()
+        screenshots = self.session.exec(select(Screenshot).order_by(Screenshot.captured_at.desc())).all()
+
+        devices_by_employee: dict[UUID, list[Device]] = defaultdict(list)
+        for device in devices:
+            if device.employee_id is not None:
+                devices_by_employee[device.employee_id].append(device)
+
+        events_by_employee: dict[UUID, list[BehaviorEvent]] = defaultdict(list)
+        for event in events:
+            events_by_employee[event.employee_id].append(event)
+
+        latest_screenshot_by_employee: dict[UUID, Screenshot] = {}
+        for screenshot in screenshots:
+            latest_screenshot_by_employee.setdefault(screenshot.employee_id, screenshot)
+
+        policy_service = PolicyService(self.session)
+        default_policy = policy_service.ensure_default_policy()
+        active_policies = self.session.exec(
+            select(Policy).where(Policy.is_active.is_(True)).order_by(Policy.updated_at.desc(), Policy.created_at.desc())
+        ).all()
+        if all(policy.id != default_policy.id for policy in active_policies):
+            active_policies.append(default_policy)
+
+        targeted_active_policy_count = sum(
+            1 for policy in active_policies if policy_service._has_target_rules(policy.rules_json)
+        )
+        employees_with_targeted_policy = 0
+        employees_default_only = 0
+        risk_scores: list[EmployeeRiskScoreItem] = []
+
+        for employee in employees:
+            matching_targeted_policies = [
+                policy
+                for policy in active_policies
+                if policy_service._has_target_rules(policy.rules_json)
+                and policy_service._policy_matches_employee(policy, employee)
+            ]
+            has_targeted_policy = bool(matching_targeted_policies)
+            if has_targeted_policy:
+                employees_with_targeted_policy += 1
+                resolved_policy = max(matching_targeted_policies, key=policy_service._policy_priority)
+            else:
+                employees_default_only += 1
+                resolved_policy = default_policy
+
+            risk_scores.append(
+                self._build_employee_risk_score(
+                    employee=employee,
+                    devices=devices_by_employee.get(employee.id, []),
+                    events=events_by_employee.get(employee.id, []),
+                    latest_screenshot=latest_screenshot_by_employee.get(employee.id),
+                    generated_at=generated_at,
+                    resolved_policy=resolved_policy,
+                    has_targeted_policy=has_targeted_policy,
+                    targeted_active_policy_count=targeted_active_policy_count,
+                )
+            )
+
+        risk_scores.sort(key=lambda item: (-item.score, item.employee_no, item.employee_name.casefold()))
+        coverage = {
+            "active_policy_count": len(active_policies),
+            "targeted_active_policy_count": targeted_active_policy_count,
+            "employees_with_targeted_policy": employees_with_targeted_policy,
+            "employees_default_only": employees_default_only,
+        }
+        return generated_at, risk_scores, coverage, devices, events, screenshots
+
+    def get_dashboard_summary(self) -> DashboardSummaryResponse:
+        generated_at, risk_scores, coverage, devices, events, screenshots = self._build_risk_snapshot()
+        risk_distribution = RiskLevelBreakdown()
+        for item in risk_scores:
+            setattr(risk_distribution, item.label, getattr(risk_distribution, item.label) + 1)
+
+        stale_device_count = sum(
+            1
+            for device in devices
+            if device.status != "offline"
+            and (
+                device.last_heartbeat_at is None
+                or (generated_at - ensure_utc(device.last_heartbeat_at)).total_seconds() > STALE_DEVICE_AFTER_SECONDS
+            )
+        )
+        screenshot_window_start = generated_at.replace(microsecond=0)  # keeps response stable for tests
+        screenshot_count_24h = sum(
+            1
+            for screenshot in screenshots
+            if (screenshot_window_start - ensure_utc(screenshot.captured_at)).total_seconds() <= 24 * 60 * 60
+        )
+
+        employees = self.session.exec(select(Employee)).all()
+        return DashboardSummaryResponse(
+            generated_at=generated_at,
+            employee_count=len(employees),
+            active_employee_count=sum(1 for employee in employees if employee.status == "active"),
+            device_count=len(devices),
+            online_device_count=sum(1 for device in devices if device.status == "online"),
+            stale_device_count=stale_device_count,
+            offline_device_count=sum(1 for device in devices if device.status == "offline"),
+            screenshot_count_24h=screenshot_count_24h,
+            open_event_count=sum(1 for event in events if event.status == "open"),
+            unresolved_high_risk_event_count=sum(
+                1
+                for event in events
+                if event.severity in {"high", "critical"} and event.status not in {"resolved", "dismissed"}
+            ),
+            risk_distribution=risk_distribution,
+            policy_coverage=DashboardPolicyCoverage(**coverage),
+            top_risks=risk_scores[:5],
+        )
+
+    def list_risk_scores(self, limit: int | None = None) -> EmployeeRiskScoreListResponse:
+        generated_at, risk_scores, _, _, _, _ = self._build_risk_snapshot()
+        items = risk_scores if limit is None else risk_scores[:limit]
+        return EmployeeRiskScoreListResponse(
+            items=items,
+            total=len(risk_scores),
+            generated_at=generated_at,
+        )
+
+    def get_access_matrix(self) -> AccessMatrixResponse:
+        roles = self.session.exec(select(Role).order_by(Role.name.asc())).all()
+        users = self.session.exec(select(User).order_by(User.username.asc())).all()
+
+        users_by_role: dict[UUID, list[AccessRoleUserItem]] = defaultdict(list)
+        unassigned_users: list[AccessRoleUserItem] = []
+        for user in users:
+            user_item = AccessRoleUserItem(
+                id=user.id,
+                username=user.username,
+                display_name=user.display_name,
+                email=user.email,
+                status=user.status,
+            )
+            if user.role_id is None:
+                unassigned_users.append(user_item)
+                continue
+            users_by_role[user.role_id].append(user_item)
+
+        role_items: list[AccessRoleMatrixItem] = []
+        existing_role_names: set[str] = set()
+        for role in roles:
+            existing_role_names.add(role.name.casefold())
+            template = self._access_template_for_role(role.name)
+            assigned_users = users_by_role.get(role.id, [])
+            role_items.append(
+                AccessRoleMatrixItem(
+                    role_id=role.id,
+                    name=role.name,
+                    description=role.description or str(template["description"]),
+                    source="existing",
+                    permission_keys=list(template["permission_keys"]),
+                    member_count=len(assigned_users),
+                    users=assigned_users,
+                )
+            )
+
+        for template in ACCESS_ROLE_TEMPLATES:
+            if template["name"].casefold() in existing_role_names:
+                continue
+            role_items.append(
+                AccessRoleMatrixItem(
+                    role_id=None,
+                    name=str(template["name"]),
+                    description=str(template["description"]),
+                    source="recommended",
+                    permission_keys=list(template["permission_keys"]),
+                    member_count=0,
+                    users=[],
+                )
+            )
+
+        role_items.sort(key=lambda item: (item.source != "existing", item.name.casefold()))
+        unassigned_users.sort(key=lambda item: item.username.casefold())
+        return AccessMatrixResponse(
+            generated_at=datetime.now(timezone.utc),
+            capabilities=[AccessCapabilityItem(**definition) for definition in ACCESS_CAPABILITY_DEFINITIONS],
+            roles=role_items,
+            unassigned_users=unassigned_users,
+        )
 
     def list_policies(self) -> PolicyListResponse:
         policies = self.session.exec(select(Policy).order_by(Policy.is_active.desc(), Policy.created_at.desc())).all()

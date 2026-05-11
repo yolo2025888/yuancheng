@@ -7,8 +7,11 @@ from sqlmodel import Session
 
 from app.api.deps import get_audit_context, get_session
 from app.schemas.admin import (
+    AccessMatrixResponse,
     AuditLogListResponse,
+    DashboardSummaryResponse,
     DeviceListResponse,
+    EmployeeRiskScoreListResponse,
     EmployeeListResponse,
     PolicyActivationRequest,
     PolicyCreateRequest,
@@ -31,6 +34,25 @@ def list_employees(session: Session = Depends(get_session)) -> EmployeeListRespo
 @router.get("/devices", response_model=DeviceListResponse)
 def list_devices(session: Session = Depends(get_session)) -> DeviceListResponse:
     return QueryService(session).list_devices()
+
+
+@router.get("/dashboard/summary", response_model=DashboardSummaryResponse)
+def get_dashboard_summary(session: Session = Depends(get_session)) -> DashboardSummaryResponse:
+    return QueryService(session).get_dashboard_summary()
+
+
+@router.get("/risk/scores", response_model=EmployeeRiskScoreListResponse)
+def list_risk_scores(
+    limit: int = Query(default=100, ge=1, le=500),
+    session: Session = Depends(get_session),
+) -> EmployeeRiskScoreListResponse:
+    return QueryService(session).list_risk_scores(limit=limit)
+
+
+@router.get("/access-matrix", response_model=AccessMatrixResponse, include_in_schema=False)
+@router.get("/access/matrix", response_model=AccessMatrixResponse)
+def get_access_matrix(session: Session = Depends(get_session)) -> AccessMatrixResponse:
+    return QueryService(session).get_access_matrix()
 
 
 @router.get("/policies", response_model=PolicyListResponse)

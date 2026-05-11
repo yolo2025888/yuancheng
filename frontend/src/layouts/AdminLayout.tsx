@@ -50,7 +50,7 @@ export function AdminLayout({ children }: AdminLayoutProps) {
       <Layout>
         <Header className="app-header">
           <div>
-            <Typography.Text className="header-kicker">Phase 3</Typography.Text>
+            <Typography.Text className="header-kicker">Phase 5</Typography.Text>
             <Typography.Title level={4}>Remote workforce monitoring admin</Typography.Title>
           </div>
           <Space size={18}>

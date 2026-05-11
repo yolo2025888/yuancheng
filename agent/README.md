@@ -102,6 +102,11 @@ Copy-Item .\agent\src\EmployeeBehavior.Agent.Service\appsettings.json.example .\
 - `SessionHelperRequestTimeoutSeconds` must be long enough to cover multi-screen capture on slower endpoints.
 - `UploadBatchSize` affects only upload concurrency, not collection semantics.
 
+## Deployment references
+
+- Operational runbook: [docs/AGENT_DEPLOYMENT_RUNBOOK.md](../docs/AGENT_DEPLOYMENT_RUNBOOK.md)
+- Non-destructive validator: `agent\scripts\Test-AgentDeployment.ps1`
+
 ## Local run and deployment checks
 
 For local development, start the helper first and then the service:
@@ -118,6 +123,16 @@ Recommended deployment and validation sequence:
 3. Keep `DryRun=true` and confirm heartbeat plus screenshot upload logs show the expected contract fields without backend dependency.
 4. Switch `DryRun=false`, point `ApiBaseUrl` at the target backend, and repeat heartbeat plus upload checks.
 5. Test console session, locked desktop, and RDP/remote session transitions.
+
+Recommended validation command before a pilot deployment:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Test-AgentDeployment.ps1 `
+  -ServiceConfigPath .\agent\src\EmployeeBehavior.Agent.Service\appsettings.json `
+  -HelperConfigPath .\agent\src\EmployeeBehavior.Agent.SessionHelper\appsettings.json
+```
+
+If you only have the example files copied in-repo, point the script at the `.example` files instead.
 
 ## Verification focus
 

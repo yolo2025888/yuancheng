@@ -15,12 +15,10 @@ const statusColorMap = {
   locked: '#64748b'
 };
 
-export function WorkStatusStackedChart({
-  data
-}: WorkStatusStackedChartProps) {
+export function WorkStatusStackedChart({ data }: WorkStatusStackedChartProps) {
   return (
     <EChartPanel
-      title="工作状态堆叠图"
+      title="Work Status Distribution"
       option={{
         tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
         legend: { top: 0, itemWidth: 12, textStyle: { color: '#334155' } },
@@ -35,13 +33,13 @@ export function WorkStatusStackedChart({
           splitLine: { lineStyle: { color: '#e2e8f0' } }
         },
         series: [
-          ['coding', '编码'],
-          ['review', '评审'],
-          ['meeting', '会议'],
-          ['documentation', '文档'],
-          ['communication', '沟通'],
-          ['idle', '静止'],
-          ['locked', '锁屏']
+          ['coding', 'Coding'],
+          ['review', 'Review'],
+          ['meeting', 'Meeting'],
+          ['documentation', 'Documentation'],
+          ['communication', 'Communication'],
+          ['idle', 'Idle'],
+          ['locked', 'Locked']
         ].map(([key, label]) => ({
           name: label,
           type: 'bar',
