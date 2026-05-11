@@ -50,6 +50,13 @@ class ScreenshotMetadataResponse(BaseModel):
     upload_status: str
 
 
+class ScreenshotUploadResponse(BaseModel):
+    screenshot_id: UUID
+    upload_status: str
+    image_uri: str
+    thumb_uri: str
+
+
 class ScreenshotCompleteRequest(BaseModel):
     image_uri: str
     thumb_uri: str

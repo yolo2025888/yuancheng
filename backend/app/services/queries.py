@@ -9,6 +9,10 @@ from app.models import BehaviorEvent, ScreenDiff, Screenshot
 from app.schemas.query import (
     BehaviorEventDetail,
     BehaviorEventListResponse,
+    ScreenshotItem,
+    ScreenshotListResponse,
+    TimelineActivity,
+    TimelineChange,
     TimelineItem,
     TimelineResponse,
     TimelineRiskEvent,
@@ -77,8 +81,21 @@ class QueryService:
                     time=ensure_utc(screenshot.captured_at).strftime("%H:%M:%S"),
                     screenshot_id=screenshot.id,
                     thumbnail_url=screenshot.thumb_uri,
+                    thumb_uri=screenshot.thumb_uri,
+                    image_uri=screenshot.image_uri,
                     activity_type="unknown",
+                    activity=TimelineActivity(
+                        type="unknown",
+                        keyboard_count=screenshot.keyboard_count,
+                        mouse_count=screenshot.mouse_click_count + screenshot.mouse_move_count,
+                    ),
                     change_level=diff.change_level if diff is not None else "unknown",
+                    change=TimelineChange(
+                        level=diff.change_level if diff is not None else "unknown",
+                        effective=diff.is_effective_change if diff is not None else False,
+                        changed_block_ratio=diff.changed_block_ratio if diff is not None else None,
+                        reason=diff.reason if diff is not None else None,
+                    ),
                     keyboard_count=screenshot.keyboard_count,
                     mouse_count=screenshot.mouse_click_count + screenshot.mouse_move_count,
                     risk_events=risk_events,
@@ -118,3 +135,28 @@ class QueryService:
         if event is None:
             return None
         return BehaviorEventDetail.model_validate(event)
+
+    def list_screenshots(
+        self,
+        *,
+        device_id: UUID | None,
+        employee_id: UUID | None,
+        limit: int,
+    ) -> ScreenshotListResponse:
+        statement = select(Screenshot).order_by(Screenshot.captured_at.desc())
+        if device_id is not None:
+            statement = statement.where(Screenshot.device_id == device_id)
+        if employee_id is not None:
+            statement = statement.where(Screenshot.employee_id == employee_id)
+
+        screenshots = self.session.exec(statement.limit(limit)).all()
+        return ScreenshotListResponse(
+            items=[ScreenshotItem.model_validate(screenshot) for screenshot in screenshots],
+            total=len(screenshots),
+        )
+
+    def get_screenshot(self, screenshot_id: UUID) -> ScreenshotItem | None:
+        screenshot = self.session.get(Screenshot, screenshot_id)
+        if screenshot is None:
+            return None
+        return ScreenshotItem.model_validate(screenshot)

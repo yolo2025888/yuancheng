@@ -1,24 +1,30 @@
 import { Card, Space, Table } from 'antd';
 import { useEffect, useState } from 'react';
 
+import { ApiStatusNotice } from '../components/ApiStatusNotice';
 import { PageSection } from '../components/PageSection';
 import { StatusTag } from '../components/StatusTag';
 import { adminApi } from '../services/adminApi';
-import type { EventRecord } from '../types/models';
+import type { ApiStatus, EventRecord } from '../types/models';
 
 export function EventsPage() {
   const [rows, setRows] = useState<EventRecord[]>([]);
+  const [apiStatus, setApiStatus] = useState<ApiStatus | null>(null);
 
   useEffect(() => {
-    adminApi.getEvents().then(setRows);
+    adminApi.getEvents().then((result) => {
+      setRows(result.data);
+      setApiStatus(result.apiStatus);
+    });
   }, []);
 
   return (
     <Space direction="vertical" size={20} className="page-stack">
       <PageSection
-        title="事件中心"
-        description="集中展示静止、离线、GitHub 异常等事件，表格字段按复核流程预留状态和摘要。"
+        title="Events"
+        description="Real event rows come from the backend when available and fall back to mock data otherwise."
       />
+      {apiStatus ? <ApiStatusNotice status={apiStatus} title="Event API" /> : null}
       <Card bordered={false} className="panel-card">
         <Table
           rowKey="id"
@@ -26,23 +32,23 @@ export function EventsPage() {
           dataSource={rows}
           pagination={false}
           columns={[
-            { title: '事件 ID', dataIndex: 'id' },
-            { title: '员工', dataIndex: 'employee' },
-            { title: '部门', dataIndex: 'department' },
-            { title: '类型', dataIndex: 'type' },
+            { title: 'Event ID', dataIndex: 'id' },
+            { title: 'Employee', dataIndex: 'employee' },
+            { title: 'Department', dataIndex: 'department' },
+            { title: 'Type', dataIndex: 'type' },
             {
-              title: '严重级别',
+              title: 'Severity',
               dataIndex: 'severity',
               render: (value: string) => <StatusTag value={value} />
             },
             {
-              title: '处理状态',
+              title: 'Status',
               dataIndex: 'status',
               render: (value: string) => <StatusTag value={value} />
             },
-            { title: '开始时间', dataIndex: 'startedAt' },
-            { title: '持续时长', dataIndex: 'duration' },
-            { title: '摘要', dataIndex: 'summary' }
+            { title: 'Started', dataIndex: 'startedAt' },
+            { title: 'Duration', dataIndex: 'duration' },
+            { title: 'Summary', dataIndex: 'summary' }
           ]}
         />
       </Card>

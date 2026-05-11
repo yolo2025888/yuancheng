@@ -1,24 +1,30 @@
 import { Card, Space, Table, Typography } from 'antd';
 import { useEffect, useState } from 'react';
 
+import { BackendHealthNotice } from '../components/ApiStatusNotice';
 import { PageSection } from '../components/PageSection';
 import { StatusTag } from '../components/StatusTag';
 import { adminApi } from '../services/adminApi';
-import type { RealtimeStatusRecord } from '../types/models';
+import type { BackendHealth, RealtimeStatusRecord } from '../types/models';
 
 export function RealtimeStatusPage() {
   const [rows, setRows] = useState<RealtimeStatusRecord[]>([]);
+  const [backendHealth, setBackendHealth] = useState<BackendHealth | null>(null);
 
   useEffect(() => {
-    adminApi.getRealtimeStatus().then(setRows);
+    adminApi.getRealtimeStatus().then((data) => {
+      setRows(data.rows);
+      setBackendHealth(data.backendHealth);
+    });
   }, []);
 
   return (
     <Space direction="vertical" size={20} className="page-stack">
       <PageSection
-        title="实时状态"
-        description="按团队巡检当前在线、锁屏、静止和高风险人员，适合值班主管快速定位异常。"
+        title="Realtime Status"
+        description="Current mock monitoring board with backend health signal for MVP-1 API rollout."
       />
+      {backendHealth ? <BackendHealthNotice health={backendHealth} /> : null}
       <Card bordered={false} className="panel-card">
         <Table
           rowKey="key"
@@ -26,25 +32,25 @@ export function RealtimeStatusPage() {
           dataSource={rows}
           pagination={false}
           columns={[
-            { title: '员工', dataIndex: 'employee' },
-            { title: '部门', dataIndex: 'department' },
-            { title: '岗位', dataIndex: 'role' },
-            { title: '设备', dataIndex: 'device' },
+            { title: 'Employee', dataIndex: 'employee' },
+            { title: 'Department', dataIndex: 'department' },
+            { title: 'Role', dataIndex: 'role' },
+            { title: 'Device', dataIndex: 'device' },
             {
-              title: '当前状态',
+              title: 'Status',
               dataIndex: 'currentStatus',
               render: (value: string) => <StatusTag value={value} />
             },
-            { title: '前台应用', dataIndex: 'app' },
-            { title: '当前活动', dataIndex: 'activity' },
+            { title: 'App', dataIndex: 'app' },
+            { title: 'Activity', dataIndex: 'activity' },
             {
-              title: '最近截图',
+              title: 'Last Screenshot',
               dataIndex: 'lastScreenshotAt',
               render: (value: string) => <Typography.Text code>{value}</Typography.Text>
             },
-            { title: '无变化次数', dataIndex: 'noChangeCount' },
+            { title: 'No Change', dataIndex: 'noChangeCount' },
             {
-              title: '风险级别',
+              title: 'Risk',
               dataIndex: 'riskLevel',
               render: (value: string) => <StatusTag value={value} />
             }

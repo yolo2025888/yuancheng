@@ -12,9 +12,15 @@ public sealed class AgentServiceOptions
 
     public bool DryRun { get; set; } = true;
 
+    public string? EmployeeId { get; set; }
+
     public string DeviceIdPath { get; set; } = @"C:\ProgramData\EmployeeBehaviorAgent\device-id.json";
 
     public string SessionHelperPipeName { get; set; } = "employee-behavior-agent";
+
+    public int SessionHelperConnectTimeoutSeconds { get; set; } = 3;
+
+    public int SessionHelperRequestTimeoutSeconds { get; set; } = 30;
 
     public int HeartbeatIntervalSeconds { get; set; } = 30;
 

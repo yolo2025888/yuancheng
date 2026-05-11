@@ -10,6 +10,8 @@ class Settings(BaseSettings):
     environment: str = "development"
     api_prefix: str = "/api"
     database_url: str = "sqlite:///./employee_behavior.db"
+    storage_root_dir: str = "storage"
+    screenshot_thumbnail_max_size: int = 320
     default_policy_name: str = "default"
     default_policy_version: str = "mvp"
     default_screenshot_interval_seconds: int = 10

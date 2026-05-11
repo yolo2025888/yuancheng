@@ -1,4 +1,6 @@
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Text.Json;
 using EmployeeBehavior.Agent.Contracts.Models;
 using EmployeeBehavior.Agent.Service.Configuration;
 using Microsoft.Extensions.Options;
@@ -36,14 +38,38 @@ public sealed class AgentApiClient : IAgentApiClient
             };
         }
 
+        var backendRequest = new
+        {
+            device_id = request.DeviceId,
+            employee_id = request.EmployeeId,
+            hostname = request.Hostname,
+            os_type = request.OsType,
+            agent_version = request.AgentVersion,
+            screen_count = request.ScreenCount,
+            status = request.Status
+        };
+
         using var response = await _httpClient.PostAsJsonAsync(
             "/api/agent/heartbeat",
-            request,
+            backendRequest,
             cancellationToken);
 
         response.EnsureSuccessStatusCode();
-        return await response.Content.ReadFromJsonAsync<HeartbeatResponse>(cancellationToken: cancellationToken)
-            ?? new HeartbeatResponse();
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+        var root = document.RootElement;
+        var policy = root.GetProperty("policy");
+
+        return new HeartbeatResponse
+        {
+            ServerTimeUtc = root.TryGetProperty("server_time", out var serverTime)
+                ? serverTime.GetDateTimeOffset()
+                : DateTimeOffset.UtcNow,
+            PolicyVersion = policy.TryGetProperty("version", out var version)
+                ? version.GetString() ?? string.Empty
+                : string.Empty,
+            NextHeartbeatInSeconds = _options.HeartbeatIntervalSeconds
+        };
     }
 
     public async Task<AgentPolicy> GetPolicyAsync(CancellationToken cancellationToken)
@@ -54,10 +80,23 @@ public sealed class AgentApiClient : IAgentApiClient
             return _options.DefaultPolicy ?? AgentPolicy.CreateDefault();
         }
 
-        return await _httpClient.GetFromJsonAsync<AgentPolicy>(
-                   "/api/agent/policy",
-                   cancellationToken)
-               ?? AgentPolicy.CreateDefault();
+        await using var stream = await _httpClient.GetStreamAsync("/api/agent/policy", cancellationToken);
+        using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+        var root = document.RootElement;
+
+        return new AgentPolicy
+        {
+            Version = root.TryGetProperty("version", out var version)
+                ? version.GetString() ?? "default"
+                : "default",
+            CaptureEnabled = true,
+            ScreenshotIntervalSeconds = root.TryGetProperty("screenshot_interval_seconds", out var interval)
+                ? interval.GetInt32()
+                : 10,
+            NoChangeThreshold = root.TryGetProperty("no_change_threshold", out var threshold)
+                ? threshold.GetInt32()
+                : 6
+        };
     }
 
     public async Task<ScreenshotUploadResponse> UploadScreenshotAsync(
@@ -67,8 +106,11 @@ public sealed class AgentApiClient : IAgentApiClient
         if (_options.DryRun)
         {
             _logger.LogInformation(
-                "DryRun screenshot upload to /api/agent/screenshots for display {DisplayName}.",
-                request.DisplayName);
+                "DryRun screenshot upload to /api/agent/screenshots for display {DisplayName}. ImageBytes={ImageBytes} ThumbBytes={ThumbnailBytes} Hash={Hash}.",
+                request.DisplayName,
+                request.ImageSizeBytes > 0 ? request.ImageSizeBytes : request.ImageBytes.LongLength,
+                request.ThumbnailSizeBytes > 0 ? request.ThumbnailSizeBytes : request.ThumbnailBytes.LongLength,
+                request.ImageSha256);
 
             return new ScreenshotUploadResponse
             {
@@ -77,14 +119,53 @@ public sealed class AgentApiClient : IAgentApiClient
             };
         }
 
-        using var response = await _httpClient.PostAsJsonAsync(
-            "/api/agent/screenshots",
-            request,
+        using var form = new MultipartFormDataContent();
+        form.Add(new StringContent(request.DeviceId), "device_id");
+        form.Add(new StringContent(request.CapturedAtUtc.UtcDateTime.ToString("O")), "captured_at");
+        form.Add(new StringContent(request.ScreenIndex.ToString()), "screen_index");
+        form.Add(new StringContent(request.ImageWidth.ToString()), "width");
+        form.Add(new StringContent(request.ImageHeight.ToString()), "height");
+        form.Add(new StringContent(request.ForegroundWindow?.ProcessName ?? string.Empty), "foreground_process");
+        form.Add(new StringContent(request.ForegroundWindow?.WindowTitle ?? string.Empty), "window_title");
+        form.Add(new StringContent((request.InputActivity?.KeyboardEventCount ?? 0).ToString()), "keyboard_count");
+        form.Add(new StringContent("0"), "mouse_click_count");
+        form.Add(new StringContent((request.InputActivity?.MouseEventCount ?? 0).ToString()), "mouse_move_count");
+        form.Add(new StringContent((request.SessionState?.IsLocked ?? false).ToString().ToLowerInvariant()), "is_locked");
+        form.Add(new StringContent((request.SessionState?.IsRemoteSession ?? false).ToString().ToLowerInvariant()), "is_remote_session");
+        if (!string.IsNullOrWhiteSpace(request.ImageSha256))
+        {
+            form.Add(new StringContent(request.ImageSha256), "phash");
+        }
+
+        var fileContent = new ByteArrayContent(request.ImageBytes);
+        fileContent.Headers.ContentType = MediaTypeHeaderValue.Parse(request.ImageFormat);
+        form.Add(fileContent, "file", BuildScreenshotFileName(request));
+
+        using var response = await _httpClient.PostAsync(
+            "/api/agent/screenshots/upload",
+            form,
             cancellationToken);
 
         response.EnsureSuccessStatusCode();
-        return await response.Content.ReadFromJsonAsync<ScreenshotUploadResponse>(cancellationToken: cancellationToken)
-            ?? new ScreenshotUploadResponse();
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+        var root = document.RootElement;
+
+        return new ScreenshotUploadResponse
+        {
+            ScreenshotId = root.TryGetProperty("screenshot_id", out var screenshotId)
+                ? screenshotId.GetString() ?? string.Empty
+                : string.Empty,
+            Status = root.TryGetProperty("upload_status", out var uploadStatus)
+                ? uploadStatus.GetString() ?? string.Empty
+                : string.Empty,
+            ImageUri = root.TryGetProperty("image_uri", out var imageUri)
+                ? imageUri.GetString() ?? string.Empty
+                : string.Empty,
+            ThumbUri = root.TryGetProperty("thumb_uri", out var thumbUri)
+                ? thumbUri.GetString() ?? string.Empty
+                : string.Empty
+        };
     }
 
     public async Task CompleteScreenshotAsync(
@@ -105,5 +186,22 @@ public sealed class AgentApiClient : IAgentApiClient
             cancellationToken);
 
         response.EnsureSuccessStatusCode();
+    }
+
+    private static string BuildScreenshotFileName(ScreenshotUploadRequest request)
+    {
+        var extension = request.ImageFormat switch
+        {
+            "image/png" => ".png",
+            "image/jpeg" => ".jpg",
+            "image/webp" => ".webp",
+            "image/bmp" => ".bmp",
+            _ => ".bin"
+        };
+
+        var display = string.IsNullOrWhiteSpace(request.DisplayName)
+            ? "screen"
+            : string.Concat(request.DisplayName.Select(ch => char.IsLetterOrDigit(ch) ? ch : '-'));
+        return $"{request.CapturedAtUtc:yyyyMMddHHmmss}-{request.ScreenIndex}-{display}{extension}";
     }
 }

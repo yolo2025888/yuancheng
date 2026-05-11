@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Security.Cryptography;
 using EmployeeBehavior.Agent.Contracts.Models;
 using EmployeeBehavior.Agent.Service.Configuration;
 using EmployeeBehavior.Agent.Service.Infrastructure;
@@ -69,7 +70,12 @@ public sealed class AgentWorker : BackgroundService
             var request = new HeartbeatRequest
             {
                 DeviceId = deviceId,
+                EmployeeId = string.IsNullOrWhiteSpace(_options.EmployeeId) ? null : _options.EmployeeId,
+                Hostname = Environment.MachineName,
+                OsType = Environment.OSVersion.VersionString,
                 AgentVersion = GetAgentVersion(),
+                ScreenCount = Math.Max(1, snapshot?.Screens.Count ?? 1),
+                Status = "online",
                 SentAtUtc = DateTimeOffset.UtcNow,
                 CurrentPolicyVersion = policy.Version,
                 SessionState = snapshot?.SessionState,
@@ -148,20 +154,23 @@ public sealed class AgentWorker : BackgroundService
 
             foreach (var item in batch)
             {
-                var response = await _agentApiClient.UploadScreenshotAsync(item.Request, cancellationToken);
-                await _agentApiClient.CompleteScreenshotAsync(
-                    new ScreenshotUploadCompleteRequest
-                    {
-                        DeviceId = item.Request.DeviceId,
-                        ScreenshotId = response.ScreenshotId,
-                        CompletedAtUtc = DateTimeOffset.UtcNow
-                    },
-                    cancellationToken);
+                var uploadRequest = await ResolveUploadRequestAsync(item.Request, cancellationToken);
+                if (uploadRequest.ImageBytes.Length == 0)
+                {
+                    _logger.LogWarning(
+                        "Skipping screenshot {LocalId} for display {DisplayName} because the payload is empty.",
+                        item.LocalId,
+                        item.Request.DisplayName);
+                    continue;
+                }
+
+                var response = await _agentApiClient.UploadScreenshotAsync(uploadRequest, cancellationToken);
 
                 _logger.LogInformation(
-                    "Uploaded screenshot {ScreenshotId} for display {DisplayName}.",
+                    "Uploaded screenshot {ScreenshotId} for display {DisplayName}. Status={Status}.",
                     response.ScreenshotId,
-                    item.Request.DisplayName);
+                    uploadRequest.DisplayName,
+                    response.Status);
             }
         }
     }
@@ -186,13 +195,91 @@ public sealed class AgentWorker : BackgroundService
                     PolicyVersion = policyVersion,
                     CapturedAtUtc = snapshot.CapturedAtUtc,
                     DisplayName = screen.DisplayName,
+                    ScreenIndex = screen.ScreenIndex,
                     ForegroundWindow = snapshot.ForegroundWindow,
                     InputActivity = snapshot.InputActivity,
                     SessionState = snapshot.SessionState,
                     ImageFormat = screen.ImageFormat,
                     ImageBytes = screen.ImageBytes,
-                    ThumbnailBytes = screen.ThumbnailBytes
+                    ImageTempFilePath = screen.ImageTempFilePath,
+                    DeleteImageTempFileOnRead = screen.DeleteImageTempFileOnRead,
+                    ImageSha256 = screen.ImageSha256,
+                    ImageSizeBytes = screen.ImageSizeBytes,
+                    ImageWidth = screen.ImageWidth,
+                    ImageHeight = screen.ImageHeight,
+                    ThumbnailFormat = screen.ThumbnailFormat,
+                    ThumbnailBytes = screen.ThumbnailBytes,
+                    ThumbnailTempFilePath = screen.ThumbnailTempFilePath,
+                    DeleteThumbnailTempFileOnRead = screen.DeleteThumbnailTempFileOnRead,
+                    ThumbnailSha256 = screen.ThumbnailSha256,
+                    ThumbnailSizeBytes = screen.ThumbnailSizeBytes,
+                    ThumbnailWidth = screen.ThumbnailWidth,
+                    ThumbnailHeight = screen.ThumbnailHeight
                 });
         }
+    }
+
+    private async Task<ScreenshotUploadRequest> ResolveUploadRequestAsync(
+        ScreenshotUploadRequest request,
+        CancellationToken cancellationToken)
+    {
+        var imageBytes = request.ImageBytes.Length > 0
+            ? request.ImageBytes
+            : await ReadPayloadBytesAsync(request.ImageTempFilePath, request.DeleteImageTempFileOnRead, cancellationToken);
+
+        var thumbnailBytes = request.ThumbnailBytes.Length > 0
+            ? request.ThumbnailBytes
+            : await ReadPayloadBytesAsync(request.ThumbnailTempFilePath, request.DeleteThumbnailTempFileOnRead, cancellationToken);
+
+        return request with
+        {
+            ImageBytes = imageBytes,
+            ImageTempFilePath = null,
+            ImageSha256 = !string.IsNullOrWhiteSpace(request.ImageSha256) || imageBytes.Length == 0
+                ? request.ImageSha256
+                : ComputeSha256(imageBytes),
+            ImageSizeBytes = request.ImageSizeBytes > 0 || imageBytes.Length == 0
+                ? request.ImageSizeBytes
+                : imageBytes.LongLength,
+            ThumbnailBytes = thumbnailBytes,
+            ThumbnailTempFilePath = null,
+            ThumbnailSha256 = !string.IsNullOrWhiteSpace(request.ThumbnailSha256) || thumbnailBytes.Length == 0
+                ? request.ThumbnailSha256
+                : ComputeSha256(thumbnailBytes),
+            ThumbnailSizeBytes = request.ThumbnailSizeBytes > 0 || thumbnailBytes.Length == 0
+                ? request.ThumbnailSizeBytes
+                : thumbnailBytes.LongLength
+        };
+    }
+
+    private static async Task<byte[]> ReadPayloadBytesAsync(
+        string? tempFilePath,
+        bool deleteAfterRead,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(tempFilePath) || !File.Exists(tempFilePath))
+        {
+            return Array.Empty<byte>();
+        }
+
+        var bytes = await File.ReadAllBytesAsync(tempFilePath, cancellationToken);
+        if (deleteAfterRead)
+        {
+            try
+            {
+                File.Delete(tempFilePath);
+            }
+            catch
+            {
+                // Best-effort cleanup; upload should still proceed with the already materialized payload.
+            }
+        }
+
+        return bytes;
+    }
+
+    private static string ComputeSha256(byte[] payload)
+    {
+        return Convert.ToHexString(SHA256.HashData(payload)).ToLowerInvariant();
     }
 }

@@ -1,24 +1,30 @@
 import { Card, Space, Table } from 'antd';
 import { useEffect, useState } from 'react';
 
+import { ApiStatusNotice } from '../components/ApiStatusNotice';
 import { PageSection } from '../components/PageSection';
 import { StatusTag } from '../components/StatusTag';
 import { adminApi } from '../services/adminApi';
-import type { DeviceRecord } from '../types/models';
+import type { ApiStatus, DeviceRecord } from '../types/models';
 
 export function DevicesPage() {
   const [rows, setRows] = useState<DeviceRecord[]>([]);
+  const [apiStatus, setApiStatus] = useState<ApiStatus | null>(null);
 
   useEffect(() => {
-    adminApi.getDevices().then(setRows);
+    adminApi.getDevices().then((result) => {
+      setRows(result.data);
+      setApiStatus(result.apiStatus);
+    });
   }, []);
 
   return (
     <Space direction="vertical" size={20} className="page-stack">
       <PageSection
-        title="设备管理"
-        description="设备列表预留在线状态、Agent 版本和心跳字段，后续可扩展到升级、重试和离线告警。"
+        title="Devices"
+        description="Real device API is attempted first; mock rows stay available while the backend endpoint is incomplete."
       />
+      {apiStatus ? <ApiStatusNotice status={apiStatus} title="Device API" /> : null}
       <Card bordered={false} className="panel-card">
         <Table
           rowKey="key"
@@ -26,13 +32,13 @@ export function DevicesPage() {
           dataSource={rows}
           pagination={false}
           columns={[
-            { title: '设备名', dataIndex: 'deviceName' },
-            { title: '绑定员工', dataIndex: 'employee' },
-            { title: '系统', dataIndex: 'os' },
-            { title: 'Agent 版本', dataIndex: 'agentVersion' },
-            { title: '最近心跳', dataIndex: 'lastHeartbeat' },
+            { title: 'Device', dataIndex: 'deviceName' },
+            { title: 'Employee', dataIndex: 'employee' },
+            { title: 'OS', dataIndex: 'os' },
+            { title: 'Agent', dataIndex: 'agentVersion' },
+            { title: 'Last Heartbeat', dataIndex: 'lastHeartbeat' },
             {
-              title: '状态',
+              title: 'Status',
               dataIndex: 'status',
               render: (value: string) => <StatusTag value={value} />
             }

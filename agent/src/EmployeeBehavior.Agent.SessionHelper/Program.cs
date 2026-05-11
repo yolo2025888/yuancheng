@@ -23,13 +23,14 @@ internal static class Program
             .Bind(builder.Configuration.GetSection(SessionHelperOptions.SectionName))
             .ValidateOnStart();
 
-        builder.Services.AddSingleton<IScreenshotCapture, MetadataOnlyScreenshotCapture>();
+        builder.Services.AddSingleton<IScreenshotCapture, WindowsScreenshotCapture>();
         builder.Services.AddSingleton<IForegroundWindowProvider, Win32ForegroundWindowProvider>();
         builder.Services.AddSingleton<IInputActivityCounter, InputActivityCounterStub>();
         builder.Services.AddSingleton<ISessionStateProvider, SessionStateProviderStub>();
         builder.Services.AddSingleton<ISessionSnapshotCollector, SessionSnapshotCollector>();
         builder.Services.AddSingleton<AgentSessionApplicationContext>();
         builder.Services.AddHostedService<SessionHelperMonitor>();
+        builder.Services.AddHostedService<NamedPipeSessionServer>();
 
         builder.Logging.ClearProviders();
         builder.Logging.AddConfiguration(builder.Configuration.GetSection("Logging"));

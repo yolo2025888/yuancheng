@@ -6,6 +6,26 @@ export type KpiMetric = {
   tone?: 'default' | 'positive' | 'warning' | 'danger';
 };
 
+export type ApiStatus = {
+  source: 'live' | 'mock';
+  state: 'connected' | 'fallback' | 'unavailable';
+  label: string;
+  detail: string;
+  endpoint?: string;
+};
+
+export type ApiResult<T> = {
+  data: T;
+  apiStatus: ApiStatus;
+};
+
+export type BackendHealth = {
+  ok: boolean;
+  appName?: string;
+  environment?: string;
+  apiStatus: ApiStatus;
+};
+
 export type StatusBucket = {
   slot: string;
   coding: number;
@@ -78,6 +98,19 @@ export type TimelineSegment = {
   status: 'working' | 'meeting' | 'idle' | 'risk';
 };
 
+export type ScreenshotListItem = {
+  id: string;
+  capturedAt: string;
+  thumbUri?: string | null;
+  imageUri?: string | null;
+  activityType: string;
+  changeLevel: string;
+  keyboardCount: number;
+  mouseCount: number;
+  riskCount: number;
+  riskSummary: string;
+};
+
 export type PolicyRecord = {
   key: string;
   role: string;
@@ -112,6 +145,11 @@ export type GitHubRiskRecord = {
 export type ScreenshotComparison = {
   currentImageLabel: string;
   previousImageLabel: string;
+  currentImageUri?: string | null;
+  currentThumbUri?: string | null;
+  previousImageUri?: string | null;
+  previousThumbUri?: string | null;
   metrics: Array<{ label: string; value: string; hint: string }>;
   reasoning: string[];
+  apiStatus?: ApiStatus;
 };

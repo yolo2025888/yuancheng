@@ -19,6 +19,7 @@ def client(tmp_path: Path) -> Generator[TestClient, None, None]:
     settings = Settings(
         database_url=f"sqlite:///{tmp_path / 'test.db'}",
         environment="test",
+        storage_root_dir=str(tmp_path / "storage"),
     )
     app = create_app(settings)
     with TestClient(app) as test_client:

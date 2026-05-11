@@ -1,6 +1,6 @@
 # Windows Agent Skeleton
 
-该目录包含 Windows Agent 的首版工程骨架，遵循规划中的 `Windows Service + User Session Helper` 拆分。
+该目录包含 Windows Agent 的 MVP-1 代码，采用 `Windows Service + User Session Helper` 双进程拆分。
 
 ## 结构
 
@@ -17,34 +17,73 @@ agent/
 ## 项目说明
 
 - `EmployeeBehavior.Agent.Contracts`
-  - Service、Session Helper 和后续 Named Pipe / HTTP 接口共享的数据契约。
+  - Service、Session Helper 和上传链路共享的数据契约。
+  - `CapturedScreen` / `ScreenshotUploadRequest` 已支持主图字节、缩略图字节、可选临时文件路径、hash、尺寸和宽高元数据。
 - `EmployeeBehavior.Agent.Service`
-  - Windows Service 骨架。
-  - 已预留心跳、策略拉取、Session Helper IPC 客户端、上传队列和日志配置入口。
+  - Windows Service / Worker 入口。
+  - 通过 Named Pipe 请求 Session Helper 执行 `capture-session`，将截图 payload 放入上传队列，再调用现有 API client 占位。
 - `EmployeeBehavior.Agent.SessionHelper`
-  - 用户会话侧骨架。
-  - 已预留截图、多屏、前台窗口、键鼠活动计数、锁屏/RDP 状态采集接口。
-  - 支持托盘模式和控制台模式入口。
+  - 用户会话侧进程。
+  - 使用 Windows GDI 真实抓取多屏截图，输出 PNG 主图和 JPEG 缩略图。
+  - 暴露本机 Named Pipe 服务端，返回 JSON 序列化的 `SessionCaptureEnvelope`。
+  - 当前仍只保留键鼠事件计数模型，不记录具体按键内容。
 
-## 设计边界
+## 当前能力
 
-- 当前仅提供可读、可扩展的 SDK-style 工程文件和源码骨架。
-- 不记录具体按键内容，只保留键鼠活动计数模型。
-- `dotnet` 当前环境不可用，因此本次未执行 `restore/build/test`。
-- `Named Pipe`、真实截图字节采集、锁屏检测、输入 Hook 和后端真实接口仍是后续实现点。
+- 多屏截图：按 `Screen.AllScreens` 逐屏抓取。
+- Payload：主图默认 `image/png`，缩略图默认 `image/jpeg`。
+- IPC：Service 通过 Named Pipe 发起 capture 请求，Helper 返回 JSON 响应。
+- 上传：Service 上传队列可处理内联字节；如果后续改为临时文件路径，也会在上传前读取并清理。
+- 隐私边界：只保留 `KeyboardEventCount` / `MouseEventCount` / `WindowSwitchCount`，不保留按键正文。
 
-## 后续建议
+## 本地运行
+
+先准备配置文件：
+
+```powershell
+Copy-Item .\agent\src\EmployeeBehavior.Agent.SessionHelper\appsettings.json.example .\agent\src\EmployeeBehavior.Agent.SessionHelper\appsettings.json
+Copy-Item .\agent\src\EmployeeBehavior.Agent.Service\appsettings.json.example .\agent\src\EmployeeBehavior.Agent.Service\appsettings.json
+```
+
+需要确认两边配置中的管道名一致：
+
+- `SessionHelper:PipeName`
+- `AgentService:SessionHelperPipeName`
+
+开发时建议先启动 Helper，再启动 Service。
+
+启动 Session Helper（控制台模式）：
+
+```powershell
+dotnet run --project .\agent\src\EmployeeBehavior.Agent.SessionHelper\EmployeeBehavior.Agent.SessionHelper.csproj -- --console
+```
+
+启动 Service（开发机前台运行）：
+
+```powershell
+dotnet run --project .\agent\src\EmployeeBehavior.Agent.Service\EmployeeBehavior.Agent.Service.csproj
+```
+
+默认配置说明：
+
+- Service `DryRun=true`，因此会调用现有 `AgentApiClient` 占位逻辑而不是依赖真实后端。
+- Helper 会持续提供截图 / 前台窗口 / 输入计数 / 会话状态采样。
+- 如果需要用环境变量覆盖配置，分别使用 `SESSION_HELPER_` 和 `AGENT_` 前缀。
+
+## 验证建议
 
 在具备 .NET SDK 的 Windows 环境中执行：
 
 ```powershell
 dotnet restore .\agent\EmployeeBehavior.Agent.sln
 dotnet build .\agent\EmployeeBehavior.Agent.sln
+dotnet run --project .\agent\src\EmployeeBehavior.Agent.SessionHelper\EmployeeBehavior.Agent.SessionHelper.csproj -- --console
+dotnet run --project .\agent\src\EmployeeBehavior.Agent.Service\EmployeeBehavior.Agent.Service.csproj
 ```
 
-建议下一步优先补齐：
+建议重点确认：
 
-1. Service 与 Session Helper 的 Named Pipe 协议与进程拉起。
-2. 真实截图实现与缩略图生成。
-3. WTS/桌面 API 的锁屏、RDP、输入计数实现。
-4. 后端 Agent API 的认证和上传闭环。
+1. 多屏截图在高 DPI、锁屏、UAC 提权桌面下的行为。
+2. Named Pipe 在大图 payload 下的稳定性和时延。
+3. 真实低层键鼠计数实现是否只输出计数、不泄露内容。
+4. 后端真实 `/api/agent/screenshots` 协议是否需要额外字段或改成分块/文件上传。

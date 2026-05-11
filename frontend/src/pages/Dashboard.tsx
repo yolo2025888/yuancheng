@@ -1,20 +1,29 @@
 import { Col, Row, Space, Typography } from 'antd';
 import { useEffect, useState } from 'react';
 
+import { BackendHealthNotice } from '../components/ApiStatusNotice';
 import { EventList } from '../components/EventList';
 import { KpiCard } from '../components/KpiCard';
 import { PageSection } from '../components/PageSection';
 import { EmployeeHeatmapChart } from '../components/charts/EmployeeHeatmapChart';
 import { WorkStatusStackedChart } from '../components/charts/WorkStatusStackedChart';
 import { adminApi } from '../services/adminApi';
-import { apiPlaceholderNote } from '../services/apiClient';
-import type { EventRecord, HeatmapPoint, KpiMetric, StatusBucket } from '../types/models';
+import type {
+  ApiStatus,
+  BackendHealth,
+  EventRecord,
+  HeatmapPoint,
+  KpiMetric,
+  StatusBucket
+} from '../types/models';
 
 export function DashboardPage() {
   const [kpis, setKpis] = useState<KpiMetric[]>([]);
   const [workStatus, setWorkStatus] = useState<StatusBucket[]>([]);
   const [heatmap, setHeatmap] = useState<HeatmapPoint[]>([]);
   const [eventItems, setEventItems] = useState<EventRecord[]>([]);
+  const [eventApiStatus, setEventApiStatus] = useState<ApiStatus | null>(null);
+  const [backendHealth, setBackendHealth] = useState<BackendHealth | null>(null);
 
   useEffect(() => {
     adminApi.getDashboardData().then((data) => {
@@ -22,16 +31,23 @@ export function DashboardPage() {
       setWorkStatus(data.workStatusSeries);
       setHeatmap(data.employeeHeatmap);
       setEventItems(data.events);
+      setEventApiStatus(data.eventApiStatus);
+      setBackendHealth(data.backendHealth);
     });
   }, []);
 
   return (
     <Space direction="vertical" size={20} className="page-stack">
       <PageSection
-        title="总览仪表盘"
-        description="面向主管、安全和系统管理员的统一巡检入口，优先展示在线态势、风险分布和待处理事件。"
-        extra={<Typography.Text className="hint-text">{apiPlaceholderNote}</Typography.Text>}
+        title="Dashboard"
+        description="MVP-1 overview with real backend health and event ingestion status."
+        extra={
+          eventApiStatus ? (
+            <Typography.Text className="hint-text">{eventApiStatus.label}</Typography.Text>
+          ) : null
+        }
       />
+      {backendHealth ? <BackendHealthNotice health={backendHealth} /> : null}
       <Row gutter={[16, 16]}>
         {kpis.map((metric) => (
           <Col xs={24} sm={12} xl={6} key={metric.key}>
