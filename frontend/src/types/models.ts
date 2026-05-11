@@ -194,6 +194,8 @@ export type DeviceRecord = {
   lastHeartbeat: string;
   status: 'online' | 'offline' | 'warning';
   metadataLabels?: string[];
+  hasAgentToken?: boolean;
+  agentTokenRevokedAt?: string | null;
 };
 
 export type TimelineSegment = {

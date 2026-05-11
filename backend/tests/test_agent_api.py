@@ -265,6 +265,46 @@ def test_global_and_v1_agent_tokens_are_rejected_outside_dev_and_test(
         assert authenticate_agent_token(seeded_device["agent_token"], settings, session) is not None
 
 
+def test_global_and_v1_agent_tokens_remain_compatible_in_test_environment(
+    client: TestClient,
+    seeded_device: dict[str, str],
+) -> None:
+    settings = client.app.state.settings
+    legacy_scoped = create_scoped_agent_token(seeded_device["device_id"], settings)
+    global_headers = {"Authorization": f"Bearer {settings.agent_api_token}"}
+    legacy_headers = {"Authorization": f"Bearer {legacy_scoped}"}
+
+    with Session(client.app.state.engine) as session:
+        global_principal = authenticate_agent_token(settings.agent_api_token, settings, session)
+        legacy_principal = authenticate_agent_token(legacy_scoped, settings, session)
+        scoped_principal = authenticate_agent_token(seeded_device["agent_token"], settings, session)
+
+    assert global_principal is not None
+    assert global_principal.legacy_global_token is True
+    assert global_principal.device_id is None
+    assert global_principal.token_version == "global"
+    assert legacy_principal is not None
+    assert legacy_principal.device_id == UUID(seeded_device["device_id"])
+    assert legacy_principal.token_version == "v1"
+    assert scoped_principal is not None
+    assert scoped_principal.token_version == "v2"
+
+    global_policy_response = client.get(
+        "/api/agent/policy",
+        params={"device_id": seeded_device["device_id"]},
+        headers=global_headers,
+    )
+    legacy_policy_response = client.get(
+        "/api/agent/policy",
+        params={"device_id": seeded_device["device_id"]},
+        headers=legacy_headers,
+    )
+
+    assert global_policy_response.status_code == 200
+    assert legacy_policy_response.status_code == 200
+    assert global_policy_response.json() == legacy_policy_response.json()
+
+
 def test_v2_agent_token_rejects_missing_hash_and_revoked_device(
     client: TestClient,
     seeded_device: dict[str, str],

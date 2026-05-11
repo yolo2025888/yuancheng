@@ -244,6 +244,97 @@ def test_device_agent_token_can_be_issued_used_and_revoked(
         assert revoked_audit.target_id == UUID(seeded_device["device_id"])
 
 
+def test_device_agent_token_revoke_requires_directory_manage_permission(
+    client: TestClient,
+    seeded_device: dict[str, str],
+    auth_headers,
+) -> None:
+    headers = auth_headers(bootstrap=True)
+    blocked_headers = auth_headers(
+        username="device.token.revoke.blocked",
+        password="blocked-password",
+        role_name="No Directory",
+    )
+
+    issue_response = client.post(
+        f"/api/devices/{seeded_device['device_id']}/agent-token",
+        headers=headers,
+    )
+    blocked_response = client.post(
+        f"/api/devices/{seeded_device['device_id']}/agent-token/revoke",
+        headers=blocked_headers,
+    )
+
+    assert issue_response.status_code == 200
+    assert blocked_response.status_code == 403
+
+    policy_response = client.get(
+        "/api/agent/policy",
+        headers={"Authorization": f"Bearer {issue_response.json()['token']}"},
+        params={"device_id": seeded_device["device_id"]},
+    )
+
+    assert policy_response.status_code == 200
+
+    with Session(client.app.state.engine) as session:
+        device = session.get(Device, UUID(seeded_device["device_id"]))
+        assert device is not None
+        assert device.agent_token_revoked_at is None
+        revoked_audit = session.exec(
+            select(AuditLog).where(AuditLog.action == "device.agent_token.revoked")
+        ).first()
+        assert revoked_audit is None
+
+
+def test_reissuing_device_agent_token_rotates_secret_and_invalidates_old_token(
+    client: TestClient,
+    seeded_device: dict[str, str],
+    auth_headers,
+) -> None:
+    headers = auth_headers(bootstrap=True)
+
+    first_issue_response = client.post(
+        f"/api/devices/{seeded_device['device_id']}/agent-token",
+        headers=headers,
+    )
+    second_issue_response = client.post(
+        f"/api/devices/{seeded_device['device_id']}/agent-token",
+        headers=headers,
+    )
+
+    assert first_issue_response.status_code == 200
+    assert second_issue_response.status_code == 200
+
+    first_token = first_issue_response.json()["token"]
+    second_token = second_issue_response.json()["token"]
+    assert first_token != second_token
+    assert first_issue_response.json().keys() == {"device_id", "token", "issued_at"}
+    assert second_issue_response.json().keys() == {"device_id", "token", "issued_at"}
+
+    first_policy_response = client.get(
+        "/api/agent/policy",
+        headers={"Authorization": f"Bearer {first_token}"},
+        params={"device_id": seeded_device["device_id"]},
+    )
+    second_policy_response = client.get(
+        "/api/agent/policy",
+        headers={"Authorization": f"Bearer {second_token}"},
+        params={"device_id": seeded_device["device_id"]},
+    )
+
+    assert first_policy_response.status_code == 401
+    assert first_policy_response.json()["detail"] == "Invalid agent token"
+    assert second_policy_response.status_code == 200
+
+    second_secret = second_token.split(":", maxsplit=2)[2]
+    with Session(client.app.state.engine) as session:
+        device = session.get(Device, UUID(seeded_device["device_id"]))
+        assert device is not None
+        assert device.agent_token_hash == hash_device_agent_secret(second_secret)
+        assert device.agent_token_hash != second_token
+        assert second_secret not in device.agent_token_hash
+
+
 def test_policy_crud_and_activation_write_audit_logs(client: TestClient, auth_headers) -> None:
     headers = auth_headers(bootstrap=True)
     create_response = client.post(

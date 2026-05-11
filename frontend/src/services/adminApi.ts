@@ -77,6 +77,18 @@ type RealtimeStatusData = {
 
 type EmployeeListData = ApiResult<EmployeeRecord[]>;
 type DeviceListData = ApiResult<DeviceRecord[]>;
+type DeviceTokenIssueResult = {
+  apiStatus: ApiStatus;
+  deviceId?: string;
+  token?: string;
+  errorCode?: 'forbidden' | 'not_found' | 'unavailable';
+};
+type DeviceTokenRevokeResult = {
+  apiStatus: ApiStatus;
+  deviceId?: string;
+  revokedAt?: string;
+  errorCode?: 'forbidden' | 'not_found' | 'unavailable';
+};
 type PolicyListData = ApiResult<PolicyRecord[]>;
 type AuditLogListData = ApiResult<AuditLogRecord[]>;
 type AttendanceListData = ApiResult<AttendanceRecord[]>;
@@ -575,9 +587,131 @@ export const adminApi = {
         apiStatus: liveStatus('/api/devices', `Loaded ${items.length} device records`)
       };
     } catch (error) {
+      const status = readErrorStatus(error);
+
+      if (status === 401 || status === 403) {
+        return {
+          data: [],
+          apiStatus: {
+            source: 'mock',
+            state: 'unavailable',
+            label: 'Access denied',
+            detail: `Device list access denied: ${getErrorMessage(error)}`,
+            endpoint: '/api/devices'
+          }
+        };
+      }
+
       return {
         data: devices,
         apiStatus: fallbackStatus('/api/devices', getErrorMessage(error))
+      };
+    }
+  },
+
+  async issueDeviceAgentToken(deviceId: string): Promise<DeviceTokenIssueResult> {
+    const endpoint = `/api/devices/${deviceId}/agent-token`;
+
+    try {
+      const payload = await apiClient<unknown>(endpoint, { method: 'POST' });
+      const record = asRecord(payload);
+      const token = readString(record, ['token']);
+      const resolvedDeviceId = readString(record, ['device_id', 'deviceId']) ?? deviceId;
+
+      if (!token) {
+        throw new Error('Device token response did not include a token');
+      }
+
+      return {
+        deviceId: resolvedDeviceId,
+        token,
+        apiStatus: liveStatus(endpoint, 'Issued a device-scoped agent token')
+      };
+    } catch (error) {
+      const status = readErrorStatus(error);
+
+      if (status === 401 || status === 403) {
+        return {
+          apiStatus: {
+            source: 'mock',
+            state: 'unavailable',
+            label: 'Access denied',
+            detail: `Device token issue denied: ${getErrorMessage(error)}`,
+            endpoint
+          },
+          errorCode: 'forbidden'
+        };
+      }
+
+      if (status === 404) {
+        return {
+          apiStatus: {
+            source: 'mock',
+            state: 'unavailable',
+            label: 'Device not found',
+            detail: `Device token issue failed: ${getErrorMessage(error)}`,
+            endpoint
+          },
+          errorCode: 'not_found'
+        };
+      }
+
+      return {
+        apiStatus: unavailableStatus(endpoint, `Device token issue failed: ${getErrorMessage(error)}`),
+        errorCode: 'unavailable'
+      };
+    }
+  },
+
+  async revokeDeviceAgentToken(deviceId: string): Promise<DeviceTokenRevokeResult> {
+    const endpoint = `/api/devices/${deviceId}/agent-token/revoke`;
+
+    try {
+      const payload = await apiClient<unknown>(endpoint, { method: 'POST' });
+      const record = asRecord(payload);
+      const revokedAt = readString(record, ['revoked_at', 'revokedAt']);
+
+      if (!revokedAt) {
+        throw new Error('Device token revoke response did not include revoked_at');
+      }
+
+      return {
+        deviceId: readString(record, ['device_id', 'deviceId']) ?? deviceId,
+        revokedAt,
+        apiStatus: liveStatus(endpoint, 'Revoked the device-scoped agent token')
+      };
+    } catch (error) {
+      const status = readErrorStatus(error);
+
+      if (status === 401 || status === 403) {
+        return {
+          apiStatus: {
+            source: 'mock',
+            state: 'unavailable',
+            label: 'Access denied',
+            detail: `Device token revoke denied: ${getErrorMessage(error)}`,
+            endpoint
+          },
+          errorCode: 'forbidden'
+        };
+      }
+
+      if (status === 404) {
+        return {
+          apiStatus: {
+            source: 'mock',
+            state: 'unavailable',
+            label: 'Device not found',
+            detail: `Device token revoke failed: ${getErrorMessage(error)}`,
+            endpoint
+          },
+          errorCode: 'not_found'
+        };
+      }
+
+      return {
+        apiStatus: unavailableStatus(endpoint, `Device token revoke failed: ${getErrorMessage(error)}`),
+        errorCode: 'unavailable'
       };
     }
   },
@@ -1170,6 +1304,8 @@ function mapDeviceRecord(item: DeviceApiItem, index: number): DeviceRecord {
     agentVersion: readString(item, ['agent_version', 'version']) ?? '--',
     lastHeartbeat: formatDateTime(readString(item, ['last_heartbeat_at', 'last_seen_at'])),
     status: normalizeDeviceStatus(readString(item, ['status'])),
+    hasAgentToken: readBoolean(item, ['has_agent_token', 'hasAgentToken']) ?? false,
+    agentTokenRevokedAt: formatOptionalDateTime(readString(item, ['agent_token_revoked_at', 'agentTokenRevokedAt'])),
     metadataLabels: buildDeviceMetadataLabels(
       item,
       metadata,
@@ -3065,6 +3201,14 @@ function formatDateTime(value?: string | null) {
   }
 
   return parsed.toLocaleString();
+}
+
+function formatOptionalDateTime(value?: string | null) {
+  if (!value) {
+    return null;
+  }
+
+  return formatDateTime(value);
 }
 
 function normalizeTimeValue(value?: string | null) {
