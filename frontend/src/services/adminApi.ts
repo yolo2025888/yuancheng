@@ -163,6 +163,11 @@ type TimelineApiItem = Record<string, unknown> & {
   image_uri?: string | null;
   full_image_url?: string | null;
   activity_type?: string;
+  active_app?: string | null;
+  activity_confidence?: number | null;
+  activity_summary?: string | null;
+  activity_evidence?: Record<string, unknown> | null;
+  activity?: Record<string, unknown> | null;
   change_level?: string;
   change?: Record<string, unknown> | null;
   diff?: Record<string, unknown> | null;
@@ -859,6 +864,8 @@ export const adminApi = {
       changeMetrics: current.changeMetrics,
       linkedRisks: current.linkedRisks,
       noChangeStreakTriggered: current.noChangeStreakTriggered,
+      currentActivity: current,
+      previousActivity: previous,
       apiStatus: timeline.apiStatus
     };
   },
@@ -1562,13 +1569,58 @@ function mapEventRecord(item: EventApiItem): EventRecord {
   };
 }
 
+function extractActivityInfo(item: TimelineApiItem, details?: Record<string, unknown>) {
+  const activity = asRecord(item.activity);
+  const evidence =
+    asRecord(item.activity_evidence) ??
+    asRecord(item.activity_evidence_json) ??
+    asRecord(activity?.evidence) ??
+    asRecord(details?.activity_evidence) ??
+    asRecord(details?.activity_evidence_json) ??
+    {};
+
+  const activityType =
+    firstString(
+      item.activity_type,
+      readString(activity, ['type', 'activity_type']),
+      readString(details, ['activity_type'])
+    ) ?? 'unknown';
+  const activeApp =
+    firstString(
+      item.active_app,
+      readString(activity, ['active_app', 'activeApp', 'app']),
+      readString(details, ['active_app', 'activeApp', 'app'])
+    ) ?? null;
+  const confidence =
+    readNumber(item, ['activity_confidence', 'confidence']) ??
+    readNumber(activity, ['confidence', 'activity_confidence']) ??
+    readNumber(details, ['activity_confidence', 'confidence']) ??
+    null;
+  const summary =
+    firstString(
+      item.activity_summary,
+      readString(activity, ['summary', 'activity_summary']),
+      readString(details, ['activity_summary'])
+    ) ?? null;
+
+  return {
+    activityType,
+    activeApp,
+    confidence,
+    summary,
+    evidence
+  };
+}
+
 function mapTimelineSegment(item: TimelineApiItem): TimelineSegment {
   const linkedRisks = extractLinkedRisks(item);
+  const details = asRecord(item.details_json);
+  const activity = extractActivityInfo(item, details);
   const changeMetrics = extractChangeMetrics(
     item,
     asRecord(item.change),
     asRecord(item.diff),
-    asRecord(item.details_json),
+    details,
     asRecord(item.diff_metrics),
     asRecord(item.change_metrics),
     asRecord(item.metadata)
@@ -1577,9 +1629,13 @@ function mapTimelineSegment(item: TimelineApiItem): TimelineSegment {
 
   return {
     time: item.time ?? '--',
-    label: buildTimelineLabel(item, changeMetrics, noChangeStreakTriggered),
-    detail: buildTimelineDetail(item, linkedRisks, changeMetrics),
-    status: buildTimelineStatus(item, linkedRisks, changeMetrics),
+    label: buildTimelineLabel(activity, changeMetrics, noChangeStreakTriggered),
+    detail: buildTimelineDetail(item, linkedRisks, changeMetrics, activity),
+    status: buildTimelineStatus(activity.activityType, linkedRisks, changeMetrics),
+    activityType: activity.activityType,
+    activeApp: activity.activeApp,
+    activityConfidence: activity.confidence,
+    activitySummary: activity.summary,
     changeMetrics,
     linkedRiskCount: linkedRisks.length,
     noChangeStreakTriggered
@@ -1589,6 +1645,7 @@ function mapTimelineSegment(item: TimelineApiItem): TimelineSegment {
 function mapScreenshotListItem(item: TimelineApiItem): ScreenshotListItem {
   const linkedRisks = extractLinkedRisks(item);
   const details = asRecord(item.details_json);
+  const activity = extractActivityInfo(item, details);
   const changeMetrics = extractChangeMetrics(
     item,
     asRecord(item.change),
@@ -1613,7 +1670,11 @@ function mapScreenshotListItem(item: TimelineApiItem): ScreenshotListItem {
         item.full_image_url,
         readString(details, ['image_url', 'full_image_url', 'image_uri'])
       ) ?? null,
-    activityType: firstString(item.activity_type, readString(details, ['activity_type'])) ?? 'unknown',
+    activityType: activity.activityType,
+    activeApp: activity.activeApp,
+    activityConfidence: activity.confidence,
+    activitySummary: activity.summary,
+    activityEvidence: activity.evidence,
     changeLevel: changeMetrics.changeLevel,
     keyboardCount: readNumber(item, ['keyboard_count']) ?? readNumber(details, ['keyboard_count']) ?? 0,
     mouseCount: readNumber(item, ['mouse_count']) ?? readNumber(details, ['mouse_count']) ?? 0,
@@ -2670,6 +2731,10 @@ function buildMockScreenshot(input: {
     thumbUri: null,
     imageUri: null,
     activityType: input.activityType,
+    activeApp: input.activityType.toLowerCase().includes('review') ? 'github' : 'cursor',
+    activityConfidence: 0.82,
+    activitySummary: `${input.activityType} activity from mock timeline data.`,
+    activityEvidence: { source: 'mock' },
     changeLevel: input.changeLevel,
     keyboardCount: input.keyboardCount,
     mouseCount: input.mouseCount,
@@ -2694,6 +2759,10 @@ function mapMockFrameToSegment(item: ScreenshotListItem): TimelineSegment {
           : 'working'
         : 'idle',
     changeMetrics: item.changeMetrics,
+    activityType: item.activityType,
+    activeApp: item.activeApp,
+    activityConfidence: item.activityConfidence,
+    activitySummary: item.activitySummary,
     linkedRiskCount: item.riskCount,
     noChangeStreakTriggered: item.noChangeStreakTriggered
   };
@@ -2826,7 +2895,7 @@ function resolvePolicyStatus(item: PolicyApiItem, rules?: Record<string, unknown
 }
 
 function buildTimelineStatus(
-  item: TimelineApiItem,
+  activityType: string,
   linkedRisks: LinkedRiskRecord[],
   changeMetrics: ChangeMetrics
 ): TimelineSegment['status'] {
@@ -2834,12 +2903,11 @@ function buildTimelineStatus(
     return 'risk';
   }
 
-  const activity = firstString(item.activity_type, readString(asRecord(item.details_json), ['activity_type'])) ?? '';
-  if (activity.toLowerCase().includes('meeting')) {
+  if (activityType.toLowerCase().includes('meeting')) {
     return 'meeting';
   }
 
-  if (changeMetrics.effectiveChange === false) {
+  if (['idle', 'locked'].includes(activityType) || changeMetrics.effectiveChange === false) {
     return 'idle';
   }
 
@@ -2847,7 +2915,7 @@ function buildTimelineStatus(
 }
 
 function buildTimelineLabel(
-  item: TimelineApiItem,
+  activity: ReturnType<typeof extractActivityInfo>,
   changeMetrics: ChangeMetrics,
   noChangeStreakTriggered: boolean
 ) {
@@ -2855,9 +2923,8 @@ function buildTimelineLabel(
     return 'No-change streak triggered';
   }
 
-  const activity = firstString(item.activity_type, readString(asRecord(item.details_json), ['activity_type']));
-  if (activity && activity !== 'unknown') {
-    return formatLabel(activity);
+  if (activity.activityType && activity.activityType !== 'unknown') {
+    return formatLabel(activity.activityType);
   }
 
   return `Change ${formatLabel(changeMetrics.changeLevel)}`;
@@ -2866,7 +2933,8 @@ function buildTimelineLabel(
 function buildTimelineDetail(
   item: TimelineApiItem,
   linkedRisks: LinkedRiskRecord[],
-  changeMetrics: ChangeMetrics
+  changeMetrics: ChangeMetrics,
+  activity: ReturnType<typeof extractActivityInfo>
 ) {
   const keyboardCount =
     readNumber(item, ['keyboard_count']) ?? readNumber(asRecord(item.details_json), ['keyboard_count']) ?? 0;
@@ -2874,8 +2942,14 @@ function buildTimelineDetail(
     readNumber(item, ['mouse_count']) ?? readNumber(asRecord(item.details_json), ['mouse_count']) ?? 0;
   const riskText =
     linkedRisks.length > 0 ? linkedRisks.map((risk) => risk.type).join(', ') : 'No linked risk events';
+  const activityText = [
+    activity.activeApp ? `App ${formatLabel(activity.activeApp)}` : undefined,
+    activity.confidence !== null ? `Confidence ${formatPercent(activity.confidence)}` : undefined,
+    activity.summary
+  ].filter(Boolean);
 
   return [
+    ...activityText,
     `Keyboard ${keyboardCount}`,
     `Mouse ${mouseCount}`,
     `Changed blocks ${formatPercent(changeMetrics.changedBlockRatio) ?? '--'}`,
@@ -2922,6 +2996,19 @@ function buildScreenshotDetailMetrics(item: ScreenshotListItem) {
       hint: 'Aggregate counters only. No raw keystrokes or content are stored.'
     },
     {
+      label: 'Activity',
+      value: formatLabel(item.activityType || 'unknown'),
+      hint: [
+        item.activeApp ? `App ${formatLabel(item.activeApp)}` : undefined,
+        item.activityConfidence !== null && item.activityConfidence !== undefined
+          ? `Confidence ${formatPercent(item.activityConfidence)}`
+          : undefined,
+        item.activitySummary
+      ]
+        .filter(Boolean)
+        .join(' / ') || 'No activity summary available.'
+    },
+    {
       label: 'Reason',
       value: item.changeMetrics.reason || '--',
       hint: 'Backend-compatible reason text shown defensively when present.'
@@ -2943,6 +3030,11 @@ function buildScreenshotReasoning(current: ScreenshotListItem, previous?: Screen
   const notes = [
     `Screenshot ID: ${current.id}`,
     `Activity type: ${current.activityType || 'unknown'}`,
+    current.activeApp ? `Active app: ${formatLabel(current.activeApp)}` : 'Active app: unknown',
+    current.activityConfidence !== null && current.activityConfidence !== undefined
+      ? `Activity confidence: ${formatPercent(current.activityConfidence)}`
+      : 'Activity confidence: unknown',
+    current.activitySummary ? `Activity summary: ${current.activitySummary}` : 'No activity summary available.',
     previous
       ? `Compared against previous frame at ${previous.capturedAt}`
       : 'No previous frame is available from the current source.',

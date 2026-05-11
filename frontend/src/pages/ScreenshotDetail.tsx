@@ -8,7 +8,11 @@ import { PageSection } from '../components/PageSection';
 import { StatusTag } from '../components/StatusTag';
 import { fetchApiAssetObjectUrl, resolveApiAssetUrl } from '../services/apiClient';
 import { adminApi } from '../services/adminApi';
-import type { ScreenshotComparison } from '../types/models';
+import type { ScreenshotComparison, ScreenshotListItem } from '../types/models';
+
+function formatActivityApp(value?: string | null) {
+  return value ? `App ${value}` : null;
+}
 
 export function ScreenshotDetailPage() {
   const [searchParams] = useSearchParams();
@@ -74,6 +78,10 @@ export function ScreenshotDetailPage() {
         <Col xs={24} xl={14}>
           <Space direction="vertical" size={16} className="full-width">
             <Card bordered={false} className="panel-card">
+              <Typography.Title level={5}>Activity</Typography.Title>
+              <ActivitySummary current={detail.currentActivity} previous={detail.previousActivity} />
+            </Card>
+            <Card bordered={false} className="panel-card">
               <Typography.Title level={5}>Diff summary</Typography.Title>
               <ChangeMetricsSummary
                 metrics={detail.changeMetrics}
@@ -138,6 +146,55 @@ export function ScreenshotDetailPage() {
       </Row>
     </Space>
   );
+}
+
+type ActivitySummaryProps = {
+  current?: ScreenshotListItem;
+  previous?: ScreenshotListItem;
+};
+
+function ActivitySummary({ current, previous }: ActivitySummaryProps) {
+  const rows = [
+    { label: 'Current', item: current },
+    { label: 'Previous', item: previous }
+  ].filter((row): row is { label: string; item: ScreenshotListItem } => Boolean(row.item));
+
+  if (rows.length === 0) {
+    return <Typography.Text type="secondary">No activity metadata.</Typography.Text>;
+  }
+
+  return (
+    <List
+      dataSource={rows}
+      renderItem={(row) => (
+        <List.Item>
+          <Space direction="vertical" size={4} className="full-width">
+            <Space size={8} wrap>
+              <Typography.Text strong>{row.label}</Typography.Text>
+              <Typography.Text>{row.item.activityType || 'unknown'}</Typography.Text>
+              {formatActivityApp(row.item.activeApp) ? (
+                <Typography.Text type="secondary">{formatActivityApp(row.item.activeApp)}</Typography.Text>
+              ) : null}
+              {formatConfidence(row.item.activityConfidence) ? (
+                <Typography.Text type="secondary">{formatConfidence(row.item.activityConfidence)}</Typography.Text>
+              ) : null}
+            </Space>
+            {row.item.activitySummary ? (
+              <Typography.Text type="secondary">{row.item.activitySummary}</Typography.Text>
+            ) : null}
+          </Space>
+        </List.Item>
+      )}
+    />
+  );
+}
+
+function formatConfidence(value?: number | null) {
+  if (value === undefined || value === null || Number.isNaN(value)) {
+    return null;
+  }
+  const normalized = value > 1 ? value : value * 100;
+  return `Confidence ${normalized.toFixed(normalized >= 10 ? 0 : 1)}%`;
 }
 
 type ScreenshotPreviewProps = {

@@ -24,6 +24,8 @@ def test_timeline_and_events_queries(client: TestClient, seeded_device: dict[str
             thumb_uri="thumbnails/example.jpg",
             width=1920,
             height=1080,
+            foreground_process="Cursor.exe",
+            window_title="employee-monitor - Cursor",
             keyboard_count=23,
             mouse_click_count=4,
             mouse_move_count=19,
@@ -96,6 +98,11 @@ def test_timeline_and_events_queries(client: TestClient, seeded_device: dict[str
     assert timeline_payload["items"][0]["image_uri"] is None
     assert timeline_payload["items"][0]["keyboard_count"] == 23
     assert timeline_payload["items"][0]["mouse_count"] == 23
+    assert timeline_payload["items"][0]["activity_type"] == "development"
+    assert timeline_payload["items"][0]["active_app"] == "cursor"
+    assert timeline_payload["items"][0]["activity_confidence"] >= 0.8
+    assert "Development activity" in timeline_payload["items"][0]["activity_summary"]
+    assert timeline_payload["items"][0]["activity"]["type"] == "development"
     assert timeline_payload["items"][0]["activity"]["keyboard_count"] == 23
     assert timeline_payload["items"][0]["risk_events"][0]["severity"] == "high"
     assert timeline_payload["items"][0]["risk_events"][0]["streak_count"] == 6
@@ -164,7 +171,11 @@ def test_screenshot_list_and_detail_queries(client: TestClient, seeded_device: d
     assert list_payload["total"] == 1
     assert list_payload["items"][0]["screen_index"] == 1
     assert list_payload["items"][0]["thumb_uri"].endswith("/thumbnail")
+    assert list_payload["items"][0]["foreground_process"] is None
+    assert list_payload["items"][0]["window_title"] is None
     assert list_payload["items"][0]["diff"] is None
+    assert list_payload["items"][0]["activity_type"] == "development"
+    assert list_payload["items"][0]["active_app"] == "cursor"
 
     screenshot_id = list_payload["items"][0]["id"]
     detail_response = client.get(f"/api/screenshots/{screenshot_id}", headers=headers)
@@ -174,4 +185,8 @@ def test_screenshot_list_and_detail_queries(client: TestClient, seeded_device: d
     assert detail_payload["employee_id"] == str(employee_id)
     assert detail_payload["device_id"] == str(device_id)
     assert detail_payload["image_uri"].endswith("/image")
+    assert detail_payload["foreground_process"] is None
+    assert detail_payload["window_title"] is None
     assert detail_payload["risk_events"] == []
+    assert detail_payload["activity_type"] == "development"
+    assert detail_payload["activity_summary"]

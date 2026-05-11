@@ -615,6 +615,11 @@ def test_sqlite_schema_ensure_adds_new_columns_to_existing_db(tmp_path: Path) ->
         "idle_seconds",
         "input_desktop_name",
         "session_connect_state",
+        "activity_type",
+        "active_app",
+        "activity_confidence",
+        "activity_summary",
+        "activity_evidence_json",
     } <= screenshot_columns
 
 

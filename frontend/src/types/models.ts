@@ -205,6 +205,10 @@ export type TimelineSegment = {
   label: string;
   detail: string;
   status: 'working' | 'meeting' | 'idle' | 'risk';
+  activityType?: string;
+  activeApp?: string | null;
+  activityConfidence?: number | null;
+  activitySummary?: string | null;
   changeMetrics?: ChangeMetrics | null;
   linkedRiskCount?: number;
   noChangeStreakTriggered?: boolean;
@@ -216,6 +220,10 @@ export type ScreenshotListItem = {
   thumbUri?: string | null;
   imageUri?: string | null;
   activityType: string;
+  activeApp?: string | null;
+  activityConfidence?: number | null;
+  activitySummary?: string | null;
+  activityEvidence?: Record<string, unknown>;
   changeLevel: string;
   keyboardCount: number;
   mouseCount: number;
@@ -335,5 +343,7 @@ export type ScreenshotComparison = {
   changeMetrics?: ChangeMetrics | null;
   linkedRisks?: LinkedRiskRecord[];
   noChangeStreakTriggered?: boolean;
+  currentActivity?: ScreenshotListItem;
+  previousActivity?: ScreenshotListItem;
   apiStatus?: ApiStatus;
 };

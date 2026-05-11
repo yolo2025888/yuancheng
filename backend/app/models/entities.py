@@ -107,6 +107,14 @@ class Screenshot(TimestampedUUIDModel, table=True):
     upload_status: str = Field(default="pending", index=True)
     ocr_status: str = Field(default="pending", index=True)
     analysis_status: str = Field(default="pending", index=True)
+    activity_type: str | None = Field(default=None, index=True)
+    active_app: str | None = Field(default=None, index=True)
+    activity_confidence: float | None = Field(default=None)
+    activity_summary: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
+    activity_evidence_json: dict[str, Any] | None = Field(
+        default=None,
+        sa_column=Column(JSON, nullable=True),
+    )
 
 
 class ScreenDiff(SQLModel, table=True):

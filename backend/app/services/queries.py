@@ -40,6 +40,7 @@ from app.services.access_control import (
 )
 from app.services.audit import AuditContext, AuditService
 from app.services.policies import PolicyService
+from app.services.screen_analysis import classify_screenshot_activity
 from app.schemas.query import (
     BehaviorEventDetail,
     BehaviorEventListResponse,
@@ -152,6 +153,29 @@ class QueryService:
             return None
         return ScreenDiffSummary.model_validate(diff)
 
+    def _activity_payload(self, screenshot: Screenshot, diff: ScreenDiff | None) -> dict[str, object]:
+        if screenshot.activity_type:
+            return {
+                "type": screenshot.activity_type,
+                "active_app": screenshot.active_app,
+                "confidence": screenshot.activity_confidence,
+                "summary": screenshot.activity_summary,
+                "evidence": screenshot.activity_evidence_json or {},
+            }
+
+        activity = classify_screenshot_activity(
+            screenshot=screenshot,
+            change_level=diff.change_level if diff is not None else None,
+            is_effective_change=diff.is_effective_change if diff is not None else None,
+        )
+        return {
+            "type": activity.activity_type,
+            "active_app": activity.active_app,
+            "confidence": activity.confidence,
+            "summary": activity.summary,
+            "evidence": activity.evidence,
+        }
+
     def _build_screenshot_item(
         self,
         *,
@@ -159,6 +183,7 @@ class QueryService:
         diff: ScreenDiff | None,
         events: list[BehaviorEvent],
     ) -> ScreenshotItem:
+        activity = self._activity_payload(screenshot, diff)
         return ScreenshotItem(
             id=screenshot.id,
             employee_id=screenshot.employee_id,
@@ -169,8 +194,8 @@ class QueryService:
             thumb_uri=self._secured_screenshot_uri(screenshot.id, "thumbnail", screenshot.thumb_uri),
             width=screenshot.width,
             height=screenshot.height,
-            foreground_process=screenshot.foreground_process,
-            window_title=screenshot.window_title,
+            foreground_process=None,
+            window_title=None,
             keyboard_count=screenshot.keyboard_count,
             mouse_click_count=screenshot.mouse_click_count,
             mouse_move_count=screenshot.mouse_move_count,
@@ -186,6 +211,17 @@ class QueryService:
             upload_status=screenshot.upload_status,
             ocr_status=screenshot.ocr_status,
             analysis_status=screenshot.analysis_status,
+            activity_type=str(activity["type"]),
+            active_app=activity["active_app"] if isinstance(activity["active_app"], str) else None,
+            activity_confidence=(
+                float(activity["confidence"])
+                if isinstance(activity["confidence"], (int, float))
+                else None
+            ),
+            activity_summary=activity["summary"] if isinstance(activity["summary"], str) else None,
+            activity_evidence=(
+                activity["evidence"] if isinstance(activity["evidence"], dict) else {}
+            ),
             diff=self._build_diff_summary(diff),
             risk_events=self._risk_events_for_screenshot(screenshot=screenshot, events=events),
             created_at=screenshot.created_at,
@@ -263,6 +299,7 @@ class QueryService:
         for screenshot in screenshots:
             risk_events = self._risk_events_for_screenshot(screenshot=screenshot, events=events)
             diff = diff_map.get(screenshot.id)
+            activity = self._activity_payload(screenshot, diff)
             items.append(
                 TimelineItem(
                     time=ensure_utc(screenshot.captured_at).strftime("%H:%M:%S"),
@@ -270,9 +307,27 @@ class QueryService:
                     thumbnail_url=self._secured_screenshot_uri(screenshot.id, "thumbnail", screenshot.thumb_uri),
                     thumb_uri=self._secured_screenshot_uri(screenshot.id, "thumbnail", screenshot.thumb_uri),
                     image_uri=self._secured_screenshot_uri(screenshot.id, "image", screenshot.image_uri),
-                    activity_type="unknown",
+                    activity_type=str(activity["type"]),
+                    active_app=activity["active_app"] if isinstance(activity["active_app"], str) else None,
+                    activity_confidence=(
+                        float(activity["confidence"])
+                        if isinstance(activity["confidence"], (int, float))
+                        else None
+                    ),
+                    activity_summary=activity["summary"] if isinstance(activity["summary"], str) else None,
+                    activity_evidence=(
+                        activity["evidence"] if isinstance(activity["evidence"], dict) else {}
+                    ),
                     activity=TimelineActivity(
-                        type="unknown",
+                        type=str(activity["type"]),
+                        active_app=activity["active_app"] if isinstance(activity["active_app"], str) else None,
+                        confidence=(
+                            float(activity["confidence"])
+                            if isinstance(activity["confidence"], (int, float))
+                            else None
+                        ),
+                        summary=activity["summary"] if isinstance(activity["summary"], str) else None,
+                        evidence=activity["evidence"] if isinstance(activity["evidence"], dict) else {},
                         keyboard_count=screenshot.keyboard_count,
                         mouse_count=screenshot.mouse_click_count + screenshot.mouse_move_count,
                     ),

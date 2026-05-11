@@ -608,6 +608,16 @@ def test_screenshot_metadata_and_complete_flow(
         assert screenshot.phash == "abc123"
         assert screenshot.upload_status == "completed"
         assert screenshot.analysis_status in {"completed", "failed"}
+        assert screenshot.ocr_status == "skipped"
+        assert screenshot.activity_type == "development"
+        assert screenshot.active_app == "cursor"
+        assert screenshot.activity_confidence is not None
+        assert screenshot.activity_confidence >= 0.8
+        assert screenshot.activity_summary is not None
+        assert "Development activity" in screenshot.activity_summary
+        assert screenshot.activity_evidence_json is not None
+        assert "project - Cursor" not in str(screenshot.activity_evidence_json)
+        assert "title:cursor" in screenshot.activity_evidence_json["matched_signals"]
 
 
 def test_screenshot_complete_requires_existing_record(

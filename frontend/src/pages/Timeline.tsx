@@ -17,6 +17,18 @@ const timelineColors = {
   risk: 'red'
 } as const;
 
+function formatActivityApp(value?: string | null) {
+  return value ? `App ${value}` : null;
+}
+
+function formatConfidence(value?: number | null) {
+  if (value === undefined || value === null || Number.isNaN(value)) {
+    return null;
+  }
+  const normalized = value > 1 ? value : value * 100;
+  return `Confidence ${normalized.toFixed(normalized >= 10 ? 0 : 1)}%`;
+}
+
 export function TimelinePage() {
   const [searchParams] = useSearchParams();
   const employeeIdParam = searchParams.get('employeeId') ?? undefined;
@@ -87,8 +99,17 @@ export function TimelinePage() {
                 <Space direction="vertical" size={6} className="full-width">
                   <Space size={8} wrap>
                     <Typography.Text strong>{segment.label}</Typography.Text>
+                    {formatActivityApp(segment.activeApp) ? (
+                      <Typography.Text type="secondary">{formatActivityApp(segment.activeApp)}</Typography.Text>
+                    ) : null}
+                    {formatConfidence(segment.activityConfidence) ? (
+                      <Typography.Text type="secondary">{formatConfidence(segment.activityConfidence)}</Typography.Text>
+                    ) : null}
                     {segment.noChangeStreakTriggered ? <StatusTag value="no_change_streak" /> : null}
                   </Space>
+                  {segment.activitySummary ? (
+                    <Typography.Text type="secondary">{segment.activitySummary}</Typography.Text>
+                  ) : null}
                   <Typography.Text>{segment.detail}</Typography.Text>
                   <ChangeMetricsSummary
                     metrics={segment.changeMetrics}
@@ -128,8 +149,17 @@ export function TimelinePage() {
                 <Space size={8} wrap>
                   <Typography.Text strong>{item.capturedAt}</Typography.Text>
                   <Typography.Text>{item.activityType || 'unknown activity'}</Typography.Text>
+                  {formatActivityApp(item.activeApp) ? (
+                    <Typography.Text type="secondary">{formatActivityApp(item.activeApp)}</Typography.Text>
+                  ) : null}
+                  {formatConfidence(item.activityConfidence) ? (
+                    <Typography.Text type="secondary">{formatConfidence(item.activityConfidence)}</Typography.Text>
+                  ) : null}
                   {item.noChangeStreakTriggered ? <StatusTag value="no_change_streak" /> : null}
                 </Space>
+                {item.activitySummary ? (
+                  <Typography.Text type="secondary">{item.activitySummary}</Typography.Text>
+                ) : null}
                 <Typography.Text type="secondary">
                   Keyboard {item.keyboardCount} / Mouse {item.mouseCount} / Linked risks {item.riskCount}
                 </Typography.Text>

@@ -36,6 +36,381 @@ class DiffMetrics:
     reason: str
 
 
+@dataclass(frozen=True)
+class ActivityClassification:
+    activity_type: str
+    active_app: str | None
+    confidence: float
+    summary: str
+    evidence: dict[str, Any]
+
+
+PROCESS_ALIASES = {
+    "arc": "arc",
+    "bash": "bash",
+    "brave": "brave",
+    "chrome": "chrome",
+    "cmd": "cmd",
+    "code": "vscode",
+    "confluence": "confluence",
+    "cursor": "cursor",
+    "discord": "discord",
+    "excel": "excel",
+    "firefox": "firefox",
+    "goland": "goland",
+    "idea": "intellij",
+    "intellijidea": "intellij",
+    "msedge": "edge",
+    "notion": "notion",
+    "onenote": "onenote",
+    "outlook": "outlook",
+    "pdf": "pdf",
+    "powerpnt": "powerpoint",
+    "powershell": "powershell",
+    "pycharm": "pycharm",
+    "safari": "safari",
+    "slack": "slack",
+    "teams": "teams",
+    "terminal": "terminal",
+    "webex": "webex",
+    "winword": "word",
+    "zoom": "zoom",
+}
+
+SAFE_TITLE_TOKENS = (
+    ("pull request", "pull_request"),
+    ("merge request", "merge_request"),
+    ("visual studio code", "vscode"),
+    ("visual studio", "visualstudio"),
+    ("google docs", "docs"),
+    ("github", "github"),
+    ("gitlab", "gitlab"),
+    ("bitbucket", "bitbucket"),
+    ("repository", "repo"),
+    ("review", "review"),
+    ("diff", "diff"),
+    ("cursor", "cursor"),
+    ("vscode", "vscode"),
+    ("terminal", "terminal"),
+    ("powershell", "powershell"),
+    ("meeting", "meeting"),
+    ("teams", "teams"),
+    ("zoom", "zoom"),
+    ("webex", "webex"),
+    ("notion", "notion"),
+    ("confluence", "confluence"),
+    ("docs", "docs"),
+    ("document", "document"),
+    ("spreadsheet", "spreadsheet"),
+    ("slides", "slides"),
+    ("wiki", "wiki"),
+    ("readme", "readme"),
+    ("word", "word"),
+    ("excel", "excel"),
+    ("powerpoint", "powerpoint"),
+    ("pdf", "pdf"),
+    ("editor", "editor"),
+)
+
+DEVELOPMENT_APPS = {"bash", "cmd", "cursor", "goland", "intellij", "powershell", "pycharm", "terminal", "vscode"}
+DEVELOPMENT_TOKENS = {"cursor", "editor", "powershell", "terminal", "vscode"}
+MEETING_APPS = {"discord", "slack", "teams", "webex", "zoom"}
+MEETING_TOKENS = {"meeting", "teams", "webex", "zoom"}
+DOCUMENTATION_APPS = {"confluence", "docs", "excel", "notion", "onenote", "outlook", "pdf", "powerpoint", "word"}
+DOCUMENTATION_TOKENS = {"confluence", "docs", "document", "notion", "pdf", "powerpoint", "readme", "slides", "spreadsheet", "wiki", "word", "excel"}
+BROWSER_APPS = {"arc", "brave", "chrome", "edge", "firefox", "safari"}
+CODE_REVIEW_TOKENS = {"bitbucket", "diff", "github", "gitlab", "merge_request", "pull_request", "repo", "review"}
+IDLE_THRESHOLD_SECONDS = 300
+
+
+def classify_screenshot_activity(
+    *,
+    screenshot: Screenshot,
+    change_level: str | None,
+    is_effective_change: bool | None,
+) -> ActivityClassification:
+    process_label = _normalize_process_name(screenshot.foreground_process)
+    title_tokens = _extract_safe_title_tokens(screenshot.window_title)
+    session_mode = _session_mode(screenshot)
+    idle_bucket = _idle_bucket(screenshot.idle_seconds)
+    evidence: dict[str, Any] = {
+        "classifier": "metadata_v1",
+        "matched_signals": [],
+        "matched_keywords": sorted(title_tokens),
+        "session_mode": session_mode,
+        "idle_bucket": idle_bucket,
+        "change_level": change_level or "unknown",
+        "effective_change": bool(is_effective_change),
+    }
+
+    if process_label:
+        evidence["matched_signals"].append(f"process:{process_label}")
+    for token in sorted(title_tokens):
+        evidence["matched_signals"].append(f"title:{token}")
+    if not is_effective_change and (change_level or "unknown") in {"minor", "none"}:
+        evidence["risk_hint"] = "steady_screen"
+
+    if _is_locked_session(screenshot):
+        return _finalize_activity(
+            activity_type="locked",
+            active_app="lock_screen",
+            process_label=process_label,
+            title_tokens=title_tokens,
+            session_mode=session_mode,
+            change_level=change_level,
+            evidence=evidence,
+        )
+
+    if _is_idle_session(screenshot):
+        return _finalize_activity(
+            activity_type="idle",
+            active_app=process_label,
+            process_label=process_label,
+            title_tokens=title_tokens,
+            session_mode=session_mode,
+            change_level=change_level,
+            evidence=evidence,
+        )
+
+    if process_label in MEETING_APPS or title_tokens & MEETING_TOKENS:
+        active_app = _preferred_app(process_label, title_tokens, MEETING_APPS | MEETING_TOKENS)
+        return _finalize_activity(
+            activity_type="meeting",
+            active_app=active_app,
+            process_label=process_label,
+            title_tokens=title_tokens,
+            session_mode=session_mode,
+            change_level=change_level,
+            evidence=evidence,
+        )
+
+    if process_label in DEVELOPMENT_APPS:
+        return _finalize_activity(
+            activity_type="development",
+            active_app=process_label,
+            process_label=process_label,
+            title_tokens=title_tokens,
+            session_mode=session_mode,
+            change_level=change_level,
+            evidence=evidence,
+        )
+
+    if process_label in DOCUMENTATION_APPS or title_tokens & DOCUMENTATION_TOKENS:
+        active_app = _preferred_app(process_label, title_tokens, DOCUMENTATION_APPS | DOCUMENTATION_TOKENS)
+        return _finalize_activity(
+            activity_type="documentation",
+            active_app=active_app,
+            process_label=process_label,
+            title_tokens=title_tokens,
+            session_mode=session_mode,
+            change_level=change_level,
+            evidence=evidence,
+        )
+
+    if process_label in BROWSER_APPS or title_tokens & CODE_REVIEW_TOKENS:
+        active_app = _preferred_browser_app(process_label, title_tokens)
+        return _finalize_activity(
+            activity_type="code_review_or_browser",
+            active_app=active_app,
+            process_label=process_label,
+            title_tokens=title_tokens,
+            session_mode=session_mode,
+            change_level=change_level,
+            evidence=evidence,
+        )
+
+    if title_tokens & DEVELOPMENT_TOKENS:
+        active_app = _preferred_app(process_label, title_tokens, DEVELOPMENT_APPS | DEVELOPMENT_TOKENS)
+        return _finalize_activity(
+            activity_type="development",
+            active_app=active_app,
+            process_label=process_label,
+            title_tokens=title_tokens,
+            session_mode=session_mode,
+            change_level=change_level,
+            evidence=evidence,
+        )
+
+    return _finalize_activity(
+        activity_type="unknown",
+        active_app=process_label,
+        process_label=process_label,
+        title_tokens=title_tokens,
+        session_mode=session_mode,
+        change_level=change_level,
+        evidence=evidence,
+    )
+
+
+def _normalize_process_name(process_name: str | None) -> str | None:
+    if not process_name:
+        return None
+    normalized = process_name.replace("\\", "/").rsplit("/", maxsplit=1)[-1].strip().casefold()
+    if normalized.endswith(".exe"):
+        normalized = normalized[:-4]
+    return PROCESS_ALIASES.get(normalized)
+
+
+def _extract_safe_title_tokens(window_title: str | None) -> set[str]:
+    if not window_title:
+        return set()
+    lowered = window_title.casefold()
+    return {
+        canonical
+        for needle, canonical in SAFE_TITLE_TOKENS
+        if needle in lowered
+    }
+
+
+def _session_mode(screenshot: Screenshot) -> str:
+    if screenshot.is_locked:
+        return "locked"
+    if screenshot.is_rdp_session:
+        return "remote_rdp"
+    if screenshot.is_remote_session:
+        return "remote"
+    return "local"
+
+
+def _idle_bucket(idle_seconds: int | None) -> str:
+    if idle_seconds is None:
+        return "unknown"
+    if idle_seconds >= IDLE_THRESHOLD_SECONDS:
+        return "high"
+    if idle_seconds >= 60:
+        return "medium"
+    return "low"
+
+
+def _is_locked_session(screenshot: Screenshot) -> bool:
+    connect_state = (screenshot.session_connect_state or "").casefold()
+    desktop_name = (screenshot.input_desktop_name or "").casefold()
+    return (
+        screenshot.is_locked
+        or "lock" in connect_state
+        or "winlogon" in desktop_name
+        or "lock" in desktop_name
+    )
+
+
+def _is_idle_session(screenshot: Screenshot) -> bool:
+    connect_state = (screenshot.session_connect_state or "").casefold()
+    return bool(
+        screenshot.idle_seconds is not None and screenshot.idle_seconds >= IDLE_THRESHOLD_SECONDS
+    ) or connect_state in {"idle", "disconnected"}
+
+
+def _preferred_app(process_label: str | None, title_tokens: set[str], candidates: set[str]) -> str | None:
+    if process_label in candidates:
+        return process_label
+    for token in sorted(title_tokens):
+        if token in candidates:
+            return token
+    return process_label
+
+
+def _preferred_browser_app(process_label: str | None, title_tokens: set[str]) -> str:
+    for token in ("github", "gitlab", "bitbucket"):
+        if token in title_tokens:
+            return token
+    return process_label if process_label in BROWSER_APPS else "browser"
+
+
+def _finalize_activity(
+    *,
+    activity_type: str,
+    active_app: str | None,
+    process_label: str | None,
+    title_tokens: set[str],
+    session_mode: str,
+    change_level: str | None,
+    evidence: dict[str, Any],
+) -> ActivityClassification:
+    confidence = _activity_confidence(
+        activity_type=activity_type,
+        active_app=active_app,
+        process_label=process_label,
+        title_tokens=title_tokens,
+    )
+    return ActivityClassification(
+        activity_type=activity_type,
+        active_app=active_app,
+        confidence=confidence,
+        summary=_activity_summary(
+            activity_type=activity_type,
+            active_app=active_app,
+            session_mode=session_mode,
+            change_level=change_level,
+        ),
+        evidence=evidence,
+    )
+
+
+def _activity_confidence(
+    *,
+    activity_type: str,
+    active_app: str | None,
+    process_label: str | None,
+    title_tokens: set[str],
+) -> float:
+    if activity_type == "locked":
+        return 0.99
+    if activity_type == "idle":
+        return 0.93
+    if activity_type == "unknown":
+        return 0.4 if process_label or title_tokens else 0.25
+
+    confidence = 0.58
+    if process_label is not None:
+        confidence += 0.18
+    if title_tokens:
+        confidence += 0.12
+    if process_label is not None and title_tokens:
+        confidence += 0.05
+    if active_app is not None and active_app not in {"browser"}:
+        confidence += 0.05
+    return round(min(confidence, 0.97), 2)
+
+
+def _activity_summary(
+    *,
+    activity_type: str,
+    active_app: str | None,
+    session_mode: str,
+    change_level: str | None,
+) -> str:
+    change_descriptions = {
+        "major": "major screen change",
+        "minor": "minor screen change",
+        "none": "stable screen",
+        "unknown": "limited visual signal",
+        None: "limited visual signal",
+    }
+    session_descriptions = {
+        "locked": "locked",
+        "remote_rdp": "remote RDP",
+        "remote": "remote",
+        "local": "local",
+    }
+    labels = {
+        "development": "Development",
+        "code_review_or_browser": "Browser/review",
+        "meeting": "Meeting",
+        "documentation": "Documentation",
+        "idle": "Idle",
+        "locked": "Locked",
+        "unknown": "Unknown",
+    }
+    app_fragment = f" in {active_app}" if active_app else ""
+    change_fragment = change_descriptions.get(change_level, "limited visual signal")
+    session_fragment = session_descriptions.get(session_mode, "local")
+    if activity_type == "locked":
+        return f"Locked session with {change_fragment}."
+    if activity_type == "idle":
+        return f"Idle {session_fragment} session{app_fragment} with {change_fragment}."
+    return f"{labels.get(activity_type, 'Unknown')} activity{app_fragment} during {session_fragment} session with {change_fragment}."
+
+
 class ScreenshotAnalysisService:
     event_type = "no_change_streak_triggered"
 
@@ -80,7 +455,18 @@ class ScreenshotAnalysisService:
         diff.reason = metrics.reason
         self.session.add(diff)
 
+        activity = classify_screenshot_activity(
+            screenshot=screenshot,
+            change_level=metrics.change_level,
+            is_effective_change=metrics.is_effective_change,
+        )
+        screenshot.ocr_status = "skipped" if screenshot.ocr_status == "pending" else screenshot.ocr_status
         screenshot.analysis_status = "completed"
+        screenshot.activity_type = activity.activity_type
+        screenshot.active_app = activity.active_app
+        screenshot.activity_confidence = activity.confidence
+        screenshot.activity_summary = activity.summary
+        screenshot.activity_evidence_json = activity.evidence
         screenshot.updated_at = utc_now()
         self.session.add(screenshot)
         self.session.commit()

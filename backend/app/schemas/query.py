@@ -43,6 +43,10 @@ class TimelineChange(BaseModel):
 
 class TimelineActivity(BaseModel):
     type: str
+    active_app: str | None = None
+    confidence: float | None = None
+    summary: str | None = None
+    evidence: dict[str, object] = Field(default_factory=dict)
     keyboard_count: int
     mouse_count: int
 
@@ -54,6 +58,10 @@ class TimelineItem(BaseModel):
     thumb_uri: str | None = None
     image_uri: str | None = None
     activity_type: str
+    active_app: str | None = None
+    activity_confidence: float | None = None
+    activity_summary: str | None = None
+    activity_evidence: dict[str, object] = Field(default_factory=dict)
     activity: TimelineActivity
     change_level: str
     change: TimelineChange
@@ -95,6 +103,11 @@ class ScreenshotItem(BaseModel):
     upload_status: str
     ocr_status: str
     analysis_status: str
+    activity_type: str
+    active_app: str | None = None
+    activity_confidence: float | None = None
+    activity_summary: str | None = None
+    activity_evidence: dict[str, object] = Field(default_factory=dict)
     diff: ScreenDiffSummary | None = None
     risk_events: list[TimelineRiskEvent] = Field(default_factory=list)
     created_at: datetime
