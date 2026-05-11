@@ -89,6 +89,7 @@ Copy-Item .\agent\src\EmployeeBehavior.Agent.Service\appsettings.json.example .\
 - `RunInConsole`
   - Default `false`
   - Use `true` only for operator-observed `DryRun=true` validation; console visibility is not a production replacement for the tray icon
+  - Do not pass `--console` in installed scheduled-task arguments, and do not use `SESSION_HELPER_` environment overrides to hide the tray indicator in production
 - `EnableInputActivityHooks`
   - Default `true`
   - Disables keyboard, mouse, and foreground-switch counters when set to `false`

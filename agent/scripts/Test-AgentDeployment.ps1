@@ -2,6 +2,7 @@
 param(
     [string]$ServiceConfigPath = ".\agent\src\EmployeeBehavior.Agent.Service\appsettings.json",
     [string]$HelperConfigPath = ".\agent\src\EmployeeBehavior.Agent.SessionHelper\appsettings.json",
+    [string]$HelperTaskName = "EmployeeBehavior.Agent.SessionHelper",
     [string]$ApiHealthPath = "/health",
     [string]$LogRootPath = "C:\ProgramData\EmployeeBehaviorAgent\logs",
     [int]$TimeoutSeconds = 5
@@ -145,6 +146,80 @@ function Test-SessionHelperVisibility {
     }
 
     Add-CheckResult -Check "SessionHelper visibility" -Status "FAIL" -Detail "EnableTrayIcon must be true unless DryRun=true and RunInConsole=true for an operator-observed console dry-run."
+}
+
+function Test-SessionHelperVisibilityOverrides {
+    param(
+        [bool]$DryRun
+    )
+
+    $unsafeOverrideCount = 0
+    $checks = @(
+        @{
+            Name = "SESSION_HELPER_SessionHelper__EnableTrayIcon"
+            UnsafeValue = "false"
+            Failure = "Environment override disables the tray icon."
+            Warning = "Environment override disables the tray icon only during DryRun validation."
+        },
+        @{
+            Name = "SESSION_HELPER_SessionHelper__RunInConsole"
+            UnsafeValue = "true"
+            Failure = "Environment override forces console mode."
+            Warning = "Environment override forces console mode only during DryRun validation."
+        }
+    )
+
+    foreach ($target in @("Process", "User", "Machine")) {
+        $environmentTarget = [System.Enum]::Parse([EnvironmentVariableTarget], $target)
+        foreach ($check in $checks) {
+            $value = [Environment]::GetEnvironmentVariable(
+                $check.Name,
+                $environmentTarget)
+            if ([string]::IsNullOrWhiteSpace($value)) {
+                continue
+            }
+
+            if ($value.Trim().Equals($check.UnsafeValue, [System.StringComparison]::OrdinalIgnoreCase)) {
+                $unsafeOverrideCount++
+                $status = if ($DryRun) { "WARN" } else { "FAIL" }
+                $detail = if ($DryRun) { $check.Warning } else { $check.Failure }
+                Add-CheckResult -Check "SessionHelper environment override" -Status $status -Detail "$detail Scope=$target; Name=$($check.Name); Value=$value."
+            }
+        }
+    }
+
+    if ($unsafeOverrideCount -eq 0) {
+        Add-CheckResult -Check "SessionHelper environment override" -Status "PASS" -Detail "No process, user, or machine environment override disables tray visibility or forces console mode."
+    }
+}
+
+function Test-HelperScheduledTaskArguments {
+    param(
+        [string]$TaskName,
+        [bool]$DryRun
+    )
+
+    if ($null -eq (Get-Command Get-ScheduledTask -ErrorAction SilentlyContinue)) {
+        Add-CheckResult -Check "SessionHelper scheduled task arguments" -Status "WARN" -Detail "Get-ScheduledTask is not available in this shell; installed helper task arguments were not inspected."
+        return
+    }
+
+    $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    if ($null -eq $task) {
+        Add-CheckResult -Check "SessionHelper scheduled task arguments" -Status "WARN" -Detail "Scheduled task '$TaskName' was not found; run this check after installation to inspect effective helper arguments."
+        return
+    }
+
+    foreach ($action in $task.Actions) {
+        $arguments = [string]$action.Arguments
+        if ($arguments -match '(^|\s)--console(\s|$)') {
+            $status = if ($DryRun) { "WARN" } else { "FAIL" }
+            Add-CheckResult -Check "SessionHelper scheduled task arguments" -Status $status -Detail "Scheduled task '$TaskName' includes --console. Installed helper tasks must keep the tray indicator visible outside operator-observed DryRun validation."
+            return
+        }
+    }
+
+    Add-CheckResult -Check "SessionHelper scheduled task arguments" -Status "PASS" -Detail "Scheduled task '$TaskName' does not force --console."
 }
 
 function Test-PlaceholderValue {
@@ -502,6 +577,8 @@ if ($null -ne $helperSection) {
         -EnableTrayIcon $helperSection.EnableTrayIcon `
         -RunInConsole $helperSection.RunInConsole `
         -DryRun $dryRunForVisibility
+    Test-SessionHelperVisibilityOverrides -DryRun $dryRunForVisibility
+    Test-HelperScheduledTaskArguments -TaskName $HelperTaskName -DryRun $dryRunForVisibility
 }
 
 if ($null -ne $serviceSection -and $null -ne $helperSection) {

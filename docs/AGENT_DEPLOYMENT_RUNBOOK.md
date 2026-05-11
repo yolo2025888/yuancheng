@@ -165,6 +165,7 @@ Start from `agent/src/EmployeeBehavior.Agent.SessionHelper/appsettings.json.exam
   Keep `true` for installed and production deployments so employees have a visible session indicator. The deployment validator fails when this is `false` unless `DryRun=true` and `RunInConsole=true`.
 - `RunInConsole`
   Set `true` only for operator-observed dry-runs. Do not use console-only visibility as a production replacement for the tray icon.
+  Production installs must not pass `--console` through helper scheduled-task arguments or set `SESSION_HELPER_SessionHelper__RunInConsole=true`.
 - `EnableInputActivityHooks`
   Leave `true` unless you intentionally want aggregate counts disabled.
 - `EnableDesktopStateInspection`
@@ -226,7 +227,7 @@ After dry-run passes:
 
 1. Keep the same `device-id.json` path so the device identity remains stable across restarts and upgrades.
 2. Switch `DryRun` to `false`.
-3. Keep `SessionHelper:EnableTrayIcon=true` so the interactive helper remains visible to the signed-in employee.
+3. Keep `SessionHelper:EnableTrayIcon=true` so the interactive helper remains visible to the signed-in employee. Do not set `SESSION_HELPER_SessionHelper__EnableTrayIcon=false` at process, user, or machine scope.
 4. Copy the published service and helper artifacts onto the device.
 5. Install `EmployeeBehavior.Agent.Service` as a Windows service and register the helper logon task with:
 
@@ -243,7 +244,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Install-Agen
 6. If the installer is being run by an admin on behalf of another user, set `-HelperTaskUser` explicitly to the pilot account instead of relying on the current user default.
 7. Redirect both process outputs to the recommended `logs\` directory during pilot rollout if you wrap the binaries. The current code still emits console logging only.
 8. Start the helper task or have the pilot user sign in so the logon trigger fires.
-9. Confirm backend reachability with `/health` and confirm the agent receives `200 OK` from:
+9. Run `Test-AgentDeployment.ps1` against the installed target directories and confirm it does not report hidden tray, console-mode, environment override, or scheduled-task argument failures.
+10. Confirm backend reachability with `/health` and confirm the agent receives `200 OK` from:
    - `POST /api/agent/heartbeat`
    - `GET /api/agent/policy`
    - `POST /api/agent/screenshots/upload`

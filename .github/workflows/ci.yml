@@ -193,6 +193,7 @@ jobs:
             'agent/scripts/Install-AgentPilot.ps1',
             'agent/scripts/Uninstall-AgentPilot.ps1',
             'agent/scripts/Test-AgentDeployment.ps1',
+            'agent/scripts/Test-AgentPublish.ps1',
             'agent/scripts/Write-AgentProtectedToken.ps1'
           )
           foreach ($script in $scripts) {
@@ -211,3 +212,29 @@ jobs:
           ./agent/scripts/Test-AgentDeployment.ps1
           -ServiceConfigPath ./agent/src/EmployeeBehavior.Agent.Service/appsettings.json.example
           -HelperConfigPath ./agent/src/EmployeeBehavior.Agent.SessionHelper/appsettings.json.example
+
+      - name: Validate agent publish package shape
+        shell: pwsh
+        run: |
+          # CI has no production backend or device token. This is intentionally
+          # pilot/package-shape validation; strict production gates stay in the
+          # release checklist and protected deployment environment.
+          $publishRoot = Join-Path $env:RUNNER_TEMP 'employee-agent-publish'
+          if (Test-Path -LiteralPath $publishRoot) {
+            Remove-Item -LiteralPath $publishRoot -Recurse -Force
+          }
+
+          $serviceOutput = Join-Path $publishRoot 'Service'
+          $helperOutput = Join-Path $publishRoot 'SessionHelper'
+          $launcherOutput = Join-Path $publishRoot 'Launcher'
+
+          dotnet publish ./agent/src/EmployeeBehavior.Agent.Service/EmployeeBehavior.Agent.Service.csproj --configuration Release --runtime win-x64 --self-contained false --output $serviceOutput
+          dotnet publish ./agent/src/EmployeeBehavior.Agent.SessionHelper/EmployeeBehavior.Agent.SessionHelper.csproj --configuration Release --runtime win-x64 --self-contained false --output $helperOutput
+          dotnet publish ./agent/src/EmployeeBehavior.Agent.Launcher/EmployeeBehavior.Agent.Launcher.csproj --configuration Release --runtime win-x64 --self-contained false --output $launcherOutput
+
+          Copy-Item -LiteralPath (Join-Path $launcherOutput 'EmployeeBehavior.Agent.Launcher.exe') -Destination (Join-Path $publishRoot 'EmployeeBehavior.Agent.Launcher.exe') -Force
+          Copy-Item -LiteralPath ./agent/scripts/Write-AgentProtectedToken.ps1 -Destination (Join-Path $serviceOutput 'Write-AgentProtectedToken.ps1') -Force
+          Copy-Item -LiteralPath ./agent/src/EmployeeBehavior.Agent.Service/appsettings.json.example -Destination (Join-Path $serviceOutput 'appsettings.json') -Force
+          Copy-Item -LiteralPath ./agent/src/EmployeeBehavior.Agent.SessionHelper/appsettings.json.example -Destination (Join-Path $helperOutput 'appsettings.json') -Force
+
+          ./agent/scripts/Test-AgentPublish.ps1 -PublishRoot $publishRoot

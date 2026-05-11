@@ -69,6 +69,16 @@ function Assert-FileExists {
     }
 }
 
+function Assert-HelperArgumentsSafe {
+    param(
+        [string]$Arguments
+    )
+
+    if ($Arguments -match '(^|\s)--console(\s|$)') {
+        throw 'HelperArguments must not include --console. Use direct operator-observed dry-run commands for console validation; installed helper tasks must keep the tray indicator visible.'
+    }
+}
+
 function Ensure-Directory {
     param(
         [Parameter(Mandatory)]
@@ -237,6 +247,8 @@ function Register-HelperScheduledTask {
             -Force | Out-Null
     }
 }
+
+Assert-HelperArgumentsSafe -Arguments $HelperArguments
 
 if (-not (Test-IsAdministrator)) {
     throw 'Install-AgentPilot.ps1 must be run from an elevated PowerShell session.'
