@@ -42,7 +42,15 @@ class AgentService:
 
     def get_policy(self, device_id: UUID | None = None) -> PolicyResponse:
         policy = self.policies.resolve_policy_for_device(device_id)
-        return PolicyResponse.model_validate(policy)
+        return PolicyResponse(
+            policy_id=policy.id,
+            name=policy.name,
+            version=policy.version,
+            scope_type=self.policies.policy_scope_type(policy),
+            screenshot_interval_seconds=policy.screenshot_interval_seconds,
+            no_change_threshold=policy.no_change_threshold,
+            retention_days=policy.retention_days,
+        )
 
     def _get_bound_device(self, device_id: UUID) -> Device:
         device = self.session.get(Device, device_id)

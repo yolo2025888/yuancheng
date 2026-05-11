@@ -463,12 +463,13 @@ def test_agent_policy_endpoint_resolves_role_targeted_policy(
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload == {
-        "version": "2026.engineering",
-        "screenshot_interval_seconds": 18,
-        "no_change_threshold": 3,
-        "retention_days": 10,
-    }
+    assert payload["name"] == "engineering-targeted"
+    assert payload["version"] == "2026.engineering"
+    assert payload["scope_type"] == "targeted"
+    assert payload["screenshot_interval_seconds"] == 18
+    assert payload["no_change_threshold"] == 3
+    assert payload["retention_days"] == 10
+    assert payload["policy_id"] is not None
 
 
 def test_heartbeat_persists_safe_nested_metadata(

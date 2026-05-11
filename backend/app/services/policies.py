@@ -220,6 +220,9 @@ class PolicyService:
             policy.created_at,
         )
 
+    def policy_scope_type(self, policy: Policy) -> str:
+        return "targeted" if self._has_target_rules(self._normalize_rules_json(policy.rules_json)) else "default"
+
     def _normalize_rules_json(self, rules_json: dict[str, Any] | None) -> dict[str, Any]:
         if rules_json is None:
             return {}

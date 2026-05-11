@@ -7,7 +7,10 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class PolicyResponse(BaseModel):
+    policy_id: UUID | None = None
+    name: str | None = None
     version: str
+    scope_type: str = "default"
     screenshot_interval_seconds: int
     no_change_threshold: int
     retention_days: int
