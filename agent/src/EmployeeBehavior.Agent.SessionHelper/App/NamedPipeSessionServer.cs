@@ -1,4 +1,6 @@
 using System.IO.Pipes;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -35,12 +37,7 @@ public sealed class NamedPipeSessionServer : BackgroundService
     {
         while (!stoppingToken.IsCancellationRequested)
         {
-            await using var server = new NamedPipeServerStream(
-                _options.PipeName,
-                PipeDirection.InOut,
-                1,
-                PipeTransmissionMode.Byte,
-                PipeOptions.Asynchronous);
+            await using var server = CreateServerStream(_options.PipeName);
 
             try
             {
@@ -56,6 +53,36 @@ public sealed class NamedPipeSessionServer : BackgroundService
                 _logger.LogError(ex, "Session Helper pipe server loop failed for pipe {PipeName}.", _options.PipeName);
             }
         }
+    }
+
+    private static NamedPipeServerStream CreateServerStream(string pipeName)
+    {
+        return NamedPipeServerStreamAcl.Create(
+            pipeName,
+            PipeDirection.InOut,
+            maxNumberOfServerInstances: 1,
+            transmissionMode: PipeTransmissionMode.Byte,
+            options: PipeOptions.Asynchronous,
+            inBufferSize: 0,
+            outBufferSize: 0,
+            pipeSecurity: CreatePipeSecurity());
+    }
+
+    private static PipeSecurity CreatePipeSecurity()
+    {
+        var pipeSecurity = new PipeSecurity();
+        AddPipeAccessRule(pipeSecurity, new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null));
+        AddPipeAccessRule(pipeSecurity, new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null));
+        return pipeSecurity;
+    }
+
+    private static void AddPipeAccessRule(PipeSecurity pipeSecurity, SecurityIdentifier identity)
+    {
+        pipeSecurity.AddAccessRule(
+            new PipeAccessRule(
+                identity,
+                PipeAccessRights.FullControl,
+                AccessControlType.Allow));
     }
 
     private async Task HandleRequestAsync(Stream stream, CancellationToken cancellationToken)

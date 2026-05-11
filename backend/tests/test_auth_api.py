@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import re
+from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
+from sqlmodel import Session
 
 from app.core.config import Settings
+from app.models import User
+from app.services.auth import AuthService, hash_password
 
 
 def test_login_bootstraps_dev_admin_and_me_excludes_password_hash(client: TestClient) -> None:
@@ -63,6 +68,64 @@ def test_login_bootstraps_dev_admin_with_email_identifier(client: TestClient) ->
 
     assert login_response.status_code == 200
     assert login_response.json()["user"]["username"] == client.app.state.settings.bootstrap_admin_username
+
+
+def test_login_rejects_bad_password_and_inactive_user(client: TestClient) -> None:
+    with Session(client.app.state.engine) as session:
+        user = User(
+            username="inactive.user",
+            display_name="Inactive User",
+            email="inactive@example.test",
+            password_hash=hash_password(
+                "correct-password",
+                iterations=client.app.state.settings.password_hash_iterations,
+            ),
+            status="inactive",
+        )
+        session.add(user)
+        session.commit()
+
+    bad_password_response = client.post(
+        "/api/auth/login",
+        json={"username": "inactive.user", "password": "wrong-password"},
+    )
+    inactive_response = client.post(
+        "/api/auth/login",
+        json={"username": "inactive.user", "password": "correct-password"},
+    )
+
+    assert bad_password_response.status_code == 401
+    assert bad_password_response.json()["detail"] == "Invalid username or password"
+    assert inactive_response.status_code == 403
+    assert inactive_response.json()["detail"] == "User is not active"
+
+
+def test_me_rejects_missing_bad_wrong_scheme_and_expired_tokens(client: TestClient, auth_headers) -> None:
+    headers = auth_headers(username="token.user", password="token-password", role_name="Admin")
+    good_token = headers["Authorization"].removeprefix("Bearer ")
+
+    missing_response = client.get("/api/auth/me")
+    bad_response = client.get("/api/auth/me", headers={"Authorization": "Bearer not-a-valid-token"})
+    wrong_scheme_response = client.get("/api/auth/me", headers={"Authorization": f"Basic {good_token}"})
+
+    with Session(client.app.state.engine) as session:
+        user = session.get(User, UUID(client.get("/api/auth/me", headers=headers).json()["id"]))
+        assert user is not None
+        expired_token = AuthService(
+            session,
+            client.app.state.settings,
+            now_provider=lambda: datetime(2026, 5, 12, tzinfo=timezone.utc),
+        ).create_session_token(
+            user,
+            expires_at=datetime.now(timezone.utc) - timedelta(seconds=1),
+        )
+
+    expired_response = client.get("/api/auth/me", headers={"Authorization": f"Bearer {expired_token}"})
+
+    assert missing_response.status_code == 401
+    assert bad_response.status_code == 401
+    assert wrong_scheme_response.status_code == 401
+    assert expired_response.status_code == 401
 
 
 def test_permission_denial_returns_403_for_missing_policy_permission(
@@ -127,6 +190,30 @@ def test_production_settings_accept_strong_auth_secret() -> None:
     )
 
     assert settings.is_production is True
+
+
+def test_settings_default_fail_closed_without_explicit_secrets(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("EBM_ENVIRONMENT", raising=False)
+    monkeypatch.delenv("EBM_AUTH_SECRET", raising=False)
+    monkeypatch.delenv("EBM_AGENT_API_TOKEN", raising=False)
+
+    with pytest.raises(ValidationError, match="EBM_AUTH_SECRET"):
+        Settings(_env_file=None)
+
+
+def test_development_settings_reject_default_secrets() -> None:
+    with pytest.raises(ValidationError, match="EBM_AUTH_SECRET"):
+        Settings(
+            environment="development",
+            auth_secret="dev-only-change-me",
+            agent_api_token="dev-agent-token-change-me",
+        )
+
+
+def test_test_environment_allows_dev_secrets_for_isolated_fixtures() -> None:
+    settings = Settings(environment="test")
+
+    assert settings.is_test is True
 
 
 def test_custom_role_name_does_not_gain_admin_permissions_by_substring(

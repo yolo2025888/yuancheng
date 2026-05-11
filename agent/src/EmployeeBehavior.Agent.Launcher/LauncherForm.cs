@@ -7,13 +7,17 @@ internal sealed class LauncherForm : Form
     private readonly AgentProcessManager _agentProcessManager = new();
     private readonly AttendanceStore _attendanceStore = new();
     private readonly AttendanceReporter _attendanceReporter = new();
+    private readonly EmployeeProfileResolver _employeeProfileResolver = new();
     private readonly System.Windows.Forms.Timer _durationTimer = new();
+    private readonly SemaphoreSlim _syncLock = new(1, 1);
 
     private readonly Panel _loginPanel = new();
     private readonly Panel _attendancePanel = new();
     private readonly TextBox _employeeTextBox = new();
     private readonly Label _loginErrorLabel = new();
+    private readonly Label _loginSyncStatusLabel = new();
     private Label _employeeLabel = null!;
+    private Label _ruleSummaryLabel = null!;
     private Label _clockInLabel = null!;
     private Label _durationLabel = null!;
     private Label _agentStatusLabel = null!;
@@ -22,6 +26,7 @@ internal sealed class LauncherForm : Form
     private readonly Button _clockOutButton = new();
 
     private string _currentEmployeeCode = string.Empty;
+    private EmployeeProfile? _currentEmployeeProfile;
     private DateTimeOffset? _clockInAt;
     private DateTimeOffset? _clockOutAt;
 
@@ -43,7 +48,11 @@ internal sealed class LauncherForm : Form
         _durationTimer.Interval = 1000;
         _durationTimer.Tick += (_, _) => RefreshDuration();
 
-        Shown += (_, _) => _employeeTextBox.Focus();
+        Shown += (_, _) =>
+        {
+            _employeeTextBox.Focus();
+            _ = ReplayPendingAsync("startup");
+        };
     }
 
     private void BuildLoginPanel()
@@ -89,6 +98,13 @@ internal sealed class LauncherForm : Form
         _loginErrorLabel.ForeColor = Color.FromArgb(190, 45, 45);
         _loginErrorLabel.TextAlign = ContentAlignment.MiddleLeft;
 
+        _loginSyncStatusLabel.Height = 34;
+        _loginSyncStatusLabel.Dock = DockStyle.Top;
+        _loginSyncStatusLabel.ForeColor = Color.FromArgb(74, 85, 104);
+        _loginSyncStatusLabel.TextAlign = ContentAlignment.MiddleLeft;
+        _loginSyncStatusLabel.Text = "Sync: checking pending records...";
+
+        AddTop(_loginPanel, _loginSyncStatusLabel, 12);
         AddTop(_loginPanel, _loginErrorLabel);
         AddTop(_loginPanel, clockInButton, 16);
         AddTop(_loginPanel, _employeeTextBox, 4);
@@ -110,6 +126,11 @@ internal sealed class LauncherForm : Form
         _employeeLabel = CreateLabel(string.Empty, 12, FontStyle.Regular);
         _employeeLabel.Height = 34;
         _employeeLabel.Dock = DockStyle.Top;
+
+        _ruleSummaryLabel = CreateLabel(string.Empty, 10, FontStyle.Regular);
+        _ruleSummaryLabel.ForeColor = Color.FromArgb(74, 85, 104);
+        _ruleSummaryLabel.Height = 56;
+        _ruleSummaryLabel.Dock = DockStyle.Top;
 
         _clockInLabel = CreateLabel(string.Empty, 13, FontStyle.Bold);
         _clockInLabel.Height = 42;
@@ -150,6 +171,7 @@ internal sealed class LauncherForm : Form
         AddTop(_attendancePanel, _agentStatusLabel, 26);
         AddTop(_attendancePanel, _durationLabel, 12);
         AddTop(_attendancePanel, _clockInLabel, 20);
+        AddTop(_attendancePanel, _ruleSummaryLabel);
         AddTop(_attendancePanel, _employeeLabel);
         AddTop(_attendancePanel, title);
     }
@@ -164,7 +186,9 @@ internal sealed class LauncherForm : Form
         }
 
         _loginErrorLabel.Text = string.Empty;
+        _loginSyncStatusLabel.Text = "Resolving employee profile...";
         _currentEmployeeCode = employeeCode;
+        _currentEmployeeProfile = await _employeeProfileResolver.ResolveAsync(employeeCode);
         _clockInAt = DateTimeOffset.Now;
 
         AgentProcessStatus processStatus;
@@ -178,23 +202,21 @@ internal sealed class LauncherForm : Form
             return;
         }
 
-        await _attendanceStore.AppendAsync("clock_in", _currentEmployeeCode, _clockInAt.Value);
-        var syncStatus = await _attendanceReporter.TryReportAsync("clock_in", _currentEmployeeCode, _clockInAt.Value);
+        await _attendanceStore.AppendAsync("clock_in", _currentEmployeeProfile, _clockInAt.Value);
         ShowAttendance(processStatus);
-        _syncStatusLabel.Text = $"Sync: {syncStatus}";
+        _ = ReplayPendingAsync("clock-in");
     }
 
     private async Task ClockOutAsync()
     {
-        if (_clockOutAt is not null || string.IsNullOrWhiteSpace(_currentEmployeeCode))
+        if (_clockOutAt is not null || _currentEmployeeProfile is null)
         {
             return;
         }
 
         _clockOutAt = DateTimeOffset.Now;
-        await _attendanceStore.AppendAsync("clock_out", _currentEmployeeCode, _clockOutAt.Value);
-        var syncStatus = await _attendanceReporter.TryReportAsync("clock_out", _currentEmployeeCode, _clockOutAt.Value);
-        _syncStatusLabel.Text = $"Sync: {syncStatus}";
+        await _attendanceStore.AppendAsync("clock_out", _currentEmployeeProfile, _clockOutAt.Value);
+        _ = ReplayPendingAsync("clock-out");
         _clockOutButton.Enabled = false;
         _clockOutButton.Text = $"Clocked out at {_clockOutAt.Value:HH:mm:ss}";
         RefreshDuration();
@@ -202,7 +224,9 @@ internal sealed class LauncherForm : Form
 
     private void ShowAttendance(AgentProcessStatus status)
     {
-        _employeeLabel.Text = $"Employee: {_currentEmployeeCode}";
+        var profile = _currentEmployeeProfile ?? EmployeeProfile.LocalFallback(_currentEmployeeCode, "not resolved");
+        _employeeLabel.Text = BuildEmployeeText(profile);
+        _ruleSummaryLabel.Text = BuildRuleSummaryText(profile);
         _clockInLabel.Text = $"Clock-in time: {_clockInAt:yyyy-MM-dd HH:mm:ss}";
         _agentStatusLabel.Text = BuildAgentStatusText(status);
 
@@ -210,6 +234,18 @@ internal sealed class LauncherForm : Form
         _attendancePanel.Visible = true;
         _durationTimer.Start();
         RefreshDuration();
+    }
+
+    private static string BuildEmployeeText(EmployeeProfile profile)
+    {
+        var department = string.IsNullOrWhiteSpace(profile.Department) ? string.Empty : $"    Department: {profile.Department}";
+        return $"Employee: {profile.DisplayName} ({profile.EmployeeNo}){department}";
+    }
+
+    private static string BuildRuleSummaryText(EmployeeProfile profile)
+    {
+        var ruleSummary = string.IsNullOrWhiteSpace(profile.RuleSummary) ? "rules unavailable" : profile.RuleSummary;
+        return $"Profile: {profile.Source} - {profile.Message}{Environment.NewLine}Rules: {ruleSummary}";
     }
 
     private void RefreshDuration()
@@ -227,6 +263,86 @@ internal sealed class LauncherForm : Form
         {
             _agentStatusLabel.Text = BuildAgentStatusText(_agentProcessManager.GetStatus());
         }
+    }
+
+    private async Task ReplayPendingAsync(string reason)
+    {
+        if (!await _syncLock.WaitAsync(0))
+        {
+            UpdateSyncStatus("sync already running");
+            return;
+        }
+
+        try
+        {
+            var pending = (await _attendanceStore.LoadPendingAsync()).ToList();
+            if (pending.Count == 0)
+            {
+                UpdateSyncStatus("all records synced");
+                return;
+            }
+
+            UpdateSyncStatus($"syncing {pending.Count} pending record(s) after {reason}...");
+            var remaining = new List<AttendanceRecord>();
+            var synced = 0;
+            string? lastError = null;
+
+            foreach (var record in pending)
+            {
+                var result = await _attendanceReporter.TryReportAsync(record);
+                if (result.IsSynced)
+                {
+                    synced++;
+                    continue;
+                }
+
+                lastError = result.Message;
+                remaining.Add(record.MarkAttemptFailed(result.Message));
+            }
+
+            await _attendanceStore.ReplaceReplayedPendingAsync(
+                pending.Select(record => record.Id),
+                remaining);
+
+            if (remaining.Count == 0)
+            {
+                UpdateSyncStatus($"synced {synced} record(s); queue empty");
+            }
+            else
+            {
+                UpdateSyncStatus(
+                    $"synced {synced}; {remaining.Count} pending. Last error: {FormatSyncError(lastError)}");
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            UpdateSyncStatus($"local saved; sync queue error: {ex.GetType().Name}");
+        }
+        finally
+        {
+            _syncLock.Release();
+        }
+    }
+
+    private void UpdateSyncStatus(string message)
+    {
+        var text = $"Sync: {message}";
+        _loginSyncStatusLabel.Text = text;
+        if (_syncStatusLabel is not null)
+        {
+            _syncStatusLabel.Text = text;
+        }
+    }
+
+    private static string FormatSyncError(string? error)
+    {
+        if (string.IsNullOrWhiteSpace(error))
+        {
+            return "unknown";
+        }
+
+        const int maxLength = 96;
+        return error.Length <= maxLength ? error : error[..maxLength] + "...";
     }
 
     private static string BuildAgentStatusText(AgentProcessStatus status)

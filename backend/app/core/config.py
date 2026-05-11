@@ -13,7 +13,7 @@ def _looks_like_placeholder(value: str) -> bool:
 
 class Settings(BaseSettings):
     app_name: str = "employee-behavior-monitor-backend"
-    environment: str = "development"
+    environment: str = "production"
     api_prefix: str = "/api"
     database_url: str = "sqlite:///./employee_behavior.db"
     storage_root_dir: str = "storage"
@@ -38,9 +38,16 @@ class Settings(BaseSettings):
     def is_production(self) -> bool:
         return self.environment.strip().casefold() == "production"
 
+    @property
+    def is_test(self) -> bool:
+        return self.environment.strip().casefold() == "test"
+
     @model_validator(mode="after")
     def validate_production_auth_settings(self) -> "Settings":
-        if not self.is_production:
+        normalized_environment = self.environment.strip().casefold()
+        if normalized_environment not in {"production", "staging", "development", "test"}:
+            raise ValueError("EBM_ENVIRONMENT must be one of production, staging, development, or test")
+        if self.is_test:
             return self
 
         normalized_secret = self.auth_secret.strip()

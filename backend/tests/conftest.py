@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Generator
 from datetime import datetime, timezone
+import os
 from pathlib import Path
 from uuid import uuid4
 
@@ -10,7 +11,15 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
 from app.core.config import Settings
+
+_previous_environment = os.environ.get("EBM_ENVIRONMENT")
+os.environ["EBM_ENVIRONMENT"] = "test"
 from app.main import create_app
+if _previous_environment is None:
+    os.environ.pop("EBM_ENVIRONMENT", None)
+else:
+    os.environ["EBM_ENVIRONMENT"] = _previous_environment
+
 from app.models import Device, Employee, Role, User
 from app.services.auth import hash_password
 

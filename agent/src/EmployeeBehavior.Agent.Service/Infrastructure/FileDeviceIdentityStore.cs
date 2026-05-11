@@ -28,11 +28,12 @@ public sealed class FileDeviceIdentityStore : IDeviceIdentityStore
         var directory = Path.GetDirectoryName(path);
         if (!string.IsNullOrWhiteSpace(directory))
         {
-            Directory.CreateDirectory(directory);
+            LocalFileProtection.EnsureProtectedDirectory(directory);
         }
 
         if (File.Exists(path))
         {
+            LocalFileProtection.ProtectFileOrThrow(path, "Device identity");
             await using var readStream = File.OpenRead(path);
             var document = await JsonSerializer.DeserializeAsync<DeviceIdentityDocument>(
                 readStream,
@@ -46,8 +47,22 @@ public sealed class FileDeviceIdentityStore : IDeviceIdentityStore
         }
 
         var created = new DeviceIdentityDocument(Guid.NewGuid().ToString("N"), DateTimeOffset.UtcNow);
-        await using var writeStream = File.Create(path);
-        await JsonSerializer.SerializeAsync(writeStream, created, SerializerOptions, cancellationToken);
+        await using (File.Create(path))
+        {
+        }
+
+        LocalFileProtection.ProtectFileOrThrow(path, "Device identity");
+        await using (var writeStream = new FileStream(
+                         path,
+                         FileMode.Truncate,
+                         FileAccess.Write,
+                         FileShare.None,
+                         bufferSize: 4096,
+                         useAsync: true))
+        {
+            await JsonSerializer.SerializeAsync(writeStream, created, SerializerOptions, cancellationToken);
+        }
+
         _logger.LogInformation("Created device identity file at {Path}.", path);
         return created.DeviceId;
     }

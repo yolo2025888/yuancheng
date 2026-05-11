@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Generator
-import secrets
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlmodel import Session
 
 from app.core.config import Settings
+from app.services.agent_auth import AgentPrincipal, authenticate_agent_token
 from app.services.auth import AuthService, AuthenticatedPrincipal
 from app.services.audit import AuditContext
 
@@ -68,16 +68,23 @@ def require_permissions(*permission_keys: str):
 def require_agent_token(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
     settings: Settings = Depends(get_settings),
-) -> None:
+) -> AgentPrincipal:
     configured_token = settings.agent_api_token.strip()
     supplied_token = credentials.credentials if credentials is not None else ""
-    if (
-        credentials is None
-        or credentials.scheme.casefold() != "bearer"
-        or not configured_token
-        or not secrets.compare_digest(supplied_token, configured_token)
-    ):
+    if credentials is None or credentials.scheme.casefold() != "bearer" or not configured_token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid agent token")
+
+    principal = authenticate_agent_token(supplied_token, settings)
+    if principal is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid agent token")
+    return principal
+
+
+def require_agent_device(principal: AgentPrincipal, device_id) -> None:
+    if principal.legacy_global_token:
+        return
+    if principal.device_id != device_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Agent token/device mismatch")
 
 
 def get_audit_context(

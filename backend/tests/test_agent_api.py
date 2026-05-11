@@ -10,7 +10,10 @@ from uuid import UUID, uuid4
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
+from app.core.config import Settings
 from app.models import BehaviorEvent, Device, Employee, Policy, Screenshot
+from app.services.agent_auth import authenticate_agent_token, create_scoped_agent_token
+from app.services.storage import LocalScreenshotStorage
 
 ONE_PIXEL_PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO9W0WQAAAAASUVORK5CYII="
@@ -47,6 +50,116 @@ def test_agent_endpoints_require_bearer_token(client: TestClient, seeded_device:
 
     assert response.status_code == 401
     assert response.json()["detail"] == "Invalid agent token"
+
+
+def test_agent_can_resolve_employee_by_employee_no(
+    client: TestClient,
+    seeded_device: dict[str, str],
+    agent_headers: dict[str, str],
+    auth_headers,
+) -> None:
+    admin_headers = auth_headers(bootstrap=True)
+
+    unauthenticated_response = client.get("/api/agent/employees/resolve", params={"employee_no": "E-001"})
+    admin_token_response = client.get(
+        "/api/agent/employees/resolve",
+        headers=admin_headers,
+        params={"employee_no": "E-001"},
+    )
+    response = client.get(
+        "/api/agent/employees/resolve",
+        headers=agent_headers,
+        params={"employee_no": " E-001 "},
+    )
+    missing_response = client.get(
+        "/api/agent/employees/resolve",
+        headers=agent_headers,
+        params={"employee_no": "E-404"},
+    )
+
+    assert unauthenticated_response.status_code == 401
+    assert admin_token_response.status_code == 401
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload == {
+        "id": seeded_device["employee_id"],
+        "name": "Alice",
+        "employee_no": "E-001",
+        "department": "Engineering",
+        "manager_name": None,
+        "job_role": None,
+        "status": "active",
+    }
+    assert missing_response.status_code == 404
+    assert missing_response.json()["detail"] == "Employee not found"
+
+
+def test_agent_can_fetch_default_attendance_rules(client: TestClient, agent_headers: dict[str, str]) -> None:
+    unauthenticated_response = client.get("/api/agent/attendance/rules")
+    response = client.get("/api/agent/attendance/rules", headers=agent_headers)
+    employee_response = client.get(
+        "/api/agent/attendance/rules",
+        headers=agent_headers,
+        params={"employee_no": "E-001"},
+    )
+
+    assert unauthenticated_response.status_code == 401
+    assert response.status_code == 200
+    assert response.json() == {
+        "clock_in_late_after": "09:30",
+        "clock_out_early_before": "18:00",
+    }
+    assert employee_response.status_code == 200
+    assert employee_response.json() == response.json()
+
+
+def test_scoped_agent_token_is_bound_to_device(client: TestClient, seeded_device: dict[str, str]) -> None:
+    matching_token = create_scoped_agent_token(seeded_device["device_id"], client.app.state.settings)
+    mismatch_device_id = uuid4()
+    mismatch_token = create_scoped_agent_token(mismatch_device_id, client.app.state.settings)
+
+    matching_response = client.post(
+        "/api/agent/heartbeat",
+        headers={"Authorization": f"Bearer {matching_token}"},
+        json={
+            "device_id": seeded_device["device_id"],
+            "employee_id": seeded_device["employee_id"],
+            "hostname": "DEV-PC-001",
+            "os_type": "windows",
+            "agent_version": "0.1.1",
+            "screen_count": 2,
+            "status": "online",
+        },
+    )
+    mismatch_response = client.post(
+        "/api/agent/heartbeat",
+        headers={"Authorization": f"Bearer {mismatch_token}"},
+        json={
+            "device_id": seeded_device["device_id"],
+            "employee_id": seeded_device["employee_id"],
+            "hostname": "DEV-PC-001",
+            "os_type": "windows",
+            "agent_version": "0.1.1",
+            "screen_count": 2,
+            "status": "online",
+        },
+    )
+
+    assert matching_response.status_code == 200
+    assert mismatch_response.status_code == 403
+    assert mismatch_response.json()["detail"] == "Agent token/device mismatch"
+
+
+def test_global_agent_token_is_rejected_outside_dev_and_test() -> None:
+    settings = Settings(
+        environment="production",
+        auth_secret="production-secret-with-enough-entropy-2026",
+        agent_api_token="production-agent-token-with-enough-entropy",
+    )
+    scoped = create_scoped_agent_token(uuid4(), settings)
+
+    assert authenticate_agent_token(settings.agent_api_token, settings) is None
+    assert authenticate_agent_token(scoped, settings) is not None
 
 
 def test_heartbeat_returns_policy(client: TestClient, seeded_device: dict[str, str], agent_headers: dict[str, str]) -> None:
@@ -239,6 +352,7 @@ def test_screenshot_metadata_and_complete_flow(
         f"/api/agent/screenshots/{screenshot_id}/complete",
         headers=agent_headers,
         json={
+            "device_id": seeded_device["device_id"],
             "image_uri": "screenshots/emp/dev/2026/05/11/example.jpg",
             "thumb_uri": "thumbnails/emp/dev/2026/05/11/example.jpg",
             "phash": "abc123",
@@ -247,6 +361,94 @@ def test_screenshot_metadata_and_complete_flow(
 
     assert complete_response.status_code == 200
     assert complete_response.json()["upload_status"] == "completed"
+
+    with Session(client.app.state.engine) as session:
+        screenshot = session.get(Screenshot, UUID(screenshot_id))
+        assert screenshot is not None
+        assert screenshot.image_uri == "screenshots/emp/dev/2026/05/11/example.jpg"
+        assert screenshot.thumb_uri == "thumbnails/emp/dev/2026/05/11/example.jpg"
+        assert screenshot.phash == "abc123"
+        assert screenshot.upload_status == "completed"
+        assert screenshot.analysis_status in {"completed", "failed"}
+
+
+def test_screenshot_complete_requires_existing_record(
+    client: TestClient,
+    seeded_device: dict[str, str],
+    agent_headers: dict[str, str],
+) -> None:
+    response = client.post(
+        f"/api/agent/screenshots/{uuid4()}/complete",
+        headers=agent_headers,
+        json={
+            "device_id": seeded_device["device_id"],
+            "image_uri": "screenshots/missing.jpg",
+            "thumb_uri": "screenshots/missing_thumb.jpg",
+            "phash": "missing",
+        },
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Screenshot not found"
+
+
+def test_screenshot_complete_scoped_token_requires_bound_device_id(
+    client: TestClient,
+    seeded_device: dict[str, str],
+    agent_headers: dict[str, str],
+) -> None:
+    metadata_response = client.post(
+        "/api/agent/screenshots",
+        headers=agent_headers,
+        json={
+            "device_id": seeded_device["device_id"],
+            "captured_at": datetime(2026, 5, 11, 10, 5, tzinfo=timezone.utc).isoformat(),
+            "screen_index": 0,
+            "width": 1280,
+            "height": 720,
+            "keyboard_count": 2,
+            "mouse_click_count": 1,
+            "mouse_move_count": 4,
+            "is_locked": False,
+            "is_remote_session": False,
+        },
+    )
+    assert metadata_response.status_code == 201
+    screenshot_id = metadata_response.json()["screenshot_id"]
+
+    scoped_headers = {
+        "Authorization": (
+            f"Bearer {create_scoped_agent_token(seeded_device['device_id'], client.app.state.settings)}"
+        )
+    }
+    missing_device_response = client.post(
+        f"/api/agent/screenshots/{screenshot_id}/complete",
+        headers=scoped_headers,
+        json={
+            "image_uri": "screenshots/emp/dev/2026/05/11/missing-device.jpg",
+            "thumb_uri": "thumbnails/emp/dev/2026/05/11/missing-device.jpg",
+            "phash": "missing-device",
+        },
+    )
+
+    mismatched_headers = {
+        "Authorization": f"Bearer {create_scoped_agent_token(uuid4(), client.app.state.settings)}"
+    }
+    mismatched_device_response = client.post(
+        f"/api/agent/screenshots/{screenshot_id}/complete",
+        headers=mismatched_headers,
+        json={
+            "device_id": seeded_device["device_id"],
+            "image_uri": "screenshots/emp/dev/2026/05/11/mismatched-device.jpg",
+            "thumb_uri": "thumbnails/emp/dev/2026/05/11/mismatched-device.jpg",
+            "phash": "mismatched-device",
+        },
+    )
+
+    assert missing_device_response.status_code == 403
+    assert missing_device_response.json()["detail"] == "Agent token/device mismatch"
+    assert mismatched_device_response.status_code == 403
+    assert mismatched_device_response.json()["detail"] == "Agent token/device mismatch"
 
 
 def test_screenshot_requires_known_device(client: TestClient, agent_headers: dict[str, str]) -> None:
@@ -268,6 +470,68 @@ def test_screenshot_requires_known_device(client: TestClient, agent_headers: dic
     )
 
     assert response.status_code == 404
+
+
+def test_screenshot_direct_upload_requires_known_device(client: TestClient, agent_headers: dict[str, str]) -> None:
+    response = client.post(
+        "/api/agent/screenshots/upload",
+        headers=agent_headers,
+        data={
+            "device_id": str(uuid4()),
+            "captured_at": datetime(2026, 5, 11, 10, 30, tzinfo=timezone.utc).isoformat(),
+            "screen_index": "0",
+            "width": "1",
+            "height": "1",
+            "keyboard_count": "1",
+            "mouse_click_count": "0",
+            "mouse_move_count": "0",
+            "is_locked": "false",
+            "is_remote_session": "false",
+        },
+        files={"file": ("screen.png", ONE_PIXEL_PNG, "image/png")},
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Device not found"
+
+
+def test_screenshot_direct_upload_marks_record_failed_when_storage_rejects_image(
+    client: TestClient,
+    seeded_device: dict[str, str],
+    agent_headers: dict[str, str],
+) -> None:
+    captured_at = datetime(2026, 5, 11, 11, 5, tzinfo=timezone.utc)
+    response = client.post(
+        "/api/agent/screenshots/upload",
+        headers=agent_headers,
+        data={
+            "device_id": seeded_device["device_id"],
+            "captured_at": captured_at.isoformat(),
+            "screen_index": "0",
+            "width": "1",
+            "height": "1",
+            "keyboard_count": "1",
+            "mouse_click_count": "0",
+            "mouse_move_count": "0",
+            "is_locked": "false",
+            "is_remote_session": "false",
+        },
+        files={"file": ("screen.png", b"", "image/png")},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Screenshot image is empty"
+
+    with Session(client.app.state.engine) as session:
+        screenshot = session.exec(
+            select(Screenshot)
+            .where(Screenshot.device_id == UUID(seeded_device["device_id"]))
+            .where(Screenshot.captured_at == captured_at)
+        ).first()
+        assert screenshot is not None
+        assert screenshot.upload_status == "failed"
+        assert screenshot.image_uri is None
+        assert screenshot.thumb_uri is None
 
 
 def test_screenshot_direct_upload_persists_image_and_thumb(
@@ -325,6 +589,45 @@ def test_screenshot_direct_upload_persists_image_and_thumb(
     assert protected_image_response.status_code == 200
     assert protected_image_response.content == ONE_PIXEL_PNG
     assert protected_thumb_response.status_code == 200
+
+
+def test_protected_screenshot_files_return_404_when_missing_or_outside_storage(
+    client: TestClient,
+    seeded_device: dict[str, str],
+    auth_headers,
+) -> None:
+    admin_headers = auth_headers(bootstrap=True)
+    screenshot_id = uuid4()
+
+    with Session(client.app.state.engine) as session:
+        session.add(
+            Screenshot(
+                id=screenshot_id,
+                employee_id=UUID(seeded_device["employee_id"]),
+                device_id=UUID(seeded_device["device_id"]),
+                captured_at=datetime(2026, 5, 11, 11, 0, tzinfo=timezone.utc),
+                width=1,
+                height=1,
+                image_uri="../outside.png",
+                thumb_uri="storage/screenshots/missing_thumb.png",
+                upload_status="completed",
+            )
+        )
+        session.commit()
+
+    image_response = client.get(f"/api/screenshots/{screenshot_id}/image", headers=admin_headers)
+    thumbnail_response = client.get(f"/api/screenshots/{screenshot_id}/thumbnail", headers=admin_headers)
+
+    assert image_response.status_code == 404
+    assert image_response.json()["detail"] == "Screenshot image not found"
+    assert thumbnail_response.status_code == 404
+    assert thumbnail_response.json()["detail"] == "Screenshot thumbnail not found"
+
+
+def test_local_storage_rejects_path_traversal(client: TestClient) -> None:
+    storage = LocalScreenshotStorage(client.app.state.settings)
+
+    assert storage.resolve_stored_uri("../outside.png") is None
 
 
 def test_screenshot_upload_persists_extended_telemetry_fields(

@@ -13,10 +13,12 @@ import {
   screenshotComparison,
   workStatusSeries
 } from '../mock/data';
-import { apiClient, getErrorMessage } from './apiClient';
+import { ApiClientError, apiClient, getErrorMessage } from './apiClient';
 import type {
   AccessMatrixRecord,
   AttendanceRecord,
+  AttendanceRuleSummary,
+  AttendanceReviewStatus,
   AuthIdentity,
   AuthSessionSeed,
   ApiResult,
@@ -77,6 +79,8 @@ type DeviceListData = ApiResult<DeviceRecord[]>;
 type PolicyListData = ApiResult<PolicyRecord[]>;
 type AuditLogListData = ApiResult<AuditLogRecord[]>;
 type AttendanceListData = ApiResult<AttendanceRecord[]>;
+type AttendanceRuleSummaryData = ApiResult<AttendanceRuleSummary>;
+type AttendanceReviewResult = { apiStatus: ApiStatus; records?: AttendanceRecord[] };
 type DashboardSummaryData = ApiResult<{
   kpis: KpiMetric[];
   workStatusSeries: StatusBucket[];
@@ -245,6 +249,14 @@ type ScreenshotDetailQuery = TimelineQuery & {
 };
 
 const today = getLocalDateString();
+const defaultAttendanceRuleSummary: AttendanceRuleSummary = {
+  key: 'default-attendance-rule',
+  name: 'Default attendance rule',
+  lateThreshold: '09:30',
+  earlyLeaveThreshold: '18:00',
+  timezone: 'Local time',
+  sourceLabel: 'Fallback defaults'
+};
 
 const liveStatus = (endpoint: string, detail: string): ApiStatus => ({
   source: 'live',
@@ -822,9 +834,85 @@ export const adminApi = {
         apiStatus: liveStatus(endpoint, `Loaded ${items.length} attendance records`)
       };
     } catch (error) {
+      if (error instanceof ApiClientError && (error.status === 401 || error.status === 403)) {
+        return {
+          data: [],
+          apiStatus: {
+            source: 'mock',
+            state: 'unavailable',
+            label: 'Access denied',
+            detail: `Attendance access denied: ${getErrorMessage(error)}`,
+            endpoint,
+          }
+        };
+      }
+
       return {
         data: attendanceRecords,
         apiStatus: fallbackStatus(endpoint, getErrorMessage(error))
+      };
+    }
+  },
+
+  async getAttendanceRules(): Promise<AttendanceRuleSummaryData> {
+    const endpoints = [
+      '/api/attendance/rules/default',
+      '/api/attendance/rules',
+      '/api/attendance/settings',
+      '/api/attendance/policy'
+    ];
+    let lastError: unknown;
+
+    for (const endpoint of endpoints) {
+      try {
+        const payload = await apiClient<unknown>(endpoint);
+        const rule = mapAttendanceRuleSummary(payload);
+
+        return {
+          data: rule,
+          apiStatus: liveStatus(endpoint, `Loaded ${rule.name}`)
+        };
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    return {
+      data: defaultAttendanceRuleSummary,
+      apiStatus: fallbackStatus(
+        endpoints[0],
+        `Using default attendance thresholds: ${getErrorMessage(lastError)}`
+      )
+    };
+  },
+
+  async reviewAttendance(
+    recordId: string,
+    reviewStatus: AttendanceReviewStatus,
+    reviewNote?: string
+  ): Promise<AttendanceReviewResult> {
+    const endpoint = `/api/attendance/${recordId}/review`;
+
+    try {
+      await apiClient(endpoint, {
+        method: 'POST',
+        body: {
+          review_status: reviewStatus,
+          review_note: reviewNote ?? null
+        }
+      });
+
+      const refreshed = await this.getAttendance();
+      return {
+        apiStatus:
+          refreshed.apiStatus.source === 'live'
+            ? liveStatus(endpoint, `Attendance review updated to ${formatLabel(reviewStatus)}`)
+            : fallbackStatus(endpoint, 'Review updated but attendance refresh used fallback data'),
+        records: refreshed.data
+      };
+    } catch (error) {
+      return {
+        apiStatus: fallbackStatus(endpoint, `Attendance review was not saved: ${getErrorMessage(error)}`)
       };
     }
   },
@@ -1148,6 +1236,64 @@ function mapAttendanceRecord(item: AttendanceApiItem, index: number): Attendance
     reviewStatus: readString(item, ['review_status']) ?? 'pending',
     reviewNote: readString(item, ['review_note']) ?? undefined,
     source: readString(item, ['source']) ?? 'launcher'
+  };
+}
+
+function mapAttendanceRuleSummary(payload: unknown): AttendanceRuleSummary {
+  const root = unwrapPrimaryRecord(payload);
+  const record =
+    pickRecords(root, [
+      'attendance',
+      'attendance_rule',
+      'attendance_rules',
+      'rule',
+      'rules',
+      'rules_json',
+      'schedule',
+      'shift'
+    ]) ?? root;
+  const lateThreshold =
+    normalizeTimeValue(
+      firstString(
+        readString(record, ['late_threshold', 'late_after', 'clock_in_late_after', 'clock_in_cutoff']),
+        readString(root, ['late_threshold', 'late_after', 'clock_in_late_after', 'clock_in_cutoff'])
+      )
+    ) ?? defaultAttendanceRuleSummary.lateThreshold;
+  const earlyLeaveThreshold =
+    normalizeTimeValue(
+      firstString(
+        readString(record, [
+          'early_leave_threshold',
+          'early_leave_before',
+          'clock_out_early_before',
+          'clock_out_cutoff'
+        ]),
+        readString(root, [
+          'early_leave_threshold',
+          'early_leave_before',
+          'clock_out_early_before',
+          'clock_out_cutoff'
+        ])
+      )
+    ) ?? defaultAttendanceRuleSummary.earlyLeaveThreshold;
+  const name =
+    firstString(
+      readString(record, ['name', 'rule_name', 'title']),
+      readString(root, ['name', 'rule_name', 'title']),
+      defaultAttendanceRuleSummary.name
+    ) ?? defaultAttendanceRuleSummary.name;
+
+  return {
+    key: readString(record, ['id', 'key']) ?? readString(root, ['id', 'key']) ?? 'live-attendance-rule',
+    name,
+    lateThreshold,
+    earlyLeaveThreshold,
+    timezone:
+      firstString(
+        readString(record, ['timezone', 'time_zone', 'tz']),
+        readString(root, ['timezone', 'time_zone', 'tz'])
+      ) ?? defaultAttendanceRuleSummary.timezone,
+    sourceLabel: 'Backend rule'
   };
 }
 
@@ -2840,6 +2986,20 @@ function formatDateTime(value?: string | null) {
   }
 
   return parsed.toLocaleString();
+}
+
+function normalizeTimeValue(value?: string | null) {
+  if (!value) {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  const timeMatch = trimmed.match(/(\d{1,2}):(\d{2})/);
+  if (timeMatch) {
+    return `${timeMatch[1].padStart(2, '0')}:${timeMatch[2]}`;
+  }
+
+  return trimmed;
 }
 
 function formatDurationSeconds(value?: number | null) {

@@ -221,14 +221,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const canAccess = useCallback(
     (...permissionKeys: string[]) => {
-      if (permissionKeys.length === 0 || !permissionsResolved) {
+      if (permissionKeys.length === 0) {
         return true;
+      }
+      if (!permissionsResolved) {
+        return session?.source === 'local-dev';
       }
 
       const grantedKeys = new Set(session?.user.permissionKeys ?? []);
       return permissionKeys.some((permissionKey) => grantedKeys.has(permissionKey.toLowerCase()));
     },
-    [permissionsResolved, session?.user.permissionKeys]
+    [permissionsResolved, session?.source, session?.user.permissionKeys]
   );
 
   const value = useMemo<AuthContextValue>(

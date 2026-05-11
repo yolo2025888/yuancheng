@@ -7,7 +7,7 @@ type GitHubTrendChartProps = {
 export function GitHubTrendChart({ data }: GitHubTrendChartProps) {
   return (
     <EChartPanel
-      title="GitHub 风险趋势"
+      title="GitHub Risk Trend"
       option={{
         tooltip: { trigger: 'axis' },
         grid: { left: 24, right: 20, top: 24, bottom: 24, containLabel: true },

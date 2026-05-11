@@ -99,7 +99,8 @@ Copy-Item .\agent\src\EmployeeBehavior.Agent.Service\appsettings.json.example .\
 `AgentService` notes:
 
 - Keep `DryRun=true` for local contract verification before pointing at a real backend.
-- `ApiToken` must match the backend `EBM_AGENT_API_TOKEN`; the backend rejects `/api/agent/*` calls without that bearer token.
+- `ApiToken` is the backend agent signing secret for the service. The service derives `v1:<device_id>:<signature>` bearer tokens from the local device id; production backends reject the raw secret itself.
+- Launcher-only deployments may use an already issued device-scoped `v1:<device_id>:<signature>` token in the same field.
 - `SessionHelperRequestTimeoutSeconds` must be long enough to cover multi-screen capture on slower endpoints.
 - `UploadBatchSize` affects only upload concurrency, not collection semantics.
 

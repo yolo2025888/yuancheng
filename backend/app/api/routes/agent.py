@@ -4,11 +4,14 @@ from datetime import datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
-from sqlmodel import Session
+from sqlmodel import Session, select
 
-from app.api.deps import get_session, get_settings, require_agent_token
+from app.api.deps import get_session, get_settings, require_agent_device, require_agent_token
 from app.core.config import Settings
+from app.models import Employee
 from app.schemas.agent import (
+    AgentEmployeeResponse,
+    AttendanceRuleResponse,
     HeartbeatRequest,
     HeartbeatResponse,
     PolicyResponse,
@@ -19,27 +22,61 @@ from app.schemas.agent import (
     ScreenshotUploadResponse,
 )
 from app.services.agent import AgentService
+from app.services.agent_auth import AgentPrincipal
+from app.services.attendance_rules import AttendanceRuleService, format_rule_time
 
 router = APIRouter(prefix="/api/agent", tags=["agent"])
+
+
+@router.get("/employees/resolve", response_model=AgentEmployeeResponse)
+def resolve_employee(
+    employee_no: str = Query(..., min_length=1, max_length=64),
+    _: AgentPrincipal = Depends(require_agent_token),
+    session: Session = Depends(get_session),
+) -> AgentEmployeeResponse:
+    normalized_employee_no = employee_no.strip()
+    if not normalized_employee_no:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="employee_no must not be blank")
+
+    employee = session.exec(select(Employee).where(Employee.employee_no == normalized_employee_no)).first()
+    if employee is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found")
+    return AgentEmployeeResponse.model_validate(employee)
+
+
+@router.get("/attendance/rules", response_model=AttendanceRuleResponse)
+def get_attendance_rules(
+    employee_no: str | None = Query(default=None, max_length=64),
+    _: AgentPrincipal = Depends(require_agent_token),
+) -> AttendanceRuleResponse:
+    normalized_employee_no = (employee_no.strip() or None) if employee_no is not None else None
+    rules = AttendanceRuleService().get_rules(employee_no=normalized_employee_no)
+    return AttendanceRuleResponse(
+        clock_in_late_after=format_rule_time(rules.clock_in_late_after),
+        clock_out_early_before=format_rule_time(rules.clock_out_early_before),
+    )
 
 
 @router.post("/heartbeat", response_model=HeartbeatResponse)
 def heartbeat(
     payload: HeartbeatRequest,
-    _: None = Depends(require_agent_token),
+    agent_principal: AgentPrincipal = Depends(require_agent_token),
     session: Session = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> HeartbeatResponse:
+    require_agent_device(agent_principal, payload.device_id)
     return AgentService(session, settings).heartbeat(payload)
 
 
 @router.get("/policy", response_model=PolicyResponse)
 def get_policy(
     device_id: UUID | None = Query(default=None),
-    _: None = Depends(require_agent_token),
+    agent_principal: AgentPrincipal = Depends(require_agent_token),
     session: Session = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> PolicyResponse:
+    if device_id is not None:
+        require_agent_device(agent_principal, device_id)
     return AgentService(session, settings).get_policy(device_id)
 
 
@@ -50,10 +87,11 @@ def get_policy(
 )
 def create_screenshot(
     payload: ScreenshotMetadataRequest,
-    _: None = Depends(require_agent_token),
+    agent_principal: AgentPrincipal = Depends(require_agent_token),
     session: Session = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> ScreenshotMetadataResponse:
+    require_agent_device(agent_principal, payload.device_id)
     try:
         return AgentService(session, settings).create_screenshot(payload)
     except ValueError as exc:
@@ -88,10 +126,11 @@ async def upload_screenshot(
     session_connect_state: str | None = Form(default=None),
     phash: str | None = Form(default=None),
     file: UploadFile = File(...),
-    _: None = Depends(require_agent_token),
+    agent_principal: AgentPrincipal = Depends(require_agent_token),
     session: Session = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> ScreenshotUploadResponse:
+    require_agent_device(agent_principal, device_id)
     payload = ScreenshotMetadataRequest(
         device_id=device_id,
         captured_at=captured_at,
@@ -134,11 +173,12 @@ async def upload_screenshot(
 def complete_screenshot(
     screenshot_id: str,
     payload: ScreenshotCompleteRequest,
-    _: None = Depends(require_agent_token),
+    agent_principal: AgentPrincipal = Depends(require_agent_token),
     session: Session = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> ScreenshotCompleteResponse:
     try:
+        require_agent_device(agent_principal, payload.device_id)
         return AgentService(session, settings).complete_screenshot(screenshot_id, payload)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc

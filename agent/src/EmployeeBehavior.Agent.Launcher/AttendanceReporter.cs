@@ -1,7 +1,6 @@
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
-using System.Text.Json.Nodes;
 
 namespace EmployeeBehavior.Agent.Launcher;
 
@@ -12,14 +11,14 @@ internal sealed class AttendanceReporter
         Timeout = TimeSpan.FromSeconds(5)
     };
 
-    public async Task<string> TryReportAsync(string eventType, string employeeCode, DateTimeOffset occurredAt)
+    public async Task<AttendanceSyncAttemptResult> TryReportAsync(AttendanceRecord record)
     {
         try
         {
             var config = TryLoadConfig();
             if (config is null)
             {
-                return "Local only";
+                return AttendanceSyncAttemptResult.Failed("backend config unavailable");
             }
 
             var endpoint = new Uri(config.ApiBaseUrl, "/api/agent/attendance");
@@ -27,11 +26,11 @@ internal sealed class AttendanceReporter
             {
                 Content = JsonContent.Create(new
                 {
-                    user_name = employeeCode,
-                    employee_no = employeeCode,
-                    machine_name = Environment.MachineName,
-                    event_type = eventType,
-                    occurred_at = occurredAt,
+                    user_name = record.UserName,
+                    employee_no = record.EmployeeNoOrFallback,
+                    machine_name = record.MachineName,
+                    event_type = record.EventType,
+                    occurred_at = record.OccurredAt,
                     source = "launcher"
                 })
             };
@@ -39,63 +38,30 @@ internal sealed class AttendanceReporter
 
             using var response = await _httpClient.SendAsync(request);
             return response.IsSuccessStatusCode
-                ? "Synced"
-                : $"Local saved, backend rejected {(int)response.StatusCode}";
+                ? AttendanceSyncAttemptResult.Synced()
+                : AttendanceSyncAttemptResult.Failed($"backend rejected {(int)response.StatusCode}");
         }
         catch (Exception ex) when (ex is IOException or HttpRequestException or TaskCanceledException or JsonException)
         {
-            return $"Local saved, sync failed: {ex.GetType().Name}";
+            return AttendanceSyncAttemptResult.Failed($"{ex.GetType().Name}: {ex.Message}");
         }
     }
 
     private static LauncherBackendConfig? TryLoadConfig()
     {
-        try
-        {
-            var serviceSettingsPath = ResolveServiceSettingsPath();
-            if (serviceSettingsPath is null)
-            {
-                return null;
-            }
-
-            var root = JsonNode.Parse(File.ReadAllText(serviceSettingsPath))?.AsObject();
-            var service = root?["AgentService"]?.AsObject();
-            var apiBaseUrlValue = service?["ApiBaseUrl"]?.GetValue<string>();
-            var apiToken = service?["ApiToken"]?.GetValue<string>();
-
-            if (!Uri.TryCreate(apiBaseUrlValue, UriKind.Absolute, out var apiBaseUrl))
-            {
-                return null;
-            }
-
-            if (apiBaseUrl.Host.Contains("example", StringComparison.OrdinalIgnoreCase) ||
-                string.IsNullOrWhiteSpace(apiToken) ||
-                apiToken.Contains("replace-with", StringComparison.OrdinalIgnoreCase))
-            {
-                return null;
-            }
-
-            return new LauncherBackendConfig(apiBaseUrl, apiToken);
-        }
-        catch (Exception ex) when (ex is IOException or JsonException or InvalidOperationException)
-        {
-            return null;
-        }
-    }
-
-    private static string? ResolveServiceSettingsPath()
-    {
-        var baseDirectory = AppContext.BaseDirectory;
-        var candidates = new[]
-        {
-            Path.Combine(baseDirectory, "Service", "appsettings.json"),
-            Path.Combine(baseDirectory, "..", "Service", "appsettings.json"),
-            Path.Combine(baseDirectory, "Service", "appsettings.json.example"),
-            Path.Combine(baseDirectory, "..", "Service", "appsettings.json.example")
-        };
-
-        return candidates.Select(Path.GetFullPath).FirstOrDefault(File.Exists);
+        return LauncherBackendConfigLoader.TryLoad();
     }
 }
 
-internal sealed record LauncherBackendConfig(Uri ApiBaseUrl, string ApiToken);
+internal sealed record AttendanceSyncAttemptResult(bool IsSynced, string Message)
+{
+    public static AttendanceSyncAttemptResult Synced()
+    {
+        return new AttendanceSyncAttemptResult(true, "synced");
+    }
+
+    public static AttendanceSyncAttemptResult Failed(string message)
+    {
+        return new AttendanceSyncAttemptResult(false, message);
+    }
+}

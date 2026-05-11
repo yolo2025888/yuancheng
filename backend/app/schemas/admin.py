@@ -4,7 +4,7 @@ from typing import Any
 from datetime import date, datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class PolicySummary(BaseModel):
@@ -146,12 +146,36 @@ class AuditLogListResponse(BaseModel):
 
 
 class AttendanceClockRequest(BaseModel):
+    device_id: UUID | None = None
     user_name: str = Field(min_length=1, max_length=120)
     employee_no: str | None = Field(default=None, max_length=64)
     machine_name: str | None = Field(default=None, max_length=160)
     event_type: str = Field(pattern="^(clock_in|clock_out)$")
     occurred_at: datetime
-    source: str = Field(default="launcher", max_length=64)
+    source: str = Field(default="launcher", min_length=1, max_length=64)
+
+    @field_validator("user_name", "source")
+    @classmethod
+    def strip_required_text(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("Value must not be blank")
+        return stripped
+
+    @field_validator("employee_no", "machine_name")
+    @classmethod
+    def strip_optional_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip()
+        return stripped or None
+
+
+class AttendanceRuleSummary(BaseModel):
+    name: str = "Default attendance rule"
+    clock_in_late_after: str
+    clock_out_early_before: str
+    timezone: str = "Local time"
 
 
 class AttendanceReviewRequest(BaseModel):

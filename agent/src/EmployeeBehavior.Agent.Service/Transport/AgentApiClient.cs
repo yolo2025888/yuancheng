@@ -1,5 +1,7 @@
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using EmployeeBehavior.Agent.Contracts.Models;
 using EmployeeBehavior.Agent.Service.Configuration;
@@ -96,10 +98,9 @@ public sealed class AgentApiClient : IAgentApiClient
             session_connect_state = sessionState?.SessionConnectState
         };
 
-        using var response = await _httpClient.PostAsJsonAsync(
-            "/api/agent/heartbeat",
-            backendRequest,
-            cancellationToken);
+        using var httpRequest = CreateAuthorizedRequest(HttpMethod.Post, "/api/agent/heartbeat", request.DeviceId);
+        httpRequest.Content = JsonContent.Create(backendRequest);
+        using var response = await _httpClient.SendAsync(httpRequest, cancellationToken);
 
         response.EnsureSuccessStatusCode();
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
@@ -128,7 +129,10 @@ public sealed class AgentApiClient : IAgentApiClient
         }
 
         var requestUri = $"/api/agent/policy?device_id={Uri.EscapeDataString(deviceId)}";
-        await using var stream = await _httpClient.GetStreamAsync(requestUri, cancellationToken);
+        using var httpRequest = CreateAuthorizedRequest(HttpMethod.Get, requestUri, deviceId);
+        using var response = await _httpClient.SendAsync(httpRequest, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
         var root = document.RootElement;
         var policyRoot = root.TryGetProperty("policy", out var nestedPolicy) ? nestedPolicy : root;
@@ -201,10 +205,9 @@ public sealed class AgentApiClient : IAgentApiClient
         fileContent.Headers.ContentType = MediaTypeHeaderValue.Parse(request.ImageFormat);
         form.Add(fileContent, "file", BuildScreenshotFileName(request));
 
-        using var response = await _httpClient.PostAsync(
-            "/api/agent/screenshots/upload",
-            form,
-            cancellationToken);
+        using var httpRequest = CreateAuthorizedRequest(HttpMethod.Post, "/api/agent/screenshots/upload", request.DeviceId);
+        httpRequest.Content = form;
+        using var response = await _httpClient.SendAsync(httpRequest, cancellationToken);
 
         response.EnsureSuccessStatusCode();
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
@@ -240,19 +243,47 @@ public sealed class AgentApiClient : IAgentApiClient
             return;
         }
 
-        using var response = await _httpClient.PostAsJsonAsync(
+        using var httpRequest = CreateAuthorizedRequest(
+            HttpMethod.Post,
             $"/api/agent/screenshots/{request.ScreenshotId}/complete",
+            request.DeviceId);
+        httpRequest.Content = JsonContent.Create(
             new
             {
+                device_id = request.DeviceId,
                 image_uri = request.ImageUri,
                 thumb_uri = request.ThumbUri,
                 // Keep the legacy contract key; the current value is SHA-256 rather than
                 // a perceptual hash until a dedicated phash pipeline exists.
                 phash = request.ImageSha256
-            },
-            cancellationToken);
+            });
+        using var response = await _httpClient.SendAsync(httpRequest, cancellationToken);
 
         response.EnsureSuccessStatusCode();
+    }
+
+    private HttpRequestMessage CreateAuthorizedRequest(HttpMethod method, string requestUri, string deviceId)
+    {
+        var request = new HttpRequestMessage(method, requestUri);
+        if (!string.IsNullOrWhiteSpace(_options.ApiToken) && !string.IsNullOrWhiteSpace(deviceId))
+        {
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", BuildScopedAgentToken(deviceId));
+        }
+        return request;
+    }
+
+    private string BuildScopedAgentToken(string deviceId)
+    {
+        var normalizedDeviceId = Guid.TryParse(deviceId, out var parsed)
+            ? parsed.ToString("D")
+            : deviceId.Trim().ToLowerInvariant();
+        using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(_options.ApiToken));
+        var signature = hmac.ComputeHash(Encoding.ASCII.GetBytes(normalizedDeviceId));
+        var encodedSignature = Convert.ToBase64String(signature)
+            .TrimEnd('=')
+            .Replace('+', '-')
+            .Replace('/', '_');
+        return $"v1:{normalizedDeviceId}:{encodedSignature}";
     }
 
     private static string BuildScreenshotFileName(ScreenshotUploadRequest request)

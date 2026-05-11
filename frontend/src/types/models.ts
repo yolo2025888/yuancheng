@@ -281,10 +281,26 @@ export type AttendanceRecord = {
   anomalyStatus: 'normal' | 'late' | 'early_leave' | (string & {});
   anomalyLabel: string;
   anomalyReasons: string[];
-  reviewStatus: string;
+  reviewStatus: AttendanceReviewStatus;
   reviewNote?: string;
   source: string;
 };
+
+export type AttendanceRuleSummary = {
+  key: string;
+  name: string;
+  lateThreshold: string;
+  earlyLeaveThreshold: string;
+  timezone?: string;
+  sourceLabel?: string;
+};
+
+export type AttendanceReviewStatus =
+  | 'pending'
+  | 'reviewed'
+  | 'confirmed'
+  | 'ignored'
+  | (string & {});
 
 export type GitHubRiskRecord = {
   key: string;

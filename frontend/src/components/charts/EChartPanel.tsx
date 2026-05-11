@@ -1,10 +1,30 @@
 import { Card } from 'antd';
-import * as echarts from 'echarts';
+import { BarChart, HeatmapChart, LineChart } from 'echarts/charts';
+import {
+  GridComponent,
+  LegendComponent,
+  TooltipComponent,
+  VisualMapComponent
+} from 'echarts/components';
+import * as echarts from 'echarts/core';
+import { CanvasRenderer } from 'echarts/renderers';
+import type { EChartsOption } from 'echarts';
 import { useEffect, useRef } from 'react';
+
+echarts.use([
+  BarChart,
+  HeatmapChart,
+  LineChart,
+  GridComponent,
+  LegendComponent,
+  TooltipComponent,
+  VisualMapComponent,
+  CanvasRenderer
+]);
 
 type EChartPanelProps = {
   title: string;
-  option: echarts.EChartsOption;
+  option: EChartsOption;
   height?: number;
 };
 

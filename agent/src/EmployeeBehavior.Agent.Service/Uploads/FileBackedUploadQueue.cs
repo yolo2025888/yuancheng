@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using EmployeeBehavior.Agent.Contracts.Models;
 using EmployeeBehavior.Agent.Service.Configuration;
+using EmployeeBehavior.Agent.Service.Infrastructure;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -212,7 +213,7 @@ public sealed class FileBackedUploadQueue : IUploadQueue
         var directory = Path.GetDirectoryName(_queuePath);
         if (!string.IsNullOrWhiteSpace(directory))
         {
-            Directory.CreateDirectory(directory);
+            LocalFileProtection.EnsureProtectedDirectory(directory);
         }
     }
 
@@ -316,7 +317,7 @@ public sealed class FileBackedUploadQueue : IUploadQueue
         ICollection<string> createdPayloadPaths,
         CancellationToken cancellationToken)
     {
-        Directory.CreateDirectory(_payloadDirectory);
+        LocalFileProtection.EnsureProtectedDirectory(_payloadDirectory);
         var payloadPath = Path.Combine(_payloadDirectory, $"{localId:N}-{payloadKind}.bin");
 
         await using (File.Create(payloadPath))
@@ -346,7 +347,7 @@ public sealed class FileBackedUploadQueue : IUploadQueue
         ICollection<string> createdPayloadPaths,
         CancellationToken cancellationToken)
     {
-        Directory.CreateDirectory(_payloadDirectory);
+        LocalFileProtection.EnsureProtectedDirectory(_payloadDirectory);
         var payloadPath = Path.Combine(_payloadDirectory, $"{localId:N}-{payloadKind}.bin");
 
         await using (File.Create(payloadPath))
@@ -498,9 +499,9 @@ public sealed class FileBackedUploadQueue : IUploadQueue
 
         try
         {
-            File.Encrypt(path);
+            LocalFileProtection.ProtectFileOrThrow(path, "Upload queue");
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or PlatformNotSupportedException or InvalidOperationException)
         {
             throw new InvalidOperationException(
                 $"Upload queue file '{path}' could not be protected by Windows EFS. Configure an encrypted local queue path or fix service permissions before live capture.",

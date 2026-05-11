@@ -10,7 +10,8 @@ from sqlmodel import Session, select
 
 from app.core.config import Settings
 from app.main import create_app
-from app.models import AuditLog, BehaviorEvent, Device, Employee, Policy, Role, Screenshot, User
+from app.models import AuditLog, AttendanceRecord, BehaviorEvent, Device, Employee, Policy, Role, Screenshot, User
+from app.services.agent_auth import create_scoped_agent_token
 from app.services.auth import hash_password
 
 
@@ -690,10 +691,50 @@ def test_agent_attendance_records_are_token_gated_listed_and_reviewed(
     assert create_response.status_code == 201
     created = create_response.json()
     assert created["employee_id"] == seeded_device["employee_id"]
+    assert created["device_id"] == seeded_device["device_id"]
     assert created["employee_no"] == "E-001"
     assert created["anomaly_status"] == "late"
     assert created["review_status"] == "pending"
     assert created["anomaly_reasons"] == ["Clock-in after 09:30"]
+
+    duplicate_payload = {
+        **payload,
+        "occurred_at": "2026-05-11T10:45:00Z",
+    }
+    duplicate_response = client.post("/api/agent/attendance", headers=agent_headers, json=duplicate_payload)
+    assert duplicate_response.status_code == 201
+    duplicate = duplicate_response.json()
+    assert duplicate["anomaly_status"] == "duplicate_clock_in"
+    assert duplicate["review_status"] == "pending"
+    assert duplicate["anomaly_reasons"] == [
+        "Clock-in after 09:30",
+        "Duplicate clock-in for 2026-05-11",
+    ]
+
+    clock_out_payload = {
+        **payload,
+        "event_type": "clock_out",
+        "occurred_at": "2026-05-11T18:30:00Z",
+    }
+    clock_out_response = client.post("/api/agent/attendance", headers=agent_headers, json=clock_out_payload)
+    assert clock_out_response.status_code == 201
+    duplicate_clock_out_payload = {
+        **clock_out_payload,
+        "occurred_at": "2026-05-11T17:45:00Z",
+    }
+    duplicate_clock_out_response = client.post(
+        "/api/agent/attendance",
+        headers=agent_headers,
+        json=duplicate_clock_out_payload,
+    )
+    assert duplicate_clock_out_response.status_code == 201
+    duplicate_clock_out = duplicate_clock_out_response.json()
+    assert duplicate_clock_out["anomaly_status"] == "duplicate_clock_out"
+    assert duplicate_clock_out["review_status"] == "pending"
+    assert duplicate_clock_out["anomaly_reasons"] == [
+        "Clock-out before 18:00",
+        "Duplicate clock-out for 2026-05-11",
+    ]
 
     manager_headers = auth_headers(
         username="attendance.manager",
@@ -707,6 +748,18 @@ def test_agent_attendance_records_are_token_gated_listed_and_reviewed(
     )
     assert list_response.status_code == 200
     assert [item["id"] for item in list_response.json()["items"]] == [created["id"]]
+
+    filtered_response = client.get(
+        "/api/attendance",
+        headers=manager_headers,
+        params={
+            "event_type": "clock_in",
+            "employee_no": "E-001",
+            "machine_name": "DEV-PC-001",
+        },
+    )
+    assert filtered_response.status_code == 200
+    assert [item["id"] for item in filtered_response.json()["items"]] == [duplicate["id"], created["id"]]
 
     manager_review_response = client.post(
         f"/api/attendance/{created['id']}/review",
@@ -732,11 +785,190 @@ def test_agent_attendance_records_are_token_gated_listed_and_reviewed(
     assert reviewed["reviewed_at"] is not None
 
     with Session(client.app.state.engine) as session:
+        attendance_record = session.get(AttendanceRecord, UUID(created["id"]))
+        assert attendance_record is not None
         audit_log = session.exec(
             select(AuditLog).where(AuditLog.action == "attendance.reviewed").order_by(AuditLog.created_at.desc())
         ).first()
         assert audit_log is not None
         assert audit_log.target_type == "attendance_record"
+        assert attendance_record.reviewed_by == audit_log.actor_id
+
+
+def test_attendance_rules_endpoint_uses_view_permission(client: TestClient, auth_headers) -> None:
+    manager_headers = auth_headers(
+        username="attendance.rule.viewer",
+        password="manager-password",
+        role_name="Manager",
+    )
+    blocked_headers = auth_headers(
+        username="attendance.rule.blocked",
+        password="blocked-password",
+        role_name="No Attendance",
+    )
+
+    response = client.get("/api/attendance/rules/default", headers=manager_headers)
+    blocked_response = client.get("/api/attendance/rules/default", headers=blocked_headers)
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "name": "Default attendance rule",
+        "clock_in_late_after": "09:30",
+        "clock_out_early_before": "18:00",
+        "timezone": "Local time",
+    }
+    assert blocked_response.status_code == 403
+
+
+def test_agent_attendance_scoped_token_uses_bound_device_for_early_leave(
+    client: TestClient,
+    seeded_device: dict[str, str],
+) -> None:
+    scoped_headers = {
+        "Authorization": (
+            f"Bearer {create_scoped_agent_token(seeded_device['device_id'], client.app.state.settings)}"
+        )
+    }
+    forged_device_id = str(uuid4())
+
+    response = client.post(
+        "/api/agent/attendance",
+        headers=scoped_headers,
+        json={
+            "device_id": forged_device_id,
+            "employee_no": "E-001",
+            "user_name": "Alice",
+            "machine_name": "FORGED-PC-999",
+            "event_type": "clock_out",
+            "occurred_at": "2026-05-11T09:00:00Z",
+            "source": "launcher",
+        },
+    )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["device_id"] == seeded_device["device_id"]
+    assert payload["device_id"] != forged_device_id
+    assert payload["anomaly_status"] == "early_leave"
+    assert payload["review_status"] == "pending"
+    assert payload["anomaly_reasons"] == ["Clock-out before 18:00"]
+
+
+def test_agent_attendance_scoped_token_can_create_unmatched_employee_record(
+    client: TestClient,
+) -> None:
+    orphan_device_id = uuid4()
+    with Session(client.app.state.engine) as session:
+        session.add(
+            Device(
+                id=orphan_device_id,
+                employee_id=None,
+                hostname="ORPHAN-PC-001",
+                os_type="windows",
+                agent_version="0.1.0",
+                screen_count=1,
+                last_heartbeat_at=datetime.now(timezone.utc),
+                status="online",
+            )
+        )
+        session.commit()
+
+    scoped_headers = {
+        "Authorization": f"Bearer {create_scoped_agent_token(orphan_device_id, client.app.state.settings)}"
+    }
+    forged_device_id = str(uuid4())
+    response = client.post(
+        "/api/agent/attendance",
+        headers=scoped_headers,
+        json={
+            "device_id": forged_device_id,
+            "employee_no": "E-404",
+            "user_name": "Unknown User",
+            "machine_name": "FORGED-PC-404",
+            "event_type": "clock_in",
+            "occurred_at": "2026-05-11T08:30:00Z",
+            "source": "launcher",
+        },
+    )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["employee_id"] is None
+    assert payload["employee_name"] is None
+    assert payload["device_id"] == str(orphan_device_id)
+    assert payload["device_id"] != forged_device_id
+    assert payload["employee_no"] == "E-404"
+    assert payload["anomaly_status"] == "normal"
+    assert payload["review_status"] == "reviewed"
+
+
+def test_attendance_review_returns_404_for_missing_record(client: TestClient, auth_headers) -> None:
+    response = client.post(
+        f"/api/attendance/{uuid4()}/review",
+        headers=auth_headers(bootstrap=True),
+        json={"review_status": "ignored"},
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Attendance record not found"
+
+
+def test_attendance_review_without_note_uses_default_audit_reason(
+    client: TestClient,
+    seeded_device: dict[str, str],
+    auth_headers,
+    agent_headers: dict[str, str],
+) -> None:
+    create_response = client.post(
+        "/api/agent/attendance",
+        headers=agent_headers,
+        json={
+            "employee_no": "E-001",
+            "user_name": "Alice",
+            "machine_name": "DEV-PC-001",
+            "event_type": "clock_out",
+            "occurred_at": "2026-05-11T09:30:00Z",
+            "source": "launcher",
+        },
+    )
+    assert create_response.status_code == 201
+
+    review_response = client.post(
+        f"/api/attendance/{create_response.json()['id']}/review",
+        headers=auth_headers(bootstrap=True),
+        json={"review_status": "ignored"},
+    )
+
+    assert review_response.status_code == 200
+    payload = review_response.json()
+    assert payload["review_status"] == "ignored"
+    assert payload["review_note"] is None
+
+    with Session(client.app.state.engine) as session:
+        audit_log = session.exec(
+            select(AuditLog).where(AuditLog.action == "attendance.reviewed").order_by(AuditLog.created_at.desc())
+        ).first()
+        assert audit_log is not None
+        assert audit_log.target_id == UUID(create_response.json()["id"])
+        assert audit_log.reason == "Set attendance review status to ignored"
+
+
+def test_agent_attendance_rejects_blank_required_text(
+    client: TestClient,
+    agent_headers: dict[str, str],
+) -> None:
+    response = client.post(
+        "/api/agent/attendance",
+        headers=agent_headers,
+        json={
+            "user_name": "   ",
+            "event_type": "clock_in",
+            "occurred_at": "2026-05-11T09:00:00Z",
+            "source": "launcher",
+        },
+    )
+
+    assert response.status_code == 422
 
 
 def test_employee_export_returns_csv_and_audits_action(

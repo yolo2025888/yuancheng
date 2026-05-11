@@ -1,0 +1,212 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: Backend tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install backend
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Compile Python sources
+        run: python -m compileall app tests
+
+      - name: Run backend tests
+        run: python -m pytest
+
+  frontend:
+    name: Frontend build and audit
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Audit production frontend dependencies
+        run: npm audit --omit=dev
+
+  docker-config:
+    name: Docker compose config
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Validate compose file
+        env:
+          MINIO_ROOT_USER: ci-minio-user
+          MINIO_ROOT_PASSWORD: ci-minio-password-change-me
+          POSTGRES_DB: employee_monitor
+          POSTGRES_USER: ci-postgres-user
+          POSTGRES_PASSWORD: ci-postgres-password-change-me
+        run: docker compose -f deploy/docker-compose.yml config --quiet
+
+  static-guard:
+    name: Static safety guard
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Verify forbidden collection capabilities are absent
+        shell: pwsh
+        run: |
+          $patterns = @(
+            'GetAsyncKeyState',
+            'GetKeyState',
+            'ToUnicode',
+            'OpenClipboard',
+            'GetClipboardData',
+            'SetClipboard',
+            'CopyToClipboard',
+            'MediaCapture',
+            'webcam',
+            'microphone',
+            'camera',
+            'stealth',
+            'undetect',
+            'anti-detection',
+            'keylogger',
+            'remote-control',
+            'remote control',
+            'CreateProcess'
+          )
+          $allowedBoundaryFiles = @(
+            'github/workflows/ci.yml',
+            'agent/README.md',
+            'docs/AGENT_DEPLOYMENT_RUNBOOK.md',
+            'agent/src/EmployeeBehavior.Agent.SessionHelper/appsettings.json.example',
+            'frontend/src/pages/Policies.tsx'
+          )
+          $matches = Get-ChildItem -Recurse -File |
+            Where-Object {
+              $_.FullName -notmatch '\\.git\\' -and
+              $_.FullName -notmatch 'frontend[\\/]node_modules' -and
+              $_.FullName -notmatch 'agent[\\/]publish' -and
+              $_.FullName -notmatch '[\\/]bin[\\/]' -and
+              $_.FullName -notmatch '[\\/]obj[\\/]'
+            } |
+            Select-String -Pattern $patterns -SimpleMatch |
+            Where-Object {
+              $relative = Resolve-Path -Relative $_.Path
+              $relative = $relative.TrimStart('.', '/', '\').Replace('\', '/')
+              $allowedBoundaryFiles -notcontains $relative
+            }
+
+          if ($matches) {
+            $matches | ForEach-Object { Write-Error "$($_.Path):$($_.LineNumber): $($_.Line)" }
+            exit 1
+          }
+
+      - name: Verify sample env does not use legacy backend keys or fixed secrets
+        shell: pwsh
+        run: |
+          $forbidden = @(
+            '^APP_ENV=',
+            '^DATABASE_URL=',
+            'monitor-secret',
+            'POSTGRES_PASSWORD:\s*monitor',
+            'S3_SECRET_KEY=monitor',
+            'DATABASE_URL=.*:monitor@',
+            'MINIO_ROOT_PASSWORD:\s*monitor',
+            'MINIO_ROOT_USER:\s*monitor'
+          )
+          $matches = Get-ChildItem -Recurse -File |
+            Where-Object {
+              $_.FullName -notmatch '\\.git\\' -and
+              $_.FullName -notmatch 'frontend[\\/]node_modules' -and
+              $_.FullName -notmatch 'agent[\\/]publish' -and
+              $_.FullName -notmatch '[\\/]bin[\\/]' -and
+              $_.FullName -notmatch '[\\/]obj[\\/]'
+            } |
+            Select-String -Pattern $forbidden |
+            Where-Object {
+              $relative = Resolve-Path -Relative $_.Path
+              $relative = $relative.TrimStart('.', '/', '\').Replace('\', '/')
+              $relative -notin @('backend/tests/test_auth_api.py', 'github/workflows/ci.yml')
+            }
+
+          if ($matches) {
+            $matches | ForEach-Object { Write-Error "$($_.Path):$($_.LineNumber): $($_.Line)" }
+            exit 1
+          }
+
+  agent-windows:
+    name: Windows agent build
+    runs-on: windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Restore agent solution
+        run: dotnet restore agent/EmployeeBehavior.Agent.sln
+
+      - name: Build agent solution
+        run: dotnet build agent/EmployeeBehavior.Agent.sln --configuration Release --no-restore
+
+      - name: Parse PowerShell deployment scripts
+        shell: pwsh
+        run: |
+          $scripts = @(
+            'agent/scripts/Install-AgentPilot.ps1',
+            'agent/scripts/Uninstall-AgentPilot.ps1',
+            'agent/scripts/Test-AgentDeployment.ps1'
+          )
+          foreach ($script in $scripts) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $script), [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count -gt 0) {
+              $errors | Format-List | Out-String | Write-Error
+              exit 1
+            }
+          }
+
+      - name: Validate agent deployment config
+        shell: pwsh
+        run: >
+          ./agent/scripts/Test-AgentDeployment.ps1
+          -ServiceConfigPath ./agent/src/EmployeeBehavior.Agent.Service/appsettings.json.example
+          -HelperConfigPath ./agent/src/EmployeeBehavior.Agent.SessionHelper/appsettings.json.example

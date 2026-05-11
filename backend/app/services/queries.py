@@ -439,6 +439,9 @@ class QueryService:
         work_date: date | None,
         anomaly_status: str | None,
         review_status: str | None,
+        event_type: str | None,
+        employee_no: str | None,
+        machine_name: str | None,
         limit: int,
     ) -> AttendanceListResponse:
         statement = select(AttendanceRecord).order_by(AttendanceRecord.occurred_at.desc())
@@ -448,6 +451,12 @@ class QueryService:
             statement = statement.where(AttendanceRecord.anomaly_status == anomaly_status)
         if review_status is not None:
             statement = statement.where(AttendanceRecord.review_status == review_status)
+        if event_type is not None:
+            statement = statement.where(AttendanceRecord.event_type == event_type)
+        if employee_no is not None:
+            statement = statement.where(AttendanceRecord.employee_no == employee_no)
+        if machine_name is not None:
+            statement = statement.where(AttendanceRecord.machine_name == machine_name)
 
         records = self.session.exec(statement.limit(limit)).all()
         employee_ids = [record.employee_id for record in records if record.employee_id is not None]

@@ -26,7 +26,17 @@ $backendErr = Join-Path $logDir "backend-dev-$backendPort.err.log"
 $frontendOut = Join-Path $logDir "frontend-dev-$frontendPort.out.log"
 $frontendErr = Join-Path $logDir "frontend-dev-$frontendPort.err.log"
 
-$backendEnv = "EBM_DATABASE_URL=sqlite:///./employee_behavior.db"
+$previousBackendEnvironment = $env:EBM_ENVIRONMENT
+$previousBackendDatabaseUrl = $env:EBM_DATABASE_URL
+$previousBackendAuthSecret = $env:EBM_AUTH_SECRET
+$previousBackendAgentToken = $env:EBM_AGENT_API_TOKEN
+$previousFrontendApiBaseUrl = $env:VITE_API_BASE_URL
+
+$env:EBM_ENVIRONMENT = "development"
+$env:EBM_DATABASE_URL = "sqlite:///./employee_behavior.db"
+$env:EBM_AUTH_SECRET = "local-auth-secret-with-enough-entropy-2026"
+$env:EBM_AGENT_API_TOKEN = "local-agent-token-with-enough-entropy-2026"
+$env:VITE_API_BASE_URL = "http://127.0.0.1:$backendPort"
 
 Start-Process `
     -FilePath "python" `
@@ -43,6 +53,12 @@ Start-Process `
     -RedirectStandardOutput $frontendOut `
     -RedirectStandardError $frontendErr `
     -WindowStyle Hidden
+
+$env:EBM_ENVIRONMENT = $previousBackendEnvironment
+$env:EBM_DATABASE_URL = $previousBackendDatabaseUrl
+$env:EBM_AUTH_SECRET = $previousBackendAuthSecret
+$env:EBM_AGENT_API_TOKEN = $previousBackendAgentToken
+$env:VITE_API_BASE_URL = $previousFrontendApiBaseUrl
 
 [PSCustomObject]@{
     BackendUrl = "http://127.0.0.1:$backendPort"

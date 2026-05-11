@@ -1,44 +1,135 @@
-import { Button, Card, Space, Table, Tag, Typography } from 'antd';
+import { Button, Card, Input, Modal, Select, Space, Table, Tag, Typography, message } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { ApiStatusNotice } from '../components/ApiStatusNotice';
 import { PageSection } from '../components/PageSection';
+import { useAuth } from '../auth/AuthContext';
 import { adminApi } from '../services/adminApi';
-import type { ApiStatus, AttendanceRecord } from '../types/models';
+import type { ApiStatus, AttendanceRecord, AttendanceReviewStatus, AttendanceRuleSummary } from '../types/models';
+
+type AttendanceFilters = {
+  date: string;
+  anomalyStatus: string;
+  reviewStatus: string;
+  eventType: string;
+};
+
+type ReviewDraft = {
+  record: AttendanceRecord;
+  reviewStatus: AttendanceReviewStatus;
+  note: string;
+};
+
+const DEFAULT_FILTERS: AttendanceFilters = {
+  date: '',
+  anomalyStatus: 'all',
+  reviewStatus: 'all',
+  eventType: 'all'
+};
+
+const FALLBACK_RULE_SUMMARY: AttendanceRuleSummary = {
+  key: 'default-attendance-rule',
+  name: 'Default attendance rule',
+  lateThreshold: '09:30',
+  earlyLeaveThreshold: '18:00',
+  timezone: 'Local time',
+  sourceLabel: 'Fallback defaults'
+};
 
 export function AttendancePage() {
   const [rows, setRows] = useState<AttendanceRecord[]>([]);
   const [apiStatus, setApiStatus] = useState<ApiStatus | null>(null);
+  const [ruleSummary, setRuleSummary] = useState<AttendanceRuleSummary>(FALLBACK_RULE_SUMMARY);
+  const [ruleApiStatus, setRuleApiStatus] = useState<ApiStatus | null>(null);
   const [loading, setLoading] = useState(false);
+  const [reviewingKey, setReviewingKey] = useState<string | null>(null);
+  const [filters, setFilters] = useState<AttendanceFilters>(DEFAULT_FILTERS);
+  const [reviewDraft, setReviewDraft] = useState<ReviewDraft | null>(null);
+  const { canAccess } = useAuth();
+  const canManageAttendance = canAccess('attendance.manage');
+  const [messageApi, contextHolder] = message.useMessage();
 
   const loadAttendance = useCallback(async () => {
     setLoading(true);
-    const result = await adminApi.getAttendance();
-    setRows(result.data);
-    setApiStatus(result.apiStatus);
-    setLoading(false);
+    try {
+      const result = await adminApi.getAttendance();
+      setRows(result.data);
+      setApiStatus(result.apiStatus);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const loadAttendanceRules = useCallback(async () => {
+    const result = await adminApi.getAttendanceRules();
+    setRuleSummary(result.data);
+    setRuleApiStatus(result.apiStatus);
   }, []);
 
   useEffect(() => {
-    void loadAttendance();
-  }, [loadAttendance]);
+    void Promise.all([loadAttendance(), loadAttendanceRules()]);
+  }, [loadAttendance, loadAttendanceRules]);
+
+  const submitReview = useCallback(
+    async () => {
+      if (!reviewDraft) {
+        return;
+      }
+
+      const { record, reviewStatus, note } = reviewDraft;
+      const nextReviewKey = `${record.key}:${reviewStatus}`;
+      setReviewingKey(nextReviewKey);
+      const result = await adminApi.reviewAttendance(record.key, reviewStatus, note.trim() || undefined);
+
+      if (result.records) {
+        setRows(result.records);
+        messageApi.success(`${record.employee} marked as ${reviewStatusLabel(reviewStatus)}.`);
+      } else {
+        messageApi.warning('Review was not saved by the backend. The table was left unchanged.');
+      }
+
+      setApiStatus(result.apiStatus);
+      setReviewingKey(null);
+      setReviewDraft(null);
+    },
+    [messageApi, reviewDraft]
+  );
+
+  const filteredRows = useMemo(
+    () =>
+      rows.filter((row) => {
+        const matchesDate =
+          !filters.date || row.workDate === filters.date || row.occurredAt.includes(filters.date);
+        const matchesAnomaly =
+          filters.anomalyStatus === 'all' || row.anomalyStatus === filters.anomalyStatus;
+        const matchesReview =
+          filters.reviewStatus === 'all' || row.reviewStatus === filters.reviewStatus;
+        const matchesEvent = filters.eventType === 'all' || row.eventType === filters.eventType;
+
+        return matchesDate && matchesAnomaly && matchesReview && matchesEvent;
+      }),
+    [filters, rows]
+  );
 
   const summary = useMemo(() => {
-    const abnormalCount = rows.filter((row) => row.anomalyStatus !== 'normal').length;
-    const pendingCount = rows.filter((row) => row.reviewStatus === 'pending').length;
-    const clockInCount = rows.filter((row) => row.eventType === 'clock_in').length;
+    const abnormalCount = filteredRows.filter((row) => row.anomalyStatus !== 'normal').length;
+    const pendingCount = filteredRows.filter((row) => row.reviewStatus === 'pending').length;
+    const clockInCount = filteredRows.filter((row) => row.eventType === 'clock_in').length;
 
     return { abnormalCount, pendingCount, clockInCount };
-  }, [rows]);
+  }, [filteredRows]);
 
   return (
     <Space direction="vertical" size={20} className="page-stack">
+      {contextHolder}
       <PageSection
         title="Attendance"
         description="Review employee clock-in and clock-out records, including late arrivals, early departures, and review status."
         extra={
           <Space size={[8, 8]} wrap>
-            <Tag color="blue">{rows.length} records</Tag>
+            <Tag color="blue">
+              {filteredRows.length}/{rows.length} records
+            </Tag>
             <Tag color="cyan">{summary.clockInCount} clock-ins</Tag>
             <Tag color={summary.abnormalCount > 0 ? 'orange' : 'green'}>
               {summary.abnormalCount} exceptions
@@ -46,7 +137,11 @@ export function AttendancePage() {
             <Tag color={summary.pendingCount > 0 ? 'gold' : 'green'}>
               {summary.pendingCount} pending review
             </Tag>
-            <Button size="small" onClick={() => void loadAttendance()} loading={loading}>
+            <Button
+              size="small"
+              onClick={() => void Promise.all([loadAttendance(), loadAttendanceRules()])}
+              loading={loading}
+            >
               Reload
             </Button>
           </Space>
@@ -54,13 +149,82 @@ export function AttendancePage() {
       />
       {apiStatus ? <ApiStatusNotice status={apiStatus} title="Attendance API" /> : null}
       <Card bordered={false} className="panel-card">
+        <Space direction="vertical" size={8}>
+          <Space size={8} wrap>
+            <Typography.Text strong>{ruleSummary.name}</Typography.Text>
+            <Tag color={ruleApiStatus?.source === 'live' ? 'green' : 'gold'}>
+              {ruleSummary.sourceLabel ?? ruleApiStatus?.label ?? 'Fallback defaults'}
+            </Tag>
+            {ruleSummary.timezone ? <Tag color="blue">{ruleSummary.timezone}</Tag> : null}
+          </Space>
+          <Space size={[8, 8]} wrap>
+            <Tag color="orange">Late after {ruleSummary.lateThreshold}</Tag>
+            <Tag color="purple">Early leave before {ruleSummary.earlyLeaveThreshold}</Tag>
+          </Space>
+          <Typography.Text type="secondary">
+            These thresholds drive the table explanations below. If the backend rule endpoint is unavailable, the page
+            uses the current default rule.
+          </Typography.Text>
+        </Space>
+      </Card>
+      <Card bordered={false} className="panel-card">
+        <Space size={[12, 12]} wrap style={{ marginBottom: 16 }}>
+          <Input
+            type="date"
+            value={filters.date}
+            style={{ width: 170 }}
+            aria-label="Attendance date"
+            onChange={(event) => setFilters((current) => ({ ...current, date: event.target.value }))}
+          />
+          <Select
+            value={filters.anomalyStatus}
+            style={{ width: 180 }}
+            aria-label="Exception status"
+            options={[
+              { value: 'all', label: 'All exceptions' },
+              { value: 'normal', label: 'Normal' },
+              { value: 'late', label: 'Late' },
+              { value: 'early_leave', label: 'Early leave' },
+              { value: 'duplicate_clock_in', label: 'Duplicate clock-in' },
+              { value: 'duplicate_clock_out', label: 'Duplicate clock-out' },
+              { value: 'missing_clock_in', label: 'Missing clock-in' },
+              { value: 'missing_clock_out', label: 'Missing clock-out' }
+            ]}
+            onChange={(value) => setFilters((current) => ({ ...current, anomalyStatus: value }))}
+          />
+          <Select
+            value={filters.reviewStatus}
+            style={{ width: 190 }}
+            aria-label="Review status"
+            options={[
+              { value: 'all', label: 'All review statuses' },
+              { value: 'pending', label: 'Pending review' },
+              { value: 'reviewed', label: 'Reviewed' },
+              { value: 'confirmed', label: 'Confirmed exception' },
+              { value: 'ignored', label: 'Ignored' }
+            ]}
+            onChange={(value) => setFilters((current) => ({ ...current, reviewStatus: value }))}
+          />
+          <Select
+            value={filters.eventType}
+            style={{ width: 150 }}
+            aria-label="Clock type"
+            options={[
+              { value: 'all', label: 'All types' },
+              { value: 'clock_in', label: 'Clock in' },
+              { value: 'clock_out', label: 'Clock out' }
+            ]}
+            onChange={(value) => setFilters((current) => ({ ...current, eventType: value }))}
+          />
+          <Button onClick={() => setFilters(DEFAULT_FILTERS)}>Clear</Button>
+        </Space>
         <Table
           rowKey="key"
           size="middle"
-          dataSource={rows}
+          dataSource={filteredRows}
           loading={loading}
           pagination={{ pageSize: 10 }}
-          scroll={{ x: 1180 }}
+          scroll={{ x: 1360 }}
           columns={[
             {
               title: 'Employee',
@@ -105,8 +269,12 @@ export function AttendancePage() {
               render: (_value: unknown, record: AttendanceRecord) => (
                 <Space direction="vertical" size={4}>
                   <Tag color={attendanceStatusColor(record.anomalyStatus)}>{record.anomalyLabel}</Tag>
-                  {record.anomalyReasons.length > 0 ? (
-                    <Typography.Text type="secondary">{record.anomalyReasons.join('; ')}</Typography.Text>
+                  {buildAnomalyDetails(record, ruleSummary).length > 0 ? (
+                    buildAnomalyDetails(record, ruleSummary).map((reason) => (
+                      <Typography.Text key={reason} type="secondary">
+                        {reason}
+                      </Typography.Text>
+                    ))
                   ) : (
                     <Typography.Text type="secondary">No exception detected</Typography.Text>
                   )}
@@ -118,11 +286,53 @@ export function AttendancePage() {
               width: 180,
               render: (_value: unknown, record: AttendanceRecord) => (
                 <Space direction="vertical" size={4}>
-                  <Tag color={reviewStatusColor(record.reviewStatus)}>{record.reviewStatus}</Tag>
+                  <Tag color={reviewStatusColor(record.reviewStatus)}>{reviewStatusLabel(record.reviewStatus)}</Tag>
                   {record.reviewNote ? <Typography.Text type="secondary">{record.reviewNote}</Typography.Text> : null}
                 </Space>
               )
             },
+            ...(canManageAttendance
+              ? [
+                  {
+                    title: 'Actions',
+                    width: 180,
+                    render: (_value: unknown, record: AttendanceRecord) => (
+                      <Space size={4} wrap>
+                        <Button
+                          size="small"
+                          type="link"
+                          disabled={record.reviewStatus === 'confirmed'}
+                          loading={reviewingKey === `${record.key}:confirmed`}
+                          onClick={() =>
+                            setReviewDraft({
+                              record,
+                              reviewStatus: 'confirmed',
+                              note: record.reviewNote ?? buildDefaultReviewNote(record, 'confirmed', ruleSummary)
+                            })
+                          }
+                        >
+                          Confirm
+                        </Button>
+                        <Button
+                          size="small"
+                          type="link"
+                          disabled={record.reviewStatus === 'ignored'}
+                          loading={reviewingKey === `${record.key}:ignored`}
+                          onClick={() =>
+                            setReviewDraft({
+                              record,
+                              reviewStatus: 'ignored',
+                              note: record.reviewNote ?? buildDefaultReviewNote(record, 'ignored', ruleSummary)
+                            })
+                          }
+                        >
+                          Ignore
+                        </Button>
+                      </Space>
+                    )
+                  }
+                ]
+              : []),
             {
               title: 'Source',
               dataIndex: 'source',
@@ -131,6 +341,35 @@ export function AttendancePage() {
           ]}
         />
       </Card>
+      <Modal
+        title={reviewDraft ? `${reviewStatusLabel(reviewDraft.reviewStatus)} - ${reviewDraft.record.employee}` : 'Review'}
+        open={Boolean(reviewDraft)}
+        okText="Submit review"
+        confirmLoading={Boolean(reviewDraft && reviewingKey === `${reviewDraft.record.key}:${reviewDraft.reviewStatus}`)}
+        onCancel={() => setReviewDraft(null)}
+        onOk={() => void submitReview()}
+      >
+        {reviewDraft ? (
+          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+            <Space direction="vertical" size={2}>
+              <Typography.Text strong>{reviewDraft.record.eventLabel}</Typography.Text>
+              <Typography.Text type="secondary">
+                {reviewDraft.record.occurredAt} / {reviewDraft.record.machineName ?? 'Unknown device'}
+              </Typography.Text>
+            </Space>
+            <Input.TextArea
+              value={reviewDraft.note}
+              rows={4}
+              maxLength={300}
+              showCount
+              placeholder="Add a review note"
+              onChange={(event) =>
+                setReviewDraft((current) => (current ? { ...current, note: event.target.value } : current))
+              }
+            />
+          </Space>
+        ) : null}
+      </Modal>
     </Space>
   );
 }
@@ -138,6 +377,9 @@ export function AttendancePage() {
 function attendanceStatusColor(status: string) {
   if (status === 'late' || status === 'early_leave') {
     return 'orange';
+  }
+  if (status === 'duplicate_clock_in' || status === 'duplicate_clock_out') {
+    return 'volcano';
   }
   if (status === 'missing_clock_out' || status === 'missing_clock_in') {
     return 'red';
@@ -156,4 +398,67 @@ function reviewStatusColor(status: string) {
     return 'green';
   }
   return 'default';
+}
+
+function reviewStatusLabel(status: string) {
+  if (status === 'pending') {
+    return 'Pending review';
+  }
+  if (status === 'reviewed') {
+    return 'Reviewed';
+  }
+  if (status === 'confirmed') {
+    return 'Confirmed exception';
+  }
+  if (status === 'ignored') {
+    return 'Ignored';
+  }
+  return status;
+}
+
+function buildAnomalyDetails(record: AttendanceRecord, ruleSummary: AttendanceRuleSummary) {
+  if (record.anomalyStatus === 'normal') {
+    return [];
+  }
+
+  const reasons = record.anomalyReasons.length > 0 ? record.anomalyReasons : [record.anomalyLabel];
+  return reasons.map((reason) => formatAnomalyReason(record, reason, ruleSummary));
+}
+
+function formatAnomalyReason(record: AttendanceRecord, reason: string, ruleSummary: AttendanceRuleSummary) {
+  if (record.anomalyStatus === 'late') {
+    return `${reason} / expected clock-in no later than ${ruleSummary.lateThreshold}`;
+  }
+
+  if (record.anomalyStatus === 'early_leave') {
+    return `${reason} / expected clock-out no earlier than ${ruleSummary.earlyLeaveThreshold}`;
+  }
+
+  if (record.anomalyStatus === 'missing_clock_in') {
+    return `${reason} / no valid clock-in record for ${record.workDate ?? 'the selected work date'}`;
+  }
+
+  if (record.anomalyStatus === 'missing_clock_out') {
+    return `${reason} / no valid clock-out record for ${record.workDate ?? 'the selected work date'}`;
+  }
+
+  if (record.anomalyStatus === 'duplicate_clock_in') {
+    return `${reason} / more than one clock-in exists for ${record.workDate ?? 'the selected work date'}`;
+  }
+
+  if (record.anomalyStatus === 'duplicate_clock_out') {
+    return `${reason} / more than one clock-out exists for ${record.workDate ?? 'the selected work date'}`;
+  }
+
+  return reason;
+}
+
+function buildDefaultReviewNote(
+  record: AttendanceRecord,
+  reviewStatus: AttendanceReviewStatus,
+  ruleSummary: AttendanceRuleSummary
+) {
+  const action = reviewStatus === 'confirmed' ? 'Confirmed exception' : 'Ignored exception';
+  const reason = buildAnomalyDetails(record, ruleSummary)[0] ?? record.anomalyLabel;
+  return `${action}: ${reason}`;
 }

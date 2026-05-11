@@ -40,11 +40,6 @@ builder.Services.AddHttpClient<IAgentApiClient, AgentApiClient>((serviceProvider
         httpClient.BaseAddress = baseAddress;
     }
 
-    if (!string.IsNullOrWhiteSpace(options.ApiToken))
-    {
-        httpClient.DefaultRequestHeaders.Authorization =
-            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", options.ApiToken);
-    }
 });
 
 builder.Services.AddHostedService<AgentWorker>();

@@ -15,6 +15,23 @@ class PolicyResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class AgentEmployeeResponse(BaseModel):
+    id: UUID
+    name: str
+    employee_no: str
+    department: str | None = None
+    manager_name: str | None = None
+    job_role: str | None = None
+    status: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AttendanceRuleResponse(BaseModel):
+    clock_in_late_after: str
+    clock_out_early_before: str
+
+
 class HeartbeatSessionState(BaseModel):
     collected_at: datetime | None = None
     session_id: int | None = None
@@ -101,6 +118,7 @@ class ScreenshotUploadResponse(BaseModel):
 
 
 class ScreenshotCompleteRequest(BaseModel):
+    device_id: UUID | None = None
     image_uri: str
     thumb_uri: str
     phash: str

@@ -13,6 +13,7 @@ from app.schemas.admin import (
     AttendanceListResponse,
     AttendanceRecordItem,
     AttendanceReviewRequest,
+    AttendanceRuleSummary,
     AuditLogListResponse,
     DashboardSummaryResponse,
     DeviceListResponse,
@@ -27,7 +28,9 @@ from app.schemas.admin import (
 )
 from app.services.queries import QueryService
 from app.services.audit import AuditContext
+from app.services.agent_auth import AgentPrincipal
 from app.services.attendance import AttendanceService
+from app.services.attendance_rules import AttendanceRuleService, format_rule_time
 from app.services.employee_admin import EmployeeAdminService
 from app.services.policies import PolicyService
 
@@ -98,6 +101,9 @@ def list_attendance(
     work_date: date | None = Query(default=None),
     anomaly_status: str | None = Query(default=None),
     review_status: str | None = Query(default=None),
+    event_type: str | None = Query(default=None, pattern="^(clock_in|clock_out)$"),
+    employee_no: str | None = Query(default=None),
+    machine_name: str | None = Query(default=None),
     limit: int = Query(default=200, ge=1, le=1000),
     session: Session = Depends(get_session),
     _: object = Depends(require_permissions("attendance.view")),
@@ -106,7 +112,21 @@ def list_attendance(
         work_date=work_date,
         anomaly_status=anomaly_status,
         review_status=review_status,
+        event_type=event_type,
+        employee_no=(employee_no.strip() or None) if employee_no is not None else None,
+        machine_name=(machine_name.strip() or None) if machine_name is not None else None,
         limit=limit,
+    )
+
+
+@router.get("/attendance/rules/default", response_model=AttendanceRuleSummary)
+def get_default_attendance_rules(
+    _: object = Depends(require_permissions("attendance.view")),
+) -> AttendanceRuleSummary:
+    rules = AttendanceRuleService().get_rules()
+    return AttendanceRuleSummary(
+        clock_in_late_after=format_rule_time(rules.clock_in_late_after),
+        clock_out_early_before=format_rule_time(rules.clock_out_early_before),
     )
 
 
@@ -126,6 +146,9 @@ def review_attendance_record(
         work_date=record.work_date,
         anomaly_status=None,
         review_status=None,
+        event_type=None,
+        employee_no=None,
+        machine_name=None,
         limit=1000,
     )
     for item in refreshed.items:
@@ -138,14 +161,19 @@ def review_attendance_record(
 @router.post("/agent/attendance", response_model=AttendanceRecordItem, status_code=status.HTTP_201_CREATED)
 def create_agent_attendance_record(
     payload: AttendanceClockRequest,
-    _: None = Depends(require_agent_token),
+    agent_principal: AgentPrincipal = Depends(require_agent_token),
     session: Session = Depends(get_session),
 ) -> AttendanceRecordItem:
+    if agent_principal.device_id is not None:
+        payload = payload.model_copy(update={"device_id": agent_principal.device_id})
     record = AttendanceService(session).create_clock_record(payload)
     refreshed = QueryService(session).list_attendance(
         work_date=record.work_date,
         anomaly_status=None,
         review_status=None,
+        event_type=None,
+        employee_no=None,
+        machine_name=None,
         limit=1000,
     )
     for item in refreshed.items:

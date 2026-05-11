@@ -80,7 +80,7 @@ Start from `agent/src/EmployeeBehavior.Agent.Service/appsettings.json.example` a
 - `ApiBaseUrl`
   Absolute backend base URL, for example `https://monitoring.internal.example`.
 - `ApiToken`
-  Device or agent bearer token issued for this deployment. It must match backend `EBM_AGENT_API_TOKEN`; `/api/agent/*` returns `401` without it.
+  Service deployments use the backend agent signing secret and derive device-scoped bearer tokens locally. Launcher-only deployments may use a pre-issued device-scoped `v1:<device_id>:<signature>` token. Production backends reject the raw signing secret itself.
 - `DryRun`
   Keep `true` for initial validation. Switch to `false` only after local and backend checks pass.
 - `EmployeeId`
@@ -198,7 +198,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Install-Agen
    - `POST /api/agent/heartbeat`
    - `GET /api/agent/policy`
    - `POST /api/agent/screenshots/upload`
-   All three requests must include `Authorization: Bearer <ApiToken>`.
+   All three requests must include a device-scoped `Authorization: Bearer v1:<device_id>:<signature>` token.
 9. Restart the service once and confirm any queued screenshots retry from `UploadQueuePath`.
 
 Helper task notes:
