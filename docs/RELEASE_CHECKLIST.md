@@ -36,8 +36,12 @@ Production gates:
 - No process/user/machine environment override sets `SESSION_HELPER_SessionHelper__EnableTrayIcon=false`.
 - No process/user/machine environment override sets `SESSION_HELPER_SessionHelper__RunInConsole=true`.
 - Installed deployment validation uses `-RequireInstalledHelperTask`.
+- The installed Windows service `EmployeeBehavior.Agent.Service` exists and is reported by `Test-AgentDeployment.ps1`.
+- The installed Windows service binary path resolves to `EmployeeBehavior.Agent.Service.exe`.
+- Installed deployment validation reports the Windows service start mode and current state.
 - The installed helper scheduled task exists and can be inspected by `Test-AgentDeployment.ps1`.
 - The installed helper scheduled task does not include `--console`.
+- `Test-AgentDeployment.ps1` only passes API reachability when `GET /health` returns a 2xx response.
 - Strict production validation uses real `appsettings.json`; example config fallback must fail.
 - Runtime smoke validation shows the launcher opens without starting Service or SessionHelper before clock-in.
 - Local attendance smoke validation proves agent clock submission, admin attendance listing, anomaly classification, and review still work as one flow.

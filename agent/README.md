@@ -106,6 +106,7 @@ Copy-Item .\agent\src\EmployeeBehavior.Agent.Service\appsettings.json.example .\
 `AgentService` notes:
 
 - Keep `DryRun=true` for local contract verification before pointing at a real backend.
+- When `DryRun=false`, the service now fails at startup unless `ApiBaseUrl` is HTTPS and not a localhost/reserved example host, and unless either `ProtectedTokenPath` or a plaintext `v2:` `ApiToken` is configured.
 - `ProtectedTokenPath` is checked before `ApiToken`. Point it at a DPAPI-protected JSON file created by `agent\publish\Service\Write-AgentProtectedToken.ps1`, `EmployeeBehavior.Agent.Service.exe --write-protected-token`, or an equivalent PowerShell command.
 - `ApiToken` should be an issued device-scoped `v2:<device_id>:<secret>` bearer token when you use the dev fallback path. If the value starts with `v2:`, the service uses it directly as `Authorization: Bearer ...`.
 - A raw backend signing secret and legacy `v1:<device_id>:<signature>` tokens are development/test compatibility paths only; production backends reject both.

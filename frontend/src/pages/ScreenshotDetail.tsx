@@ -1,4 +1,4 @@
-import { Alert, Card, Col, List, Row, Space, Typography } from 'antd';
+import { Alert, Card, Col, Input, List, Row, Space, Typography } from 'antd';
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 
@@ -20,6 +20,8 @@ export function ScreenshotDetailPage() {
   const dateParam = searchParams.get('date') ?? undefined;
   const screenshotIdParam = searchParams.get('screenshotId') ?? undefined;
   const [detail, setDetail] = useState<ScreenshotComparison | null>(null);
+  const [imageAccessReason, setImageAccessReason] = useState('');
+  const normalizedImageAccessReason = imageAccessReason.trim();
 
   useEffect(() => {
     adminApi
@@ -42,6 +44,19 @@ export function ScreenshotDetailPage() {
         description="Screenshot diff fields are rendered defensively so live and mock sources keep working while backend payload names settle."
       />
       {detail.apiStatus ? <ApiStatusNotice status={detail.apiStatus} title="Screenshot source" /> : null}
+      <Card bordered={false} className="panel-card">
+        <Space direction="vertical" size={8} className="full-width">
+          <Typography.Title level={5}>Screenshot access reason</Typography.Title>
+          <Input.TextArea
+            value={imageAccessReason}
+            onChange={(event) => setImageAccessReason(event.target.value)}
+            placeholder="Case ID, audit review, or incident reason"
+            maxLength={240}
+            showCount
+            autoSize={{ minRows: 2, maxRows: 4 }}
+          />
+        </Space>
+      </Card>
       {detail.noChangeStreakTriggered ? (
         <Alert
           showIcon
@@ -57,6 +72,7 @@ export function ScreenshotDetailPage() {
             <ScreenshotPreview
               imageUri={detail.previousImageUri}
               thumbUri={detail.previousThumbUri}
+              accessReason={normalizedImageAccessReason}
               placeholderText="Previous screenshot placeholder"
               toneClassName="screenshot-previous"
             />
@@ -68,6 +84,7 @@ export function ScreenshotDetailPage() {
             <ScreenshotPreview
               imageUri={detail.currentImageUri}
               thumbUri={detail.currentThumbUri}
+              accessReason={normalizedImageAccessReason}
               placeholderText="Current screenshot placeholder"
               toneClassName="screenshot-current"
             />
@@ -200,6 +217,7 @@ function formatConfidence(value?: number | null) {
 type ScreenshotPreviewProps = {
   imageUri?: string | null;
   thumbUri?: string | null;
+  accessReason: string;
   placeholderText: string;
   toneClassName: string;
 };
@@ -207,11 +225,13 @@ type ScreenshotPreviewProps = {
 function ScreenshotPreview({
   imageUri,
   thumbUri,
+  accessReason,
   placeholderText,
   toneClassName
 }: ScreenshotPreviewProps) {
   const assetUri = imageUri ?? thumbUri;
   const shouldFetchWithAuth = Boolean(assetUri?.startsWith('/api/'));
+  const canFetchWithAuth = !shouldFetchWithAuth || accessReason.length > 0;
   const [objectUrl, setObjectUrl] = useState<string | null>(null);
   const [broken, setBroken] = useState(false);
   const src = shouldFetchWithAuth ? objectUrl : resolveApiAssetUrl(assetUri);
@@ -220,14 +240,14 @@ function ScreenshotPreview({
     setBroken(false);
     setObjectUrl(null);
 
-    if (!assetUri || !shouldFetchWithAuth) {
+    if (!assetUri || !shouldFetchWithAuth || !canFetchWithAuth) {
       return undefined;
     }
 
     let isCurrent = true;
     let nextObjectUrl: string | null = null;
 
-    fetchApiAssetObjectUrl(assetUri)
+    fetchApiAssetObjectUrl(assetUri, accessReason)
       .then((url) => {
         if (!isCurrent) {
           URL.revokeObjectURL(url);
@@ -249,7 +269,7 @@ function ScreenshotPreview({
         URL.revokeObjectURL(nextObjectUrl);
       }
     };
-  }, [assetUri, shouldFetchWithAuth]);
+  }, [accessReason, assetUri, canFetchWithAuth, shouldFetchWithAuth]);
 
   if (!src || broken) {
     return (

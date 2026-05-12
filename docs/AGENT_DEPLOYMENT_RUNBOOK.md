@@ -244,7 +244,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Install-Agen
 6. If the installer is being run by an admin on behalf of another user, set `-HelperTaskUser` explicitly to the pilot account instead of relying on the current user default.
 7. Redirect both process outputs to the recommended `logs\` directory during pilot rollout if you wrap the binaries. The current code still emits console logging only.
 8. Start the helper task or have the pilot user sign in so the logon trigger fires.
-9. Run `Test-AgentDeployment.ps1` against the installed target directories with `-RequireInstalledHelperTask`, and confirm it does not report hidden tray, console-mode, environment override, missing helper task, or scheduled-task argument failures.
+9. Run `Test-AgentDeployment.ps1` against the installed target directories with `-RequireInstalledHelperTask`, and confirm it does not report hidden tray, console-mode, environment override, missing helper task, missing `EmployeeBehavior.Agent.Service` registration, wrong service binary path, or scheduled-task argument failures. Also record the reported Windows service start mode and current state.
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Test-AgentDeployment.ps1 `

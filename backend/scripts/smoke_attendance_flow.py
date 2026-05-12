@@ -57,11 +57,41 @@ def main() -> int:
             admin_headers = _login_bootstrap_admin(client)
             seeded = _seed_employee_and_device(client)
             agent_headers = {"Authorization": f"Bearer {seeded['agent_token']}"}
+            default_rules = _get_default_attendance_rules(client, admin_headers)
+            assert default_rules == {
+                "name": "Default attendance rule",
+                "clock_in_late_after": "09:30",
+                "clock_out_early_before": "18:00",
+                "timezone": "Local time",
+            }, default_rules
+
+            updated_rules = _update_default_attendance_rules(
+                client,
+                admin_headers,
+                name="Smoke flow custom rule",
+                clock_in_late_after="10:00",
+                clock_out_early_before="17:30",
+            )
+            assert updated_rules == {
+                "name": "Smoke flow custom rule",
+                "clock_in_late_after": "10:00",
+                "clock_out_early_before": "17:30",
+                "timezone": "Local time",
+            }, updated_rules
+
+            confirmed_rules = _get_default_attendance_rules(client, admin_headers)
+            assert confirmed_rules == updated_rules, confirmed_rules
+
+            agent_rules = _get_agent_attendance_rules(client, agent_headers)
+            assert agent_rules == {
+                "clock_in_late_after": "10:00",
+                "clock_out_early_before": "17:30",
+            }, agent_rules
 
             late_record = _create_attendance(
                 client,
                 agent_headers,
-                occurred_at="2026-05-12T09:47:00+08:00",
+                occurred_at="2026-05-12T10:10:00+08:00",
                 event_type="clock_in",
             )
             normal_record = _create_attendance(
@@ -105,6 +135,8 @@ def main() -> int:
                         "employee_no": "E-001",
                         "device_id": seeded["device_id"],
                         "created_record_ids": [late_record["id"], normal_record["id"]],
+                        "default_rules": default_rules,
+                        "updated_rules": updated_rules,
                         "late_anomaly": late_record["anomaly_status"],
                         "normal_anomaly": normal_record["anomaly_status"],
                         "review_status": reviewed["review_status"],
@@ -189,6 +221,39 @@ def _create_attendance(
         },
     )
     _assert_status(response, 201, f"create {event_type}")
+    return response.json()
+
+
+def _get_default_attendance_rules(client: TestClient, admin_headers: dict[str, str]) -> dict[str, object]:
+    response = client.get("/api/attendance/rules/default", headers=admin_headers)
+    _assert_status(response, 200, "get default attendance rules")
+    return response.json()
+
+
+def _update_default_attendance_rules(
+    client: TestClient,
+    admin_headers: dict[str, str],
+    *,
+    name: str,
+    clock_in_late_after: str,
+    clock_out_early_before: str,
+) -> dict[str, object]:
+    response = client.put(
+        "/api/attendance/rules/default",
+        headers=admin_headers,
+        json={
+            "name": name,
+            "clock_in_late_after": clock_in_late_after,
+            "clock_out_early_before": clock_out_early_before,
+        },
+    )
+    _assert_status(response, 200, "update default attendance rules")
+    return response.json()
+
+
+def _get_agent_attendance_rules(client: TestClient, agent_headers: dict[str, str]) -> dict[str, object]:
+    response = client.get("/api/agent/attendance/rules", headers=agent_headers)
+    _assert_status(response, 200, "get agent attendance rules")
     return response.json()
 
 

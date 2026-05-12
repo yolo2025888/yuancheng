@@ -7,6 +7,7 @@ using EmployeeBehavior.Agent.Service.Policy;
 using EmployeeBehavior.Agent.Service.Session;
 using EmployeeBehavior.Agent.Service.Transport;
 using EmployeeBehavior.Agent.Service.Uploads;
+using Microsoft.Extensions.Options;
 
 if (ProtectedTokenCommand.TryExecute(args, out var protectedTokenCommandExitCode))
 {
@@ -30,6 +31,7 @@ builder.Services
     .AddOptions<AgentServiceOptions>()
     .Bind(builder.Configuration.GetSection(AgentServiceOptions.SectionName))
     .ValidateOnStart();
+builder.Services.AddSingleton<IValidateOptions<AgentServiceOptions>, AgentServiceOptionsValidator>();
 
 builder.Services.AddSingleton<IDeviceIdentityStore, FileDeviceIdentityStore>();
 builder.Services.AddSingleton<IPolicyCache, InMemoryPolicyCache>();

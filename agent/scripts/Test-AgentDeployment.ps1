@@ -345,11 +345,103 @@ function Test-ApiReachability {
     catch {
         $webResponse = $_.Exception.Response
         if ($null -ne $webResponse) {
-            Add-CheckResult -Check "API reachability" -Status "PASS" -Detail "Reached '$healthUri' and received HTTP $([int]$webResponse.StatusCode)."
+            $statusCode = [int]$webResponse.StatusCode
+            Add-CheckResult -Check "API reachability" -Status "FAIL" -Detail "Reached '$healthUri' but received non-success HTTP $statusCode."
             return
         }
 
         Add-CheckResult -Check "API reachability" -Status "WARN" -Detail "Could not confirm '$healthUri': $($_.Exception.Message)"
+    }
+}
+
+function Get-ServiceExecutablePath {
+    param(
+        [string]$PathName
+    )
+
+    if ([string]::IsNullOrWhiteSpace($PathName)) {
+        return $null
+    }
+
+    $trimmed = $PathName.Trim()
+    if ($trimmed.StartsWith('"', [System.StringComparison]::Ordinal)) {
+        $closingQuoteIndex = $trimmed.IndexOf('"', 1)
+        if ($closingQuoteIndex -gt 1) {
+            return $trimmed.Substring(1, $closingQuoteIndex - 1)
+        }
+    }
+
+    $match = [System.Text.RegularExpressions.Regex]::Match(
+        $trimmed,
+        '^(?<Executable>.+?\.exe)(?:\s|$)',
+        [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+    if ($match.Success) {
+        return $match.Groups['Executable'].Value
+    }
+
+    return $trimmed
+}
+
+function Test-WindowsServiceRegistration {
+    param(
+        [bool]$RequireInstalledService
+    )
+
+    $serviceName = "EmployeeBehavior.Agent.Service"
+    $expectedExecutableName = "EmployeeBehavior.Agent.Service.exe"
+
+    if ($null -eq (Get-Command Get-Service -ErrorAction SilentlyContinue)) {
+        $status = if ($RequireInstalledService) { "FAIL" } else { "WARN" }
+        Add-CheckResult -Check "Windows service registration" -Status $status -Detail "Get-Service is not available in this shell; service registration was not inspected."
+        return
+    }
+
+    $service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+    if ($null -eq $service) {
+        $status = if ($RequireInstalledService) { "FAIL" } else { "WARN" }
+        Add-CheckResult -Check "Windows service registration" -Status $status -Detail "Windows service '$serviceName' was not found."
+        return
+    }
+
+    Add-CheckResult -Check "Windows service registration" -Status "PASS" -Detail "Windows service '$serviceName' is registered."
+
+    $scOutput = & sc.exe qc $serviceName 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $binaryPathLine = $scOutput | Where-Object { $_ -match 'BINARY_PATH_NAME' } | Select-Object -First 1
+        if ($null -eq $binaryPathLine) {
+            $status = if ($RequireInstalledService) { "FAIL" } else { "WARN" }
+            Add-CheckResult -Check "Windows service binary path" -Status $status -Detail "Windows service '$serviceName' is registered, but sc.exe qc did not return BINARY_PATH_NAME."
+        }
+        else {
+            $registeredExecutablePath = Get-ServiceExecutablePath -PathName ([string]($binaryPathLine -replace '^.*BINARY_PATH_NAME\s*:\s*', ''))
+            if ([string]::IsNullOrWhiteSpace($registeredExecutablePath)) {
+                $status = if ($RequireInstalledService) { "FAIL" } else { "WARN" }
+                Add-CheckResult -Check "Windows service binary path" -Status $status -Detail "Windows service '$serviceName' does not expose a readable executable path."
+            }
+            elseif ([string]::Equals(
+                [System.IO.Path]::GetFileName($registeredExecutablePath),
+                $expectedExecutableName,
+                [System.StringComparison]::OrdinalIgnoreCase)) {
+                Add-CheckResult -Check "Windows service binary path" -Status "PASS" -Detail "Windows service '$serviceName' points to '$registeredExecutablePath'."
+            }
+            else {
+                Add-CheckResult -Check "Windows service binary path" -Status "FAIL" -Detail "Windows service '$serviceName' points to '$registeredExecutablePath', expected '$expectedExecutableName'."
+            }
+        }
+    }
+    else {
+        $status = if ($RequireInstalledService) { "FAIL" } else { "WARN" }
+        $scMessage = (($scOutput | ForEach-Object { $_.ToString().Trim() }) -join ' ').Trim()
+        Add-CheckResult -Check "Windows service binary path" -Status $status -Detail "sc.exe qc could not inspect Windows service '$serviceName': $scMessage"
+    }
+
+    $startMode = [string]$service.StartType
+    $runtimeState = [string]$service.Status
+    if ([string]::IsNullOrWhiteSpace($startMode) -or [string]::IsNullOrWhiteSpace($runtimeState)) {
+        Add-CheckResult -Check "Windows service startup report" -Status "WARN" -Detail "Windows service '$serviceName' is registered, but startup mode/state could not be fully determined."
+    }
+    else {
+        Add-CheckResult -Check "Windows service startup report" -Status "PASS" -Detail "Windows service '$serviceName' reports StartMode='$startMode'; State='$runtimeState'."
     }
 }
 
@@ -605,6 +697,8 @@ if ($null -ne $serviceSection -and $null -ne $helperSection) {
 }
 
 Add-CheckResult -Check "Machine identity" -Status "PASS" -Detail "MachineName='$([System.Environment]::MachineName)'; UserInteractive=$([System.Environment]::UserInteractive)."
+
+Test-WindowsServiceRegistration -RequireInstalledService $RequireInstalledHelperTask.IsPresent
 
 if (Test-Path -LiteralPath $LogRootPath) {
     Add-CheckResult -Check "Log root path" -Status "PASS" -Detail "Log directory '$LogRootPath' exists."

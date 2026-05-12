@@ -14,7 +14,6 @@ type RequestOptions = {
 
 const DEFAULT_API_BASE_URL = 'http://127.0.0.1:8010';
 const REQUEST_TIMEOUT_MS = 5000;
-const SCREENSHOT_ASSET_ACCESS_REASON = 'Admin console screenshot evidence preview';
 
 export const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL?.trim().replace(/\/+$/, '') || DEFAULT_API_BASE_URL;
@@ -133,8 +132,8 @@ export function resolveApiAssetUrl(uri?: string | null) {
   return `${API_BASE_URL}/${uri.replace(/^\/+/, '')}`;
 }
 
-export async function fetchApiAssetObjectUrl(uri: string) {
-  const blob = await apiClient<Blob>(withScreenshotAssetReason(uri), { responseType: 'blob' });
+export async function fetchApiAssetObjectUrl(uri: string, accessReason?: string) {
+  const blob = await apiClient<Blob>(withScreenshotAssetReason(uri, accessReason), { responseType: 'blob' });
   return URL.createObjectURL(blob);
 }
 
@@ -172,8 +171,13 @@ function hasHeaders(headers: Headers) {
   return Array.from(headers.keys()).length > 0;
 }
 
-function withScreenshotAssetReason(uri: string) {
+function withScreenshotAssetReason(uri: string, accessReason?: string) {
   if (!/^\/api\/screenshots\/[^/?#]+\/(?:image|thumbnail)(?:[?#]|$)/.test(uri)) {
+    return uri;
+  }
+
+  const normalizedReason = accessReason?.trim();
+  if (!normalizedReason) {
     return uri;
   }
 
@@ -181,7 +185,7 @@ function withScreenshotAssetReason(uri: string) {
   const [path, query = ''] = pathWithQuery.split('?', 2);
   const params = new URLSearchParams(query);
   if (!params.has('reason')) {
-    params.set('reason', SCREENSHOT_ASSET_ACCESS_REASON);
+    params.set('reason', normalizedReason);
   }
 
   const nextQuery = params.toString();
