@@ -20,6 +20,8 @@ public sealed class AgentServiceOptions
 
     public string DeviceIdPath { get; set; } = @"C:\ProgramData\EmployeeBehaviorAgent\device-id.json";
 
+    public string WorkSessionStatePath { get; set; } = @"C:\ProgramData\EmployeeBehaviorAgent\work-session-state.json";
+
     public string SessionHelperPipeName { get; set; } = "employee-behavior-agent";
 
     public int SessionHelperConnectTimeoutSeconds { get; set; } = 3;

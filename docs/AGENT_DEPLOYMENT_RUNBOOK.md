@@ -18,6 +18,8 @@ The agent is split into two processes:
 2. `EmployeeBehavior.Agent.SessionHelper`
    Runs inside the interactive user session and captures screenshots, foreground window metadata, session state, and aggregate keyboard/mouse/window-switch counts.
 
+If you also ship `EmployeeBehavior.Agent.Launcher.exe`, treat it as the employee-facing clock-in UI, not as the bootstrapper for these installed processes. In the publish/runtime smoke gate, opening the launcher must not start `EmployeeBehavior.Agent.Service` or `EmployeeBehavior.Agent.SessionHelper` before clock-in. In installed deployments, lifecycle ownership stays with the Windows service plus helper logon task, so clock-in records attendance and shows current background status instead of calling `Process.Start` on local copies.
+
 Both processes must use the same named pipe value:
 
 - `AgentService:SessionHelperPipeName`
@@ -57,6 +59,7 @@ C:\Program Files\EmployeeBehaviorAgent\SessionHelper\
 
 C:\ProgramData\EmployeeBehaviorAgent\
   device-id.json
+  work-session-state.json
   upload-queue.jsonl
   upload-queue-payloads\
   logs\
@@ -91,6 +94,8 @@ Start from `agent/src/EmployeeBehavior.Agent.Service/appsettings.json.example` a
   Optional employee binding for the pilot.
 - `DeviceIdPath`
   Recommended: `C:\ProgramData\EmployeeBehaviorAgent\device-id.json`
+- `WorkSessionStatePath`
+  Recommended: `C:\ProgramData\EmployeeBehaviorAgent\work-session-state.json`. Launcher clock-in/out updates this shared state file, and the service uses it to pause monitoring before clock-in and after clock-out.
 - `SessionHelperPipeName`
   Must match the helper pipe name exactly.
 - `SessionHelperConnectTimeoutSeconds`
@@ -251,6 +256,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Install-Agen
 7. If you keep service/task wrappers, stdout/stderr redirection is optional. The binaries now append to the recommended `logs\` directory by default unless `Logging:File:Path` overrides it.
 8. Start the helper task or have the pilot user sign in so the logon trigger fires.
 9. Run `Test-AgentDeployment.ps1` against the installed target directories with `-RequireInstalledHelperTask`, and confirm it does not report hidden tray, console-mode, environment override, missing helper task, missing `EmployeeBehavior.Agent.Service` registration, wrong service binary path, or scheduled-task argument failures. Also record the reported Windows service start mode and current state.
+10. Validate the launcher lifecycle on the installed endpoint: opening the launcher still must not start new background processes before clock-in, and clock-in must record attendance while showing the current service/helper status instead of directly starting local background executables.
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Test-AgentDeployment.ps1 `
@@ -259,12 +265,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Test-AgentDe
   -RequireInstalledHelperTask
 ```
 
-10. Confirm backend reachability with `/health` and confirm the agent receives `200 OK` from:
+11. Confirm backend reachability with `/health` and confirm the agent receives `200 OK` from:
    - `POST /api/agent/heartbeat`
    - `GET /api/agent/policy`
    - `POST /api/agent/screenshots/upload`
    All three requests must include a device-scoped `Authorization: Bearer v2:<device_id>:<secret>` token.
-11. Restart the service once and confirm any queued screenshots retry from `UploadQueuePath`.
+12. Restart the service once and confirm any queued screenshots retry from `UploadQueuePath`.
 
 Helper task notes:
 
@@ -294,6 +300,7 @@ For an already installed pilot or production endpoint, add `-RequireInstalledHel
 3. Device identity:
    - `DeviceIdPath` parent directory exists and is writable by the service account.
    - `device-id.json` exists after first successful service start.
+   - `WorkSessionStatePath` is shared with the launcher path expectation, or both are left on the default ProgramData location.
 4. Upload queue:
    - `UploadQueuePath` parent directory exists and is writable by the service account.
    - `upload-queue.jsonl` appears when captures are queued and drains after successful uploads.

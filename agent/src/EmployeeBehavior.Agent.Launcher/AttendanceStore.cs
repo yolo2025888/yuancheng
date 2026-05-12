@@ -1,5 +1,6 @@
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using EmployeeBehavior.Agent.Contracts.Models;
 
 namespace EmployeeBehavior.Agent.Launcher;
 
@@ -14,6 +15,7 @@ internal sealed class AttendanceStore
     private readonly SemaphoreSlim _fileLock = new(1, 1);
     private readonly string _logPath;
     private readonly string _pendingPath;
+    private readonly string _workSessionStatePath;
 
     public AttendanceStore(string? dataDirectory = null)
     {
@@ -23,11 +25,30 @@ internal sealed class AttendanceStore
         Directory.CreateDirectory(dataDirectory);
         _logPath = Path.Combine(dataDirectory, "attendance-log.jsonl");
         _pendingPath = Path.Combine(dataDirectory, "attendance-pending.jsonl");
+        _workSessionStatePath = Path.Combine(dataDirectory, "work-session-state.json");
     }
 
     public string LogPath => _logPath;
 
     public string PendingPath => _pendingPath;
+
+    public string WorkSessionStatePath => _workSessionStatePath;
+
+    public async Task SetWorkSessionStateAsync(
+        string eventType,
+        EmployeeProfile employeeProfile,
+        DateTimeOffset occurredAt)
+    {
+        await _fileLock.WaitAsync();
+        try
+        {
+            await WriteWorkSessionStateAsync(eventType, employeeProfile, occurredAt);
+        }
+        finally
+        {
+            _fileLock.Release();
+        }
+    }
 
     public async Task<AttendanceRecord> AppendAsync(
         string eventType,
@@ -147,6 +168,18 @@ internal sealed class AttendanceStore
         {
             _fileLock.Release();
         }
+    }
+
+    private async Task WriteWorkSessionStateAsync(
+        string eventType,
+        EmployeeProfile employeeProfile,
+        DateTimeOffset occurredAt)
+    {
+        var state = string.Equals(eventType, "clock_in", StringComparison.OrdinalIgnoreCase)
+            ? WorkSessionState.Active(employeeProfile.EmployeeNo, employeeProfile.DisplayName, occurredAt)
+            : WorkSessionState.Inactive() with { UpdatedAt = occurredAt };
+        var payload = JsonSerializer.Serialize(state, JsonOptions);
+        await File.WriteAllTextAsync(_workSessionStatePath, payload);
     }
 }
 

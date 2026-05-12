@@ -1,6 +1,6 @@
 # Operations and Demo Guide
 
-Open `agent\publish\EmployeeBehavior.Agent.Launcher.exe` for the Windows client. The launcher shows the punch clock UI; the approved service and session helper start only after the employee clocks in:
+Open `agent\publish\EmployeeBehavior.Agent.Launcher.exe` for the Windows client. The launcher is the punch clock UI only. Before clock-in it must stay a foreground-only client: no `EmployeeBehavior.Agent.Service` or `EmployeeBehavior.Agent.SessionHelper` process should start just because the window opened. After clock-in, portable publish packages start the local background agent; installed service/task deployments keep lifecycle ownership with Windows and the launcher only records attendance plus shows current background status:
 
 - `EmployeeBehavior.Agent.Service.exe` handles API calls, heartbeats, uploads, token auth, and attendance submission.
 - `EmployeeBehavior.Agent.SessionHelper.exe` runs in the interactive user session for screenshots and input/session activity capture.
@@ -28,3 +28,5 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Test-AgentDe
 If the installed service config needs the same production rewrite after deployment, rerun `Set-AgentProductionConfig.ps1` with `-ConfigPath 'C:\Program Files\EmployeeBehaviorAgent\Service\appsettings.json'`.
 
 Strict production validation must fail on localhost API URLs, `DryRun=true`, missing protected token files, placeholder credentials, example config fallback, hidden tray configuration, console-only production helper mode, missing or uninspectable installed helper task, or incomplete launcher packaging. Runtime smoke validation must show the launcher opens without starting Service or SessionHelper before clock-in. Web console smoke validation must pass before demoing review queue, attendance, devices, screenshot detail, access roles, or GitHub risk screens.
+
+When demoing the launcher lifecycle manually, show the pre-clock-in state first: launcher visible, no new service/helper process. Then clock in and show the correct post-clock-in branch for that device: portable publish starts local background processes; installed deployments keep the service/task-managed lifecycle and the launcher only discloses current background status.

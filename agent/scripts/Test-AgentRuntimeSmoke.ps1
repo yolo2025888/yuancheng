@@ -16,6 +16,30 @@ $backgroundProcessNames = @(
 )
 $processNames = @($launcherProcessName) + $backgroundProcessNames
 
+function Test-CommandRegistration {
+    param(
+        [Parameter(Mandatory)]
+        [string]$FileName,
+        [Parameter(Mandatory)]
+        [string]$Arguments
+    )
+
+    try {
+        $process = Start-Process `
+            -FilePath $FileName `
+            -ArgumentList $Arguments `
+            -WindowStyle Hidden `
+            -PassThru `
+            -Wait `
+            -NoNewWindow `
+            -ErrorAction Stop
+        return $process.ExitCode -eq 0
+    }
+    catch {
+        return $false
+    }
+}
+
 function Resolve-PublishRoot {
     param([string]$Value)
 
@@ -59,6 +83,8 @@ function Stop-NewProcesses {
 
 $resolvedPublishRoot = Resolve-PublishRoot -Value $PublishRoot
 $launcherPath = Join-Path $resolvedPublishRoot 'EmployeeBehavior.Agent.Launcher.exe'
+$serviceRegistered = Test-CommandRegistration -FileName 'sc.exe' -Arguments 'query "EmployeeBehavior.Agent.Service"'
+$helperTaskRegistered = Test-CommandRegistration -FileName 'schtasks.exe' -Arguments '/Query /TN "EmployeeBehavior.Agent.SessionHelper"'
 
 if (-not (Test-Path -LiteralPath $launcherPath -PathType Leaf)) {
     throw "Launcher executable not found at '$launcherPath'."
@@ -109,6 +135,10 @@ try {
     while (-not $launcherStartedForTest -and (Get-Date) -lt $deadline)
 
     $results | Format-Table -AutoSize
+    [pscustomobject]@{
+        ServiceRegistered = $serviceRegistered
+        HelperTaskRegistered = $helperTaskRegistered
+    } | Format-List
 
     if (-not $launcherStartedForTest) {
         throw "Runtime smoke failed. Launcher did not start and remain running for this smoke test."
@@ -123,7 +153,7 @@ try {
         throw "Runtime smoke failed. Opening the launcher started background monitoring before clock-in: $($startedNames -join ', ')."
     }
 
-    Write-Output "Runtime smoke passed. Launcher starts without starting Service or SessionHelper before clock-in."
+    Write-Output "Runtime smoke passed. Launcher starts without starting Service or SessionHelper before clock-in. Installed registration detected: Service=$serviceRegistered; HelperTask=$helperTaskRegistered."
 }
 finally {
     if ($CleanupStartedProcesses) {

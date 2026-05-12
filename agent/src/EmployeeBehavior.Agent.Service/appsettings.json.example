@@ -10,6 +10,7 @@
     "DryRun": true,
     "EmployeeId": null,
     "DeviceIdPath": "C:\\ProgramData\\EmployeeBehaviorAgent\\device-id.json",
+    "WorkSessionStatePath": "C:\\ProgramData\\EmployeeBehaviorAgent\\work-session-state.json",
     "SessionHelperPipeName": "employee-behavior-agent",
     "SessionHelperConnectTimeoutSeconds": 3,
     "SessionHelperRequestTimeoutSeconds": 30,

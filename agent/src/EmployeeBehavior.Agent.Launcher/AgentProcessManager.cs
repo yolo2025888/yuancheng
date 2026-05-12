@@ -6,12 +6,23 @@ internal sealed class AgentProcessManager
 {
     private const string ServiceProcessName = "EmployeeBehavior.Agent.Service";
     private const string HelperProcessName = "EmployeeBehavior.Agent.SessionHelper";
+    private const string ServiceRegistrationName = "EmployeeBehavior.Agent.Service";
+    private const string HelperTaskName = "EmployeeBehavior.Agent.SessionHelper";
     private readonly object _startLock = new();
 
     public AgentProcessStatus StartAgentProcesses()
     {
         lock (_startLock)
         {
+            var installationState = DetectInstallationState();
+            if (installationState.IsInstalledDeployment)
+            {
+                return CreateStatus(
+                    serviceStarted: false,
+                    helperStarted: false,
+                    installationState);
+            }
+
             var service = StartIfMissing(
                 ServiceProcessName,
                 ResolveAgentPath("Service", "EmployeeBehavior.Agent.Service.exe"),
@@ -21,15 +32,21 @@ internal sealed class AgentProcessManager
                 ResolveAgentPath("SessionHelper", "EmployeeBehavior.Agent.SessionHelper.exe"),
                 hideWindow: true);
 
-            return new AgentProcessStatus(service.Started, service.ProcessId, helper.Started, helper.ProcessId);
+            return CreateStatus(
+                service.Started,
+                helper.Started,
+                installationState,
+                service.ProcessId,
+                helper.ProcessId);
         }
     }
 
     public AgentProcessStatus GetStatus()
     {
-        var service = FindProcess(ServiceProcessName);
-        var helper = FindProcess(HelperProcessName);
-        return new AgentProcessStatus(false, service?.Id, false, helper?.Id);
+        return CreateStatus(
+            serviceStarted: false,
+            helperStarted: false,
+            DetectInstallationState());
     }
 
     private static (bool Started, int? ProcessId) StartIfMissing(string processName, string executablePath, bool hideWindow)
@@ -88,10 +105,98 @@ internal sealed class AgentProcessManager
             .FirstOrDefault(File.Exists)
             ?? Path.GetFullPath(candidates[0]);
     }
+
+    private static AgentProcessStatus CreateStatus(
+        bool serviceStarted,
+        bool helperStarted,
+        AgentInstallationState installationState,
+        int? serviceProcessId = null,
+        int? helperProcessId = null)
+    {
+        serviceProcessId ??= FindProcess(ServiceProcessName)?.Id;
+        helperProcessId ??= FindProcess(HelperProcessName)?.Id;
+
+        return new AgentProcessStatus(
+            serviceStarted,
+            serviceProcessId,
+            helperStarted,
+            helperProcessId,
+            installationState.ServiceInstalled,
+            installationState.HelperTaskInstalled,
+            installationState.IsInstalledDeployment);
+    }
+
+    private static AgentInstallationState DetectInstallationState()
+    {
+        var serviceInstalled = IsRegistrationPresent(
+            "sc.exe",
+            $"query \"{ServiceRegistrationName}\"");
+        var helperTaskInstalled = IsRegistrationPresent(
+            "schtasks.exe",
+            $"/Query /TN \"{HelperTaskName}\"");
+
+        return new AgentInstallationState(serviceInstalled, helperTaskInstalled);
+    }
+
+    private static bool IsRegistrationPresent(string fileName, string arguments)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = fileName,
+            Arguments = arguments,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            WindowStyle = ProcessWindowStyle.Hidden
+        };
+
+        try
+        {
+            using var process = Process.Start(startInfo);
+            if (process is null)
+            {
+                return false;
+            }
+
+            if (!process.WaitForExit(3000))
+            {
+                try
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+                catch (InvalidOperationException)
+                {
+                }
+
+                return false;
+            }
+
+            return process.ExitCode == 0;
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            return false;
+        }
+    }
 }
 
 internal readonly record struct AgentProcessStatus(
     bool ServiceStarted,
     int? ServiceProcessId,
     bool HelperStarted,
-    int? HelperProcessId);
+    int? HelperProcessId,
+    bool ServiceInstalled,
+    bool HelperTaskInstalled,
+    bool DirectLaunchSuppressed)
+{
+    public bool IsInstalledDeployment => ServiceInstalled || HelperTaskInstalled;
+
+    public bool HasAnyRunningProcess()
+    {
+        return ServiceProcessId.HasValue || HelperProcessId.HasValue;
+    }
+}
+
+internal readonly record struct AgentInstallationState(bool ServiceInstalled, bool HelperTaskInstalled)
+{
+    public bool IsInstalledDeployment => ServiceInstalled || HelperTaskInstalled;
+}

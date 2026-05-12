@@ -319,4 +319,5 @@ if ($StartHelperTask -and $PSCmdlet.ShouldProcess($HelperTaskName, 'Start schedu
     LogDirectory           = $resolvedLogDirectory
     DeviceIdentityPath     = Join-Path -Path $resolvedDataDirectory -ChildPath 'device-id.json'
     UploadQueuePath        = Join-Path -Path $resolvedDataDirectory -ChildPath 'upload-queue.jsonl'
+    LauncherClockInMode    = 'Installed service/task detected by Launcher; clock-in records attendance and shows background status without local Process.Start.'
 }

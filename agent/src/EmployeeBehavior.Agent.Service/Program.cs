@@ -36,6 +36,7 @@ builder.Services.AddSingleton<IValidateOptions<AgentServiceOptions>, AgentServic
 builder.Services.AddSingleton<IDeviceIdentityStore, FileDeviceIdentityStore>();
 builder.Services.AddSingleton<IPolicyCache, InMemoryPolicyCache>();
 builder.Services.AddSingleton<IUploadQueue, FileBackedUploadQueue>();
+builder.Services.AddSingleton<IWorkSessionStateStore, FileWorkSessionStateStore>();
 builder.Services.AddSingleton<ISessionHelperClient, NamedPipeSessionHelperClient>();
 builder.Services.AddHttpClient<IAgentApiClient, AgentApiClient>((serviceProvider, httpClient) =>
 {

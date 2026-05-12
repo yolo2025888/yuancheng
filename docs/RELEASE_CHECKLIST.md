@@ -4,6 +4,8 @@ Run these checks before rollout:
 
 Regenerate `agent\publish` immediately before these commands or use the matching CI artifact. The directory is ignored generated output, so a stale local copy is not release evidence.
 
+Launcher lifecycle release evidence comes from the repo smoke scripts under `agent\scripts\`, especially `Test-AgentRuntimeSmoke.ps1`. Do not rely on older packaged script copies that still describe launcher-startup monitoring.
+
 ```powershell
 python -m compileall backend\app backend\tests
 python -m pytest backend\tests -q
@@ -30,6 +32,7 @@ Production gates:
 - `ApiBaseUrl` is the production API URL.
 - `DryRun` is `false`.
 - `ProtectedTokenPath` points to an existing DPAPI token file.
+- `WorkSessionStatePath` is either left at the default ProgramData location or explicitly aligned with the launcher on the same machine.
 - `Logging:File:Path` is either left at the default ProgramData location or overridden to another writable persistent file path for both service and helper.
 - Device tokens use issued v2 device-scoped tokens.
 - `SessionHelper.EnableTrayIcon` is `true`.
@@ -46,10 +49,12 @@ Production gates:
 - `Test-AgentDeployment.ps1` only passes API reachability when `GET /health` returns a 2xx response.
 - Strict production validation uses real `appsettings.json`; example config fallback must fail.
 - Runtime smoke validation shows the launcher opens without starting Service or SessionHelper before clock-in.
+- Installed lifecycle validation confirms clock-in on a service/task-managed endpoint records attendance and shows current background status without directly starting local Service or SessionHelper executables.
 - Local attendance smoke validation proves agent clock submission, admin attendance listing, anomaly classification, and review still work as one flow.
 - Web console route smoke validation proves the review queue, attendance, devices, screenshot detail, GitHub risk, and access-role menus still have matching routes, permissions, pages, and API hooks.
 - Screenshot capture guard validation prevents the invalid `SourceCopy | CaptureBlt` enum combination from returning.
 - Screenshot retention cleanup is exercised with `POST /api/admin/screenshots/retention/cleanup` by a `screenshots.retention.manage` user, and the resulting `screenshots.retention.cleaned` audit log includes `job_id`, success counts, missing-file counts, and failure counts.
-- Users launch `EmployeeBehavior.Agent.Launcher.exe`, not the service or session helper directly.
+- Users launch `EmployeeBehavior.Agent.Launcher.exe` for the punch clock UI, not the service or session helper directly.
+- Opening the launcher alone is not release-approved evidence of monitoring start; clock-in is the lifecycle boundary for launcher-driven monitoring, and installed endpoints keep lifecycle control with the Windows service plus helper task.
 - Review queue, attendance, devices, screenshot activity summaries, GitHub risk, and access-role menus have been checked in the web console.
 - Employee-facing disclosure states the collected data, purpose, retention, authorized viewers, and appeal channel before rollout; `Test-LauncherDisclosure.ps1` must pass.

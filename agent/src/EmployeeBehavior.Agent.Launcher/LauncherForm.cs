@@ -35,8 +35,8 @@ internal sealed class LauncherForm : Form
     {
         Text = "Employee Clock";
         StartPosition = FormStartPosition.CenterScreen;
-        MinimumSize = new Size(480, 520);
-        Size = new Size(520, 560);
+        MinimumSize = new Size(480, 560);
+        Size = new Size(520, 600);
         Font = new Font("Microsoft YaHei UI", 10F, FontStyle.Regular, GraphicsUnit.Point);
         BackColor = Color.FromArgb(245, 247, 250);
 
@@ -71,7 +71,9 @@ internal sealed class LauncherForm : Form
         title.Dock = DockStyle.Top;
 
         var subtitle = CreateLabel(
-            "Clock in starts company-device monitoring: full screenshots on all displays; active window title, process name/path, session/lock/RDP/idle metadata; aggregate keyboard/mouse counts." +
+            "Clock in records attendance and enables company-device monitoring for this work session. Portable packages start the local background agent after clock-in; installed devices keep the Windows service/session helper under system control and the launcher shows current background status." +
+            Environment.NewLine +
+            "Monitoring includes full screenshots on all displays; active window title, process name/path, session/lock/RDP/idle metadata; aggregate keyboard/mouse counts." +
             Environment.NewLine +
             "Purpose: attendance, work-risk review, and code/data leakage investigation by authorized admins. Retention and appeal follow company HR/IT policy." +
             Environment.NewLine +
@@ -79,7 +81,7 @@ internal sealed class LauncherForm : Form
             8.5F,
             FontStyle.Regular);
         subtitle.ForeColor = Color.FromArgb(92, 101, 116);
-        subtitle.Height = 104;
+        subtitle.Height = 132;
         subtitle.Dock = DockStyle.Top;
 
         var employeeLabel = CreateFieldLabel("Employee code");
@@ -96,7 +98,7 @@ internal sealed class LauncherForm : Form
 
         var clockInButton = new Button
         {
-            Text = "Clock in and start agent",
+            Text = "Clock in",
             Height = 42,
             Dock = DockStyle.Top,
             BackColor = Color.FromArgb(24, 119, 242),
@@ -156,7 +158,7 @@ internal sealed class LauncherForm : Form
 
         _agentStatusLabel = CreateLabel(string.Empty, 10, FontStyle.Regular);
         _agentStatusLabel.ForeColor = Color.FromArgb(74, 85, 104);
-        _agentStatusLabel.Height = 68;
+        _agentStatusLabel.Height = 92;
         _agentStatusLabel.Dock = DockStyle.Top;
 
         _recordPathLabel = CreateLabel($"Attendance log: {_attendanceStore.LogPath}", 9, FontStyle.Regular);
@@ -203,6 +205,7 @@ internal sealed class LauncherForm : Form
         _currentEmployeeCode = employeeCode;
         _currentEmployeeProfile = await _employeeProfileResolver.ResolveAsync(employeeCode);
         _clockInAt = DateTimeOffset.Now;
+        await _attendanceStore.SetWorkSessionStateAsync("clock_in", _currentEmployeeProfile, _clockInAt.Value);
 
         AgentProcessStatus processStatus;
         try
@@ -211,6 +214,7 @@ internal sealed class LauncherForm : Form
         }
         catch (Exception ex)
         {
+            await _attendanceStore.SetWorkSessionStateAsync("clock_out", _currentEmployeeProfile, _clockInAt.Value);
             _loginErrorLabel.Text = ex.Message;
             return;
         }
@@ -230,6 +234,7 @@ internal sealed class LauncherForm : Form
 
         _clockOutAt = DateTimeOffset.Now;
         await _attendanceStore.AppendAsync("clock_out", _currentEmployeeProfile, _clockOutAt.Value);
+        await _attendanceStore.SetWorkSessionStateAsync("clock_out", _currentEmployeeProfile, _clockOutAt.Value);
         _ = ReplayPendingAsync("clock-out");
         _clockOutButton.Enabled = false;
         _clockOutButton.Text = $"Clocked out at {_clockOutAt.Value:HH:mm:ss}";
@@ -388,15 +393,55 @@ internal sealed class LauncherForm : Form
 
     private static string BuildAgentStatusText(AgentProcessStatus status)
     {
-        return
-            $"Service PID: {FormatPid(status.ServiceProcessId)}    SessionHelper PID: {FormatPid(status.HelperProcessId)}" +
-            Environment.NewLine +
-            "Agent is running in the background.";
+        var processLine =
+            $"Service PID: {FormatPid(status.ServiceProcessId)}    SessionHelper PID: {FormatPid(status.HelperProcessId)}";
+
+        if (status.IsInstalledDeployment)
+        {
+            var installedComponents = DescribeInstalledComponents(status);
+            var lifecycleLine = status.HasAnyRunningProcess()
+                ? $"Installed {installedComponents} detected. Launcher recorded clock-in without starting local background processes."
+                : $"Installed {installedComponents} detected. Launcher recorded clock-in and is showing that the managed background components are not running yet.";
+            return processLine + Environment.NewLine + lifecycleLine;
+        }
+
+        if (status.ServiceStarted || status.HelperStarted)
+        {
+            return processLine + Environment.NewLine + "Launcher started the local background agent for this portable session.";
+        }
+
+        if (status.HasAnyRunningProcess())
+        {
+            return processLine + Environment.NewLine + "Local background monitoring was already running before this clock-in.";
+        }
+
+        return processLine + Environment.NewLine + "Background monitoring is not running.";
     }
 
     private static string FormatPid(int? processId)
     {
         return processId?.ToString() ?? "not running";
+    }
+
+    private static string DescribeInstalledComponents(AgentProcessStatus status)
+    {
+        var components = new List<string>();
+        if (status.ServiceInstalled)
+        {
+            components.Add("Windows service");
+        }
+
+        if (status.HelperTaskInstalled)
+        {
+            components.Add("logon helper task");
+        }
+
+        return components.Count switch
+        {
+            0 => "background components",
+            1 => components[0],
+            _ => string.Join(" and ", components)
+        };
     }
 
     private static Label CreateLabel(string text, float size, FontStyle style)

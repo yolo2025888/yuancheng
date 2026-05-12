@@ -8,6 +8,7 @@ using EmployeeBehavior.Agent.Service.Session;
 using EmployeeBehavior.Agent.Service.Transport;
 using EmployeeBehavior.Agent.Service.Uploads;
 using Microsoft.Extensions.Options;
+using System.Threading;
 
 namespace EmployeeBehavior.Agent.Service.Hosting;
 
@@ -20,6 +21,8 @@ public sealed class AgentWorker : BackgroundService
     private readonly IPolicyCache _policyCache;
     private readonly ISessionHelperClient _sessionHelperClient;
     private readonly IUploadQueue _uploadQueue;
+    private readonly IWorkSessionStateStore _workSessionStateStore;
+    private int _lastMonitoringActive = -1;
 
     public AgentWorker(
         IAgentApiClient agentApiClient,
@@ -28,6 +31,7 @@ public sealed class AgentWorker : BackgroundService
         IPolicyCache policyCache,
         ISessionHelperClient sessionHelperClient,
         IUploadQueue uploadQueue,
+        IWorkSessionStateStore workSessionStateStore,
         ILogger<AgentWorker> logger)
     {
         _agentApiClient = agentApiClient;
@@ -37,6 +41,7 @@ public sealed class AgentWorker : BackgroundService
         _policyCache = policyCache;
         _sessionHelperClient = sessionHelperClient;
         _uploadQueue = uploadQueue;
+        _workSessionStateStore = workSessionStateStore;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -66,6 +71,13 @@ public sealed class AgentWorker : BackgroundService
         {
             try
             {
+                var workSessionState = await _workSessionStateStore.GetCurrentAsync(cancellationToken);
+                LogMonitoringStateIfChanged(workSessionState);
+                if (!workSessionState.MonitoringActive)
+                {
+                    continue;
+                }
+
                 var snapshot = await _sessionHelperClient.CaptureSnapshotAsync(cancellationToken);
                 var policy = _policyCache.Current;
 
@@ -139,6 +151,14 @@ public sealed class AgentWorker : BackgroundService
 
             try
             {
+                var workSessionState = await _workSessionStateStore.GetCurrentAsync(cancellationToken);
+                LogMonitoringStateIfChanged(workSessionState);
+                if (!workSessionState.MonitoringActive)
+                {
+                    await Task.Delay(delay, cancellationToken);
+                    continue;
+                }
+
                 var policy = _policyCache.Current;
                 delay = TimeSpan.FromSeconds(Math.Max(1, policy.ScreenshotIntervalSeconds));
 
@@ -259,6 +279,30 @@ public sealed class AgentWorker : BackgroundService
     private static string GetAgentVersion()
     {
         return Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.1.0";
+    }
+
+    private void LogMonitoringStateIfChanged(WorkSessionState workSessionState)
+    {
+        var nextValue = workSessionState.MonitoringActive ? 1 : 0;
+        var previousValue = Interlocked.Exchange(ref _lastMonitoringActive, nextValue);
+        if (previousValue == nextValue)
+        {
+            return;
+        }
+
+        if (workSessionState.MonitoringActive)
+        {
+            _logger.LogInformation(
+                "Monitoring enabled for employee {EmployeeNo}. UpdatedAt={UpdatedAt}.",
+                workSessionState.EmployeeNo ?? "<unknown>",
+                workSessionState.UpdatedAt);
+            return;
+        }
+
+        _logger.LogInformation(
+            "Monitoring paused until clock-in. SessionStatus={SessionStatus}; UpdatedAt={UpdatedAt}.",
+            workSessionState.SessionStatus,
+            workSessionState.UpdatedAt);
     }
 
     private static IEnumerable<QueuedUploadItem> BuildUploads(
