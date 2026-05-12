@@ -8,7 +8,10 @@ param(
     [string]$ServiceConfigPath = '',
     [string]$HelperConfigPath = '',
     [string]$EmployeeCode = 'E-001',
+    [string]$ReportDirectory = '',
     [switch]$StartHelperTask,
+    [switch]$SkipInstall,
+    [switch]$SkipValidate,
     [switch]$Cleanup,
     [switch]$RemoveInstalledFiles
 )
@@ -43,6 +46,14 @@ $resolvedPackageRoot = Resolve-PackageRootPath -Path $PackageRoot
 $installScriptPath = Join-Path $resolvedPackageRoot 'Install-AgentInstallerPackage.ps1'
 $validateScriptPath = Join-Path $resolvedPackageRoot 'Validate-AgentInstallerPackage.ps1'
 $uninstallScriptPath = Join-Path $resolvedPackageRoot 'Uninstall-AgentInstallerPackage.ps1'
+$resolvedReportDirectory = if ([string]::IsNullOrWhiteSpace($ReportDirectory)) {
+    Join-Path $resolvedPackageRoot 'acceptance-report'
+}
+else {
+    Resolve-FullPath -Path $ReportDirectory
+}
+
+New-Item -ItemType Directory -Path $resolvedReportDirectory -Force | Out-Null
 
 foreach ($requiredPath in @($installScriptPath, $validateScriptPath, $uninstallScriptPath)) {
     if (-not (Test-Path -LiteralPath $requiredPath -PathType Leaf)) {
@@ -80,6 +91,7 @@ $validateArguments = @{
     RequireInstalledHelperTask = $true
     RunLifecycleSmoke = $true
     EmployeeCode = $EmployeeCode
+    LifecycleReportPath = Join-Path $resolvedReportDirectory 'lifecycle-result.json'
 }
 
 $uninstallArguments = @{
@@ -98,12 +110,36 @@ if ($WhatIfPreference) {
     $uninstallArguments.WhatIf = $true
 }
 
+$summary = [ordered]@{
+    PackageRoot = $resolvedPackageRoot
+    InstallRoot = $InstallRoot
+    DataDirectory = $DataDirectory
+    ReportDirectory = $resolvedReportDirectory
+    EmployeeCode = $EmployeeCode
+    StartedAt = (Get-Date).ToString('O')
+    InstallSucceeded = $false
+    ValidateSucceeded = $false
+    CleanupExecuted = $false
+}
+
 try {
-    & $installScriptPath @installArguments
-    & $validateScriptPath @validateArguments
+    if (-not $SkipInstall) {
+        & $installScriptPath @installArguments 2>&1 | Tee-Object -FilePath (Join-Path $resolvedReportDirectory 'install.log') | Out-Host
+        $summary.InstallSucceeded = $true
+    }
+
+    if (-not $SkipValidate) {
+        & $validateScriptPath @validateArguments 2>&1 | Tee-Object -FilePath (Join-Path $resolvedReportDirectory 'validate.log') | Out-Host
+        $summary.ValidateSucceeded = $true
+    }
 }
 finally {
     if ($Cleanup) {
-        & $uninstallScriptPath @uninstallArguments
+        & $uninstallScriptPath @uninstallArguments 2>&1 | Tee-Object -FilePath (Join-Path $resolvedReportDirectory 'cleanup.log') | Out-Host
+        $summary.CleanupExecuted = $true
     }
+
+    $summary.CompletedAt = (Get-Date).ToString('O')
+    $summaryPath = Join-Path $resolvedReportDirectory 'acceptance-summary.json'
+    [pscustomobject]$summary | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $summaryPath -Encoding UTF8
 }

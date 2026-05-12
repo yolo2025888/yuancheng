@@ -5,7 +5,8 @@ param(
     [string]$DataDirectory = 'C:\ProgramData\EmployeeBehaviorAgent',
     [switch]$RequireInstalledHelperTask,
     [switch]$RunLifecycleSmoke,
-    [string]$EmployeeCode = 'E-001'
+    [string]$EmployeeCode = 'E-001',
+    [string]$LifecycleReportPath = ''
 )
 
 Set-StrictMode -Version Latest
@@ -63,5 +64,8 @@ if ($RunLifecycleSmoke) {
     & $lifecycleValidatorPath `
         -LauncherExecutablePath (Join-Path $InstallRoot 'Launcher\EmployeeBehavior.Agent.Launcher.exe') `
         -DataDirectory $DataDirectory `
-        -EmployeeCode $EmployeeCode
+        -EmployeeCode $EmployeeCode `
+        -RequireInstalledService `
+        -RequireInstalledHelperTask `
+        -ReportPath $LifecycleReportPath
 }

@@ -4,7 +4,10 @@ param(
     [string]$DataDirectory = 'C:\ProgramData\EmployeeBehaviorAgent',
     [string]$EmployeeCode = 'E-001',
     [int]$StartupTimeoutSeconds = 10,
-    [int]$ClockInTimeoutSeconds = 20
+    [int]$ClockInTimeoutSeconds = 20,
+    [switch]$RequireInstalledService,
+    [switch]$RequireInstalledHelperTask,
+    [string]$ReportPath = ''
 )
 
 Set-StrictMode -Version Latest
@@ -18,6 +21,30 @@ $backgroundProcessNames = @(
 $attendanceLogPath = Join-Path $DataDirectory 'attendance-log.jsonl'
 $attendancePendingPath = Join-Path $DataDirectory 'attendance-pending.jsonl'
 $workSessionStatePath = Join-Path $DataDirectory 'work-session-state.json'
+
+function Test-RegistrationPresent {
+    param(
+        [Parameter(Mandatory)]
+        [string]$FileName,
+        [Parameter(Mandatory)]
+        [string]$Arguments
+    )
+
+    try {
+        $process = Start-Process `
+            -FilePath $FileName `
+            -ArgumentList $Arguments `
+            -WindowStyle Hidden `
+            -PassThru `
+            -Wait `
+            -NoNewWindow `
+            -ErrorAction Stop
+        return $process.ExitCode -eq 0
+    }
+    catch {
+        return $false
+    }
+}
 
 function Get-ProcessIdsByName {
     param([string]$Name)
@@ -103,6 +130,15 @@ if (-not (Test-Path -LiteralPath $resolvedLauncherPath -PathType Leaf)) {
     throw "Launcher executable not found: $resolvedLauncherPath"
 }
 
+$serviceRegistered = Test-RegistrationPresent -FileName 'sc.exe' -Arguments 'query "EmployeeBehavior.Agent.Service"'
+$helperTaskRegistered = Test-RegistrationPresent -FileName 'schtasks.exe' -Arguments '/Query /TN "EmployeeBehavior.Agent.SessionHelper"'
+if ($RequireInstalledService -and -not $serviceRegistered) {
+    throw 'Installed lifecycle smoke requires EmployeeBehavior.Agent.Service registration, but it was not found.'
+}
+if ($RequireInstalledHelperTask -and -not $helperTaskRegistered) {
+    throw 'Installed lifecycle smoke requires EmployeeBehavior.Agent.SessionHelper scheduled task registration, but it was not found.'
+}
+
 $backgroundBefore = @{}
 foreach ($name in $backgroundProcessNames) {
     $backgroundBefore[$name] = @(Get-ProcessIdsByName -Name $name)
@@ -167,14 +203,26 @@ try {
         throw "Attendance pending queue did not record a clock_in entry for '$EmployeeCode'."
     }
 
-    [pscustomobject]@{
+    $result = [pscustomobject]@{
         Status = 'PASS'
         LauncherExecutablePath = $resolvedLauncherPath
+        ServiceRegistered = $serviceRegistered
+        HelperTaskRegistered = $helperTaskRegistered
         WorkSessionStatePath = $workSessionStatePath
         AttendanceLogPath = $attendanceLogPath
         AttendancePendingPath = $attendancePendingPath
         EmployeeCode = $EmployeeCode
     }
+    if (-not [string]::IsNullOrWhiteSpace($ReportPath)) {
+        $resolvedReportPath = [System.IO.Path]::GetFullPath($ReportPath)
+        $reportDirectory = Split-Path -Parent $resolvedReportPath
+        if (-not [string]::IsNullOrWhiteSpace($reportDirectory)) {
+            New-Item -ItemType Directory -Path $reportDirectory -Force | Out-Null
+        }
+
+        $result | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $resolvedReportPath -Encoding UTF8
+    }
+    $result
 }
 finally {
     foreach ($name in @($launcherProcessName) + $backgroundProcessNames) {
