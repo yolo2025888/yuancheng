@@ -4,9 +4,11 @@ param(
     [string]$HelperTaskName = 'EmployeeBehavior.Agent.SessionHelper',
     [string]$ServiceTargetDirectory = 'C:\Program Files\EmployeeBehaviorAgent\Service',
     [string]$HelperTargetDirectory = 'C:\Program Files\EmployeeBehaviorAgent\SessionHelper',
+    [string]$LauncherTargetDirectory = 'C:\Program Files\EmployeeBehaviorAgent\Launcher',
     [string]$DataDirectory = 'C:\ProgramData\EmployeeBehaviorAgent',
     [switch]$RemoveServiceDirectory,
     [switch]$RemoveHelperDirectory,
+    [switch]$RemoveLauncherDirectory,
     [switch]$RemoveLogDirectory,
     [switch]$RemoveUploadQueue,
     [switch]$RemoveDeviceIdentity
@@ -70,6 +72,7 @@ if (-not (Test-IsAdministrator)) {
 
 $resolvedServiceTargetDirectory = Resolve-FullPath -Path $ServiceTargetDirectory
 $resolvedHelperTargetDirectory = Resolve-FullPath -Path $HelperTargetDirectory
+$resolvedLauncherTargetDirectory = Resolve-FullPath -Path $LauncherTargetDirectory
 $resolvedDataDirectory = Resolve-FullPath -Path $DataDirectory
 $resolvedLogDirectory = Join-Path -Path $resolvedDataDirectory -ChildPath 'logs'
 $resolvedUploadQueuePath = Join-Path -Path $resolvedDataDirectory -ChildPath 'upload-queue.jsonl'
@@ -111,6 +114,10 @@ if ($RemoveHelperDirectory) {
     Remove-DirectoryIfRequested -Path $resolvedHelperTargetDirectory -Label 'helper install directory'
 }
 
+if ($RemoveLauncherDirectory) {
+    Remove-DirectoryIfRequested -Path $resolvedLauncherTargetDirectory -Label 'launcher install directory'
+}
+
 if ($RemoveLogDirectory) {
     Remove-DirectoryIfRequested -Path $resolvedLogDirectory -Label 'log directory'
 }
@@ -129,8 +136,9 @@ if ($RemoveDeviceIdentity) {
     HelperTaskName     = $HelperTaskName
     ServiceDirectory   = $resolvedServiceTargetDirectory
     HelperDirectory    = $resolvedHelperTargetDirectory
+    LauncherDirectory  = $resolvedLauncherTargetDirectory
     DataDirectory      = $resolvedDataDirectory
     DeviceIdentityPath = $resolvedDeviceIdentityPath
     UploadQueuePath    = $resolvedUploadQueuePath
-    UploadPayloadPath   = $resolvedUploadPayloadDirectory
+    UploadPayloadPath  = $resolvedUploadPayloadDirectory
 }

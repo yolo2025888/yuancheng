@@ -5,6 +5,19 @@ Open `agent\publish\EmployeeBehavior.Agent.Launcher.exe` for the Windows client.
 - `EmployeeBehavior.Agent.Service.exe` handles API calls, heartbeats, uploads, token auth, and attendance submission.
 - `EmployeeBehavior.Agent.SessionHelper.exe` runs in the interactive user session for screenshots and input/session activity capture.
 
+Package validation and install/uninstall checks use the same checked-in publish root:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Test-AgentPublish.ps1 -PublishRoot .\agent\publish
+powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Test-AgentRuntimeSmoke.ps1 -PublishRoot .\agent\publish -CleanupStartedProcesses
+powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\installer\Build-AgentInstallerPackage.ps1 -CreateZip
+powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Test-AgentInstallerPackage.ps1 -RequireZip
+powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Install-AgentPilot.ps1 -ServiceSourceDirectory .\agent\publish\Service -HelperSourceDirectory .\agent\publish\SessionHelper -ServiceConfigPath .\agent\publish\Service\appsettings.json -HelperConfigPath .\agent\publish\SessionHelper\appsettings.json -HelperTaskUser CONTOSO\pilot.user -StartService
+powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Uninstall-AgentPilot.ps1
+```
+
+For packaged delivery rehearsal, use the generated entry points under `agent\installer\artifacts\EmployeeBehavior.Agent.InstallerPackage\`, especially `Install-AgentInstallerPackage.ps1` and `Validate-AgentInstallerPackage.ps1`.
+
 Before a pilot or production demo, confirm the employee-facing disclosure covers full multi-display screenshots, active window title, process name/path, session/lock/RDP/idle metadata, aggregate input counts, purpose, access roles, retention, and appeal channel.
 
 Provision the DPAPI protected token file first, then switch the published service config to production mode before validation:

@@ -27,6 +27,31 @@ Both processes must use the same named pipe value:
 
 If the helper is not running in the real signed-in session, screenshots and input/session metadata can degrade to empty or zero values by design.
 
+## Publish package and installer layout
+
+The checked-in `agent\publish\` directory remains the validated payload surface. `agent\installer\` now builds the script-driven installer package from that payload.
+
+```text
+agent\publish\
+  EmployeeBehavior.Agent.Launcher.exe
+  Service\
+    EmployeeBehavior.Agent.Service.exe
+    appsettings.json
+    Write-AgentProtectedToken.ps1
+    Set-AgentProductionConfig.ps1
+  SessionHelper\
+    EmployeeBehavior.Agent.SessionHelper.exe
+    appsettings.json
+  Launcher\
+    # nested launcher publish output used by package validation
+```
+
+- `EmployeeBehavior.Agent.Launcher.exe` is the package entry point.
+- `Service\` and `SessionHelper\` are the source folders used by `Install-AgentPilot.ps1`.
+- `Launcher\` is a nested copy of the launcher publish output. `Test-AgentPublish.ps1` treats it as a warning in pilot mode, but strict production validation fails if it is missing.
+- `Install-AgentPilot.ps1` installs the service into `C:\Program Files\EmployeeBehaviorAgent\Service`, the helper into `C:\Program Files\EmployeeBehaviorAgent\SessionHelper`, and can install the launcher into `C:\Program Files\EmployeeBehaviorAgent\Launcher`.
+- `agent\installer\Build-AgentInstallerPackage.ps1` assembles `agent\installer\artifacts\EmployeeBehavior.Agent.InstallerPackage\` and can also emit a zip archive for delivery.
+
 ## Prerequisites
 
 Minimum operational prerequisites:
@@ -192,15 +217,59 @@ Example framework-dependent publish commands:
 
 ```powershell
 dotnet publish .\agent\src\EmployeeBehavior.Agent.Service\EmployeeBehavior.Agent.Service.csproj `
-  -c Release -r win-x64 --self-contained false
+  -c Release -r win-x64 --self-contained false --output .\agent\publish\Service
 
 dotnet publish .\agent\src\EmployeeBehavior.Agent.SessionHelper\EmployeeBehavior.Agent.SessionHelper.csproj `
-  -c Release -r win-x64 --self-contained false
+  -c Release -r win-x64 --self-contained false --output .\agent\publish\SessionHelper
+
+dotnet publish .\agent\src\EmployeeBehavior.Agent.Launcher\EmployeeBehavior.Agent.Launcher.csproj `
+  -c Release -r win-x64 --self-contained false --output .\agent\publish\Launcher
+
+Copy-Item -Path (Join-Path .\agent\publish\Launcher '*') -Destination .\agent\publish -Recurse -Force
 ```
 
-If the target device does not already have the required runtime installed, publish self-contained packages for both projects instead.
+If the target device does not already have the required runtime installed, publish self-contained packages for the service, helper, and launcher instead.
 
 For pilot deployment, you can build or publish elsewhere, then copy the resulting artifact folders onto the target device and install them with the PowerShell scripts below.
+
+Package validation should use the publish root before installation:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Test-AgentPublish.ps1 -PublishRoot .\agent\publish
+powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Test-AgentRuntimeSmoke.ps1 -PublishRoot .\agent\publish -CleanupStartedProcesses
+```
+
+Installer package build and validation:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\installer\Build-AgentInstallerPackage.ps1 -CreateZip
+powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Test-AgentInstallerPackage.ps1 -RequireZip
+```
+
+The install and uninstall scripts work against the published service and helper folders:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Install-AgentPilot.ps1 `
+  -ServiceSourceDirectory .\agent\publish\Service `
+  -HelperSourceDirectory .\agent\publish\SessionHelper `
+  -ServiceConfigPath .\agent\publish\Service\appsettings.json `
+  -HelperConfigPath .\agent\publish\SessionHelper\appsettings.json `
+  -HelperTaskUser CONTOSO\pilot.user `
+  -StartService
+
+powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Uninstall-AgentPilot.ps1
+```
+
+The packaged installer entry points wrap those same scripts with a fixed payload layout:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\installer\artifacts\EmployeeBehavior.Agent.InstallerPackage\Install-AgentInstallerPackage.ps1 `
+  -HelperTaskUser CONTOSO\pilot.user `
+  -StartService
+
+powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\installer\artifacts\EmployeeBehavior.Agent.InstallerPackage\Validate-AgentInstallerPackage.ps1 `
+  -RequireInstalledHelperTask
+```
 
 ## Dry-run validation flow
 
@@ -361,7 +430,7 @@ Optional destructive cleanup is explicit through `-RemoveServiceDirectory`, `-Re
 ## Known current limitations
 
 - No Windows Event Log sink is wired yet.
-- No installer project is present in this repository yet.
+- The current installer path is script-driven through `agent\installer\`. A dedicated MSI/MSIX project is not checked in yet.
 - No self-updater is present yet.
 - The upload queue is durable across restarts, but it is still a local JSONL file intended for one service instance per device.
 - If operators delete only selected queue payload files referenced by queued entries, pending uploads can still be lost.

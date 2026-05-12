@@ -52,6 +52,7 @@ frontend/.vite/
 bin/
 obj/
 agent/publish/
+agent/installer/artifacts/
 *.user
 *.suo
 *.rsuser

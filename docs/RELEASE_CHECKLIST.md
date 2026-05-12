@@ -12,13 +12,17 @@ python -m pytest backend\tests -q
 Set-Location backend; python .\scripts\smoke_attendance_flow.py; Set-Location ..
 Set-Location frontend; npm run smoke:routes; npm run build; Set-Location ..
 & "$env:USERPROFILE\.dotnet\dotnet.exe" build .\agent\EmployeeBehavior.Agent.sln -c Release --no-restore
+powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Test-AgentPublish.ps1 -PublishRoot .\agent\publish
+powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Test-AgentRuntimeSmoke.ps1 -PublishRoot .\agent\publish -CleanupStartedProcesses
+powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\installer\Build-AgentInstallerPackage.ps1 -CreateZip
+powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Test-AgentInstallerPackage.ps1 -RequireZip
+powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Install-AgentPilot.ps1 -ServiceSourceDirectory .\agent\publish\Service -HelperSourceDirectory .\agent\publish\SessionHelper -ServiceConfigPath .\agent\publish\Service\appsettings.json -HelperConfigPath .\agent\publish\SessionHelper\appsettings.json -HelperTaskUser CONTOSO\pilot.user -StartService
+powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Uninstall-AgentPilot.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\publish\Service\Write-AgentProtectedToken.ps1 -Token 'v2:replace-with-issued-device-token' -Path 'C:\ProgramData\EmployeeBehaviorAgent\secrets\agent-token.protected.json' -Scope LocalMachine -Force
 powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Set-AgentProductionConfig.ps1 -ConfigPath .\agent\publish\Service\appsettings.json -ApiBaseUrl 'https://monitoring-api.your-company.com' -ProtectedTokenPath 'C:\ProgramData\EmployeeBehaviorAgent\secrets\agent-token.protected.json' -ClearApiToken
 powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Test-LauncherDisclosure.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Test-ScreenshotCaptureGuard.ps1
-powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Test-AgentPublish.ps1 -PublishRoot .\agent\publish
 powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Test-AgentPublish.ps1 -PublishRoot .\agent\publish -StrictProduction
-powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Test-AgentRuntimeSmoke.ps1 -PublishRoot .\agent\publish -CleanupStartedProcesses
 powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Test-AgentDeployment.ps1 -ServiceConfigPath .\agent\publish\Service\appsettings.json -HelperConfigPath .\agent\publish\SessionHelper\appsettings.json
 powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Test-AgentDeployment.ps1 -ServiceConfigPath 'C:\Program Files\EmployeeBehaviorAgent\Service\appsettings.json' -HelperConfigPath 'C:\Program Files\EmployeeBehaviorAgent\SessionHelper\appsettings.json' -RequireInstalledHelperTask
 ```
@@ -32,6 +36,10 @@ Production gates:
 - `ApiBaseUrl` is the production API URL.
 - `DryRun` is `false`.
 - `ProtectedTokenPath` points to an existing DPAPI token file.
+- The publish package root validates with `Test-AgentPublish.ps1`.
+- The installer package project builds from `agent\publish` and validates with `Test-AgentInstallerPackage.ps1`.
+- Strict production validation expects the nested `Launcher\` publish output to be present.
+- The launcher opens from `agent\publish\EmployeeBehavior.Agent.Launcher.exe`, not from the installed service or helper directories.
 - `WorkSessionStatePath` is either left at the default ProgramData location or explicitly aligned with the launcher on the same machine.
 - `Logging:File:Path` is either left at the default ProgramData location or overridden to another writable persistent file path for both service and helper.
 - Device tokens use issued v2 device-scoped tokens.

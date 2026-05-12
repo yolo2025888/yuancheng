@@ -158,9 +158,32 @@ $protected = [System.Security.Cryptography.ProtectedData]::Protect(
 - Uninstall script: `agent\scripts\Uninstall-AgentPilot.ps1`
 - Non-destructive validator: `agent\scripts\Test-AgentDeployment.ps1`
 
+## Publish package layout
+
+The checked-in publish package lives under `agent\publish\` and is the current package surface for the launcher and agent binaries.
+
+- `agent\publish\EmployeeBehavior.Agent.Launcher.exe` is the package entry point for the employee-facing launcher.
+- `agent\publish\Service\` contains the service payload, service config, and token/config helper scripts.
+- `agent\publish\SessionHelper\` contains the interactive session helper payload and config.
+- `agent\publish\Launcher\` is a nested copy of the launcher publish output. `Test-AgentPublish.ps1` treats it as a warning in pilot mode, but strict production validation fails if it is missing.
+- `Install-AgentPilot.ps1` installs only the service and helper under:
+  - `C:\Program Files\EmployeeBehaviorAgent\Service`
+  - `C:\Program Files\EmployeeBehaviorAgent\SessionHelper`
+  Current install flows can also stage the launcher into `C:\Program Files\EmployeeBehaviorAgent\Launcher`.
+
+## Installer package project
+
+`agent\installer\` assembles a script-driven Windows installer package from `agent\publish\`.
+
+- `Build-AgentInstallerPackage.ps1` creates `agent\installer\artifacts\EmployeeBehavior.Agent.InstallerPackage\`
+- `package\Install-AgentInstallerPackage.ps1` is copied into the built package as the install entry point
+- `package\Validate-AgentInstallerPackage.ps1` is copied into the built package as the installed-endpoint validation entry point
+- `package\Uninstall-AgentInstallerPackage.ps1` is copied into the built package as the uninstall entry point
+- `Test-AgentInstallerPackage.ps1` validates the assembled installer package directory and optional zip
+
 ## Pilot install without local dotnet build
 
-The repo now includes Windows install/uninstall scripts intended for prebuilt publish artifacts. The target device does not need a local .NET SDK if you copy a published service folder and a published helper folder onto the machine first.
+The repo now includes Windows install/uninstall scripts intended for prebuilt publish artifacts. The target device does not need a local .NET SDK if you copy a published service folder and a published helper folder onto the machine first. The launcher stays in the publish package root and is not part of the service/helper install script.
 
 Typical pilot install from an elevated PowerShell session:
 
@@ -238,6 +261,15 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Test-AgentDe
 
 If you only have the example files copied in-repo, point the script at the `.example` files instead.
 After installing a pilot or production endpoint, run the same script against the installed `Program Files` config files with `-RequireInstalledHelperTask` so missing or uninspectable helper logon tasks fail the validation.
+
+Validate the publish package root before rollout:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Test-AgentPublish.ps1 -PublishRoot .\agent\publish
+powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Test-AgentRuntimeSmoke.ps1 -PublishRoot .\agent\publish -CleanupStartedProcesses
+powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\installer\Build-AgentInstallerPackage.ps1 -CreateZip
+powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Test-AgentInstallerPackage.ps1 -RequireZip
+```
 
 ## Verification focus
 

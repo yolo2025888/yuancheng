@@ -3,6 +3,8 @@ param(
     [string]$ServiceConfigPath = ".\agent\src\EmployeeBehavior.Agent.Service\appsettings.json",
     [string]$HelperConfigPath = ".\agent\src\EmployeeBehavior.Agent.SessionHelper\appsettings.json",
     [string]$HelperTaskName = "EmployeeBehavior.Agent.SessionHelper",
+    [string]$LauncherTargetDirectory = "C:\Program Files\EmployeeBehaviorAgent\Launcher",
+    [string]$LauncherExeName = "EmployeeBehavior.Agent.Launcher.exe",
     [string]$ApiHealthPath = "/health",
     [string]$LogRootPath = "C:\ProgramData\EmployeeBehaviorAgent\logs",
     [int]$TimeoutSeconds = 5,
@@ -445,6 +447,32 @@ function Test-WindowsServiceRegistration {
     }
 }
 
+function Test-LauncherInstallation {
+    param(
+        [Parameter(Mandatory)]
+        [string]$TargetDirectory,
+        [Parameter(Mandatory)]
+        [string]$ExecutableName
+    )
+
+    $resolvedTargetDirectory = [System.IO.Path]::GetFullPath($TargetDirectory)
+    $launcherExecutablePath = Join-Path -Path $resolvedTargetDirectory -ChildPath $ExecutableName
+
+    if (Test-Path -LiteralPath $resolvedTargetDirectory -PathType Container) {
+        Add-CheckResult -Check "Launcher directory" -Status "PASS" -Detail "Launcher directory '$resolvedTargetDirectory' exists."
+    }
+    else {
+        Add-CheckResult -Check "Launcher directory" -Status "WARN" -Detail "Launcher directory '$resolvedTargetDirectory' was not found."
+    }
+
+    if (Test-Path -LiteralPath $launcherExecutablePath -PathType Leaf) {
+        Add-CheckResult -Check "Launcher executable" -Status "PASS" -Detail "Launcher executable '$launcherExecutablePath' exists."
+    }
+    else {
+        Add-CheckResult -Check "Launcher executable" -Status "WARN" -Detail "Launcher executable '$launcherExecutablePath' was not found."
+    }
+}
+
 $dotnet = Get-Command dotnet -ErrorAction SilentlyContinue
 if ($null -eq $dotnet) {
     Add-CheckResult -Check ".NET availability" -Status "WARN" -Detail "dotnet is not on PATH. Source runs and framework-dependent publishes will not work until .NET is installed."
@@ -699,6 +727,9 @@ if ($null -ne $serviceSection -and $null -ne $helperSection) {
 Add-CheckResult -Check "Machine identity" -Status "PASS" -Detail "MachineName='$([System.Environment]::MachineName)'; UserInteractive=$([System.Environment]::UserInteractive)."
 
 Test-WindowsServiceRegistration -RequireInstalledService $RequireInstalledHelperTask.IsPresent
+Test-LauncherInstallation `
+    -TargetDirectory $LauncherTargetDirectory `
+    -ExecutableName $LauncherExeName
 
 if (Test-Path -LiteralPath $LogRootPath) {
     Add-CheckResult -Check "Log root path" -Status "PASS" -Detail "Log directory '$LogRootPath' exists."

@@ -1,0 +1,100 @@
+<Project DefaultTargets="BuildPackage" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <AgentRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\'))</AgentRoot>
+    <Configuration Condition="'$(Configuration)' == ''">Release</Configuration>
+    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">win-x64</RuntimeIdentifier>
+    <SelfContained Condition="'$(SelfContained)' == ''">true</SelfContained>
+    <PublishSingleFile Condition="'$(PublishSingleFile)' == ''">true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract Condition="'$(IncludeNativeLibrariesForSelfExtract)' == ''">true</IncludeNativeLibrariesForSelfExtract>
+    <PackageName Condition="'$(PackageName)' == ''">EmployeeBehavior.Agent.InstallerPackage</PackageName>
+    <PackageOutputRoot Condition="'$(PackageOutputRoot)' == ''">$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)artifacts\'))</PackageOutputRoot>
+    <StageDirectory>$([System.IO.Path]::Combine('$(PackageOutputRoot)', '$(PackageName)'))</StageDirectory>
+    <ZipFilePath>$([System.IO.Path]::Combine('$(PackageOutputRoot)', '$(PackageName).zip'))</ZipFilePath>
+    <CreateZip Condition="'$(CreateZip)' == ''">false</CreateZip>
+    <DotNetExe Condition="'$(DotNetExe)' == ''">dotnet</DotNetExe>
+    <PowerShellExe Condition="'$(PowerShellExe)' == ''">powershell</PowerShellExe>
+    <ServiceProject>$(AgentRoot)src\EmployeeBehavior.Agent.Service\EmployeeBehavior.Agent.Service.csproj</ServiceProject>
+    <SessionHelperProject>$(AgentRoot)src\EmployeeBehavior.Agent.SessionHelper\EmployeeBehavior.Agent.SessionHelper.csproj</SessionHelperProject>
+    <LauncherProject>$(AgentRoot)src\EmployeeBehavior.Agent.Launcher\EmployeeBehavior.Agent.Launcher.csproj</LauncherProject>
+    <ServiceConfigSource>$(AgentRoot)src\EmployeeBehavior.Agent.Service\appsettings.json</ServiceConfigSource>
+    <ServiceConfigExampleSource>$(AgentRoot)src\EmployeeBehavior.Agent.Service\appsettings.json.example</ServiceConfigExampleSource>
+    <HelperConfigSource>$(AgentRoot)src\EmployeeBehavior.Agent.SessionHelper\appsettings.json</HelperConfigSource>
+    <HelperConfigExampleSource>$(AgentRoot)src\EmployeeBehavior.Agent.SessionHelper\appsettings.json.example</HelperConfigExampleSource>
+    <ValidateScript>$(AgentRoot)scripts\Test-AgentInstallerPackage.ps1</ValidateScript>
+    <PayloadRoot>$(StageDirectory)\payload</PayloadRoot>
+    <ToolsRoot>$(StageDirectory)\tools</ToolsRoot>
+    <LauncherPublishDirectory>$(PayloadRoot)\Launcher</LauncherPublishDirectory>
+    <ServicePublishDirectory>$(PayloadRoot)\Service</ServicePublishDirectory>
+    <SessionHelperPublishDirectory>$(PayloadRoot)\SessionHelper</SessionHelperPublishDirectory>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageEntryFiles Include="$(MSBuildThisFileDirectory)package\Install-AgentInstallerPackage.ps1">
+      <PackageRelativePath>Install-AgentInstallerPackage.ps1</PackageRelativePath>
+    </PackageEntryFiles>
+    <PackageEntryFiles Include="$(MSBuildThisFileDirectory)package\Uninstall-AgentInstallerPackage.ps1">
+      <PackageRelativePath>Uninstall-AgentInstallerPackage.ps1</PackageRelativePath>
+    </PackageEntryFiles>
+    <PackageEntryFiles Include="$(MSBuildThisFileDirectory)package\README.md">
+      <PackageRelativePath>README.md</PackageRelativePath>
+    </PackageEntryFiles>
+    <PackageEntryFiles Include="$(MSBuildThisFileDirectory)package\Validate-AgentInstallerPackage.ps1">
+      <PackageRelativePath>Validate-AgentInstallerPackage.ps1</PackageRelativePath>
+    </PackageEntryFiles>
+    <PackageEntryFiles Include="$(ValidateScript)">
+      <PackageRelativePath>Test-AgentInstallerPackage.ps1</PackageRelativePath>
+    </PackageEntryFiles>
+    <ToolScripts Include="$(AgentRoot)scripts\Install-AgentPilot.ps1">
+      <PackageRelativePath>Install-AgentPilot.ps1</PackageRelativePath>
+    </ToolScripts>
+    <ToolScripts Include="$(AgentRoot)scripts\Uninstall-AgentPilot.ps1">
+      <PackageRelativePath>Uninstall-AgentPilot.ps1</PackageRelativePath>
+    </ToolScripts>
+    <ToolScripts Include="$(AgentRoot)scripts\Test-AgentDeployment.ps1">
+      <PackageRelativePath>Test-AgentDeployment.ps1</PackageRelativePath>
+    </ToolScripts>
+  </ItemGroup>
+
+  <Target Name="CleanPackageOutput">
+    <RemoveDir Directories="$(StageDirectory)" Condition="Exists('$(StageDirectory)')" />
+    <Delete Files="$(ZipFilePath)" Condition="Exists('$(ZipFilePath)')" />
+    <MakeDir Directories="$(PackageOutputRoot)" />
+  </Target>
+
+  <Target Name="PublishService" DependsOnTargets="CleanPackageOutput">
+    <Exec Command='&quot;$(DotNetExe)&quot; publish &quot;$(ServiceProject)&quot; -c $(Configuration) -r $(RuntimeIdentifier) --self-contained $(SelfContained) -p:PublishSingleFile=$(PublishSingleFile) -p:IncludeNativeLibrariesForSelfExtract=$(IncludeNativeLibrariesForSelfExtract) -o &quot;$(ServicePublishDirectory)&quot;' />
+    <Copy SourceFiles="$(ServiceConfigExampleSource)" DestinationFiles="$(ServicePublishDirectory)\appsettings.json.example" Condition="Exists('$(ServiceConfigExampleSource)')" />
+    <Copy SourceFiles="$(ServiceConfigSource)" DestinationFiles="$(ServicePublishDirectory)\appsettings.json" Condition="Exists('$(ServiceConfigSource)')" />
+    <Copy SourceFiles="$(ServiceConfigExampleSource)" DestinationFiles="$(ServicePublishDirectory)\appsettings.json" Condition="!Exists('$(ServiceConfigSource)') and Exists('$(ServiceConfigExampleSource)')" />
+    <Copy SourceFiles="$(AgentRoot)scripts\Set-AgentProductionConfig.ps1" DestinationFiles="$(ServicePublishDirectory)\Set-AgentProductionConfig.ps1" />
+    <Copy SourceFiles="$(AgentRoot)scripts\Write-AgentProtectedToken.ps1" DestinationFiles="$(ServicePublishDirectory)\Write-AgentProtectedToken.ps1" />
+  </Target>
+
+  <Target Name="PublishSessionHelper" DependsOnTargets="CleanPackageOutput">
+    <Exec Command='&quot;$(DotNetExe)&quot; publish &quot;$(SessionHelperProject)&quot; -c $(Configuration) -r $(RuntimeIdentifier) --self-contained $(SelfContained) -p:PublishSingleFile=$(PublishSingleFile) -p:IncludeNativeLibrariesForSelfExtract=$(IncludeNativeLibrariesForSelfExtract) -o &quot;$(SessionHelperPublishDirectory)&quot;' />
+    <Copy SourceFiles="$(HelperConfigExampleSource)" DestinationFiles="$(SessionHelperPublishDirectory)\appsettings.json.example" Condition="Exists('$(HelperConfigExampleSource)')" />
+    <Copy SourceFiles="$(HelperConfigSource)" DestinationFiles="$(SessionHelperPublishDirectory)\appsettings.json" Condition="Exists('$(HelperConfigSource)')" />
+    <Copy SourceFiles="$(HelperConfigExampleSource)" DestinationFiles="$(SessionHelperPublishDirectory)\appsettings.json" Condition="!Exists('$(HelperConfigSource)') and Exists('$(HelperConfigExampleSource)')" />
+  </Target>
+
+  <Target Name="PublishLauncher" DependsOnTargets="CleanPackageOutput">
+    <Exec Command='&quot;$(DotNetExe)&quot; publish &quot;$(LauncherProject)&quot; -c $(Configuration) -r $(RuntimeIdentifier) --self-contained $(SelfContained) -p:PublishSingleFile=$(PublishSingleFile) -p:IncludeNativeLibrariesForSelfExtract=$(IncludeNativeLibrariesForSelfExtract) -o &quot;$(LauncherPublishDirectory)&quot;' />
+  </Target>
+
+  <Target Name="AssemblePackage" DependsOnTargets="PublishService;PublishSessionHelper;PublishLauncher">
+    <MakeDir Directories="$(StageDirectory)" />
+    <MakeDir Directories="$(ToolsRoot)" />
+    <Copy SourceFiles="@(PackageEntryFiles)" DestinationFiles="@(PackageEntryFiles->'$(StageDirectory)\%(PackageRelativePath)')" />
+    <Copy SourceFiles="@(ToolScripts)" DestinationFiles="@(ToolScripts->'$(ToolsRoot)\%(PackageRelativePath)')" />
+  </Target>
+
+  <Target Name="ValidatePackage" DependsOnTargets="AssemblePackage">
+    <Exec Command='$(PowerShellExe) -NoProfile -ExecutionPolicy Bypass -File &quot;$(ValidateScript)&quot; -PackageRoot &quot;$(StageDirectory)&quot;' />
+  </Target>
+
+  <Target Name="CreateZipArchive" DependsOnTargets="ValidatePackage" Condition="'$(CreateZip)' == 'true'">
+    <Exec Command='$(PowerShellExe) -NoProfile -ExecutionPolicy Bypass -Command &quot;&amp; { Compress-Archive -Path &apos;$(StageDirectory)&apos; -DestinationPath &apos;$(ZipFilePath)&apos; -Force }&quot;' />
+  </Target>
+
+  <Target Name="BuildPackage" DependsOnTargets="ValidatePackage;CreateZipArchive" />
+</Project>

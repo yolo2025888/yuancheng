@@ -14,13 +14,17 @@ param(
     [string]$HelperTaskUser = ([System.Security.Principal.WindowsIdentity]::GetCurrent().Name),
     [string]$ServiceTargetDirectory = 'C:\Program Files\EmployeeBehaviorAgent\Service',
     [string]$HelperTargetDirectory = 'C:\Program Files\EmployeeBehaviorAgent\SessionHelper',
+    [string]$LauncherSourceDirectory = '',
+    [string]$LauncherTargetDirectory = 'C:\Program Files\EmployeeBehaviorAgent\Launcher',
     [string]$DataDirectory = 'C:\ProgramData\EmployeeBehaviorAgent',
     [string]$LogDirectory = 'C:\ProgramData\EmployeeBehaviorAgent\logs',
     [string]$ServiceExeName = 'EmployeeBehavior.Agent.Service.exe',
     [string]$HelperExeName = 'EmployeeBehavior.Agent.SessionHelper.exe',
+    [string]$LauncherExeName = 'EmployeeBehavior.Agent.Launcher.exe',
     [string]$ServiceConfigPath,
     [string]$HelperConfigPath,
     [string]$HelperArguments = '',
+    [switch]$SkipLauncherInstall,
     [switch]$StartService,
     [switch]$StartHelperTask
 )
@@ -77,6 +81,71 @@ function Assert-HelperArgumentsSafe {
     if ($Arguments -match '(^|\s)--console(\s|$)') {
         throw 'HelperArguments must not include --console. Use direct operator-observed dry-run commands for console validation; installed helper tasks must keep the tray indicator visible.'
     }
+}
+
+function Test-LauncherPayloadPresent {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path,
+        [Parameter(Mandatory)]
+        [string]$ExecutableName
+    )
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Container)) {
+        return $false
+    }
+
+    if (Test-Path -LiteralPath (Join-Path -Path $Path -ChildPath $ExecutableName) -PathType Leaf) {
+        return $true
+    }
+
+    $nestedLauncherDirectory = Join-Path -Path $Path -ChildPath 'Launcher'
+    return Test-Path -LiteralPath (Join-Path -Path $nestedLauncherDirectory -ChildPath $ExecutableName) -PathType Leaf
+}
+
+function Resolve-LauncherSourceDirectory {
+    param(
+        [string]$ExplicitPath,
+        [Parameter(Mandatory)]
+        [string]$ServiceSourceDirectory,
+        [Parameter(Mandatory)]
+        [string]$HelperSourceDirectory,
+        [Parameter(Mandatory)]
+        [string]$ExecutableName
+    )
+
+    $candidatePaths = New-Object System.Collections.Generic.List[string]
+    if (-not [string]::IsNullOrWhiteSpace($ExplicitPath)) {
+        $candidatePaths.Add((Resolve-FullPath -Path $ExplicitPath))
+    }
+    else {
+        $serviceParentDirectory = Split-Path -Path $ServiceSourceDirectory -Parent
+        $helperParentDirectory = Split-Path -Path $HelperSourceDirectory -Parent
+
+        foreach ($candidate in @(
+            (Join-Path -Path $serviceParentDirectory -ChildPath 'Launcher'),
+            (Join-Path -Path $helperParentDirectory -ChildPath 'Launcher'),
+            $serviceParentDirectory,
+            $helperParentDirectory
+        )) {
+            $resolvedCandidate = Resolve-FullPath -Path $candidate
+            if (-not ($candidatePaths -contains $resolvedCandidate)) {
+                $candidatePaths.Add($resolvedCandidate)
+            }
+        }
+    }
+
+    foreach ($candidatePath in $candidatePaths) {
+        if (Test-LauncherPayloadPresent -Path $candidatePath -ExecutableName $ExecutableName) {
+            return $candidatePath
+        }
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($ExplicitPath)) {
+        throw "Launcher source directory '$ExplicitPath' does not contain '$ExecutableName' directly or under a nested 'Launcher' directory."
+    }
+
+    return $null
 }
 
 function Ensure-Directory {
@@ -144,6 +213,37 @@ function Copy-DeploymentPayload {
             if ($PSCmdlet.ShouldProcess($destinationPath, "Copy '$($_.FullName)'")) {
                 Copy-Item -LiteralPath $_.FullName -Destination $destinationPath -Recurse -Force
             }
+        }
+    }
+}
+
+function Copy-LauncherDeploymentPayload {
+    param(
+        [Parameter(Mandatory)]
+        [string]$SourceDirectory,
+        [Parameter(Mandatory)]
+        [string]$TargetDirectory,
+        [Parameter(Mandatory)]
+        [string]$ExecutableName
+    )
+
+    $effectiveSourceDirectory = $SourceDirectory
+    $nestedLauncherDirectory = Join-Path -Path $SourceDirectory -ChildPath 'Launcher'
+    if ((-not (Test-Path -LiteralPath (Join-Path -Path $SourceDirectory -ChildPath $ExecutableName) -PathType Leaf)) -and
+        (Test-Path -LiteralPath (Join-Path -Path $nestedLauncherDirectory -ChildPath $ExecutableName) -PathType Leaf)) {
+        $effectiveSourceDirectory = $nestedLauncherDirectory
+    }
+
+    Ensure-Directory -Path $TargetDirectory
+
+    Get-ChildItem -LiteralPath $effectiveSourceDirectory -Force | ForEach-Object {
+        if ($effectiveSourceDirectory -eq $SourceDirectory -and $_.PSIsContainer -and $_.Name -in @('Service', 'SessionHelper', 'Launcher')) {
+            return
+        }
+
+        $destinationPath = Join-Path -Path $TargetDirectory -ChildPath $_.Name
+        if ($PSCmdlet.ShouldProcess($destinationPath, "Copy launcher asset '$($_.FullName)'")) {
+            Copy-Item -LiteralPath $_.FullName -Destination $destinationPath -Recurse -Force
         }
     }
 }
@@ -258,6 +358,7 @@ $resolvedServiceSourceDirectory = Resolve-FullPath -Path $ServiceSourceDirectory
 $resolvedHelperSourceDirectory = Resolve-FullPath -Path $HelperSourceDirectory
 $resolvedServiceTargetDirectory = Resolve-FullPath -Path $ServiceTargetDirectory
 $resolvedHelperTargetDirectory = Resolve-FullPath -Path $HelperTargetDirectory
+$resolvedLauncherTargetDirectory = Resolve-FullPath -Path $LauncherTargetDirectory
 $resolvedDataDirectory = Resolve-FullPath -Path $DataDirectory
 $resolvedLogDirectory = Resolve-FullPath -Path $LogDirectory
 
@@ -280,6 +381,28 @@ Copy-DeploymentPayload `
     -SourceDirectory $resolvedHelperSourceDirectory `
     -TargetDirectory $resolvedHelperTargetDirectory `
     -ExcludeNames @('appsettings.json')
+
+$resolvedLauncherSourceDirectory = $null
+$launcherInstallStatus = if ($SkipLauncherInstall) { 'Skipped by parameter.' } else { 'Launcher source not yet resolved.' }
+if (-not $SkipLauncherInstall) {
+    $resolvedLauncherSourceDirectory = Resolve-LauncherSourceDirectory `
+        -ExplicitPath $LauncherSourceDirectory `
+        -ServiceSourceDirectory $resolvedServiceSourceDirectory `
+        -HelperSourceDirectory $resolvedHelperSourceDirectory `
+        -ExecutableName $LauncherExeName
+
+    if ($null -ne $resolvedLauncherSourceDirectory) {
+        Copy-LauncherDeploymentPayload `
+            -SourceDirectory $resolvedLauncherSourceDirectory `
+            -TargetDirectory $resolvedLauncherTargetDirectory `
+            -ExecutableName $LauncherExeName
+        $launcherInstallStatus = "Installed from '$resolvedLauncherSourceDirectory'."
+    }
+    else {
+        $launcherInstallStatus = 'No launcher payload was found; skipped launcher installation.'
+        Write-Warning $launcherInstallStatus
+    }
+}
 
 Copy-ConfigIfRequested `
     -ConfigPath $ServiceConfigPath `
@@ -315,6 +438,11 @@ if ($StartHelperTask -and $PSCmdlet.ShouldProcess($HelperTaskName, 'Start schedu
     HelperTaskName         = $HelperTaskName
     HelperTaskUser         = $HelperTaskUser
     HelperTargetDirectory  = $resolvedHelperTargetDirectory
+    LauncherInstalled      = ($null -ne $resolvedLauncherSourceDirectory -and -not $SkipLauncherInstall)
+    LauncherInstallStatus  = $launcherInstallStatus
+    LauncherSourceDirectory = $resolvedLauncherSourceDirectory
+    LauncherTargetDirectory = $resolvedLauncherTargetDirectory
+    LauncherExecutablePath = Join-Path -Path $resolvedLauncherTargetDirectory -ChildPath $LauncherExeName
     DataDirectory          = $resolvedDataDirectory
     LogDirectory           = $resolvedLogDirectory
     DeviceIdentityPath     = Join-Path -Path $resolvedDataDirectory -ChildPath 'device-id.json'
