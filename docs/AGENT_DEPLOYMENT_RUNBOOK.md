@@ -246,6 +246,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\installer\Build-Agen
 powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Test-AgentInstallerPackage.ps1 -RequireZip
 ```
 
+First MSI wrapper build and validation:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\installer\Build-AgentMsi.ps1 -RebuildInstallerPayload -CreateZip
+powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Test-AgentMsiPackage.ps1
+```
+
 The install and uninstall scripts work against the published service and helper folders:
 
 ```powershell
@@ -447,7 +454,7 @@ Optional destructive cleanup is explicit through `-RemoveServiceDirectory`, `-Re
 ## Known current limitations
 
 - No Windows Event Log sink is wired yet.
-- The current installer path is script-driven through `agent\installer\`. A dedicated MSI/MSIX project is not checked in yet.
+- The current installer path is script-driven through `agent\installer\`. A first WiX MSI wrapper is checked in, but it currently stages the installer package rather than replacing the bundled PowerShell install/validate flow.
 - No self-updater is present yet.
 - The upload queue is durable across restarts, but it is still a local JSONL file intended for one service instance per device.
 - If operators delete only selected queue payload files referenced by queued entries, pending uploads can still be lost.

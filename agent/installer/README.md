@@ -22,6 +22,12 @@ Direct MSBuild entry point:
 dotnet msbuild .\agent\installer\EmployeeBehavior.Agent.InstallerPackage.proj -t:BuildPackage -p:CreateZip=true
 ```
 
+Build the first MSI wrapper:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\installer\Build-AgentMsi.ps1 -RebuildInstallerPayload -CreateZip
+```
+
 The assembled delivery directory contains:
 
 - `payload\Service\`
@@ -57,6 +63,12 @@ One-command installed acceptance:
 powershell -NoProfile -ExecutionPolicy Bypass -File .\Run-AgentInstalledAcceptance.ps1 `
   -HelperTaskUser CONTOSO\pilot.user `
   -EmployeeCode 'E-001'
+```
+
+MSI wrapper verification:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Test-AgentMsiPackage.ps1
 ```
 
 Acceptance artifacts:

@@ -16,6 +16,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Test-AgentPu
 powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Test-AgentRuntimeSmoke.ps1 -PublishRoot .\agent\publish -CleanupStartedProcesses
 powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\installer\Build-AgentInstallerPackage.ps1 -CreateZip
 powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Test-AgentInstallerPackage.ps1 -RequireZip
+powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\installer\Build-AgentMsi.ps1 -RebuildInstallerPayload -CreateZip
+powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Test-AgentMsiPackage.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Install-AgentPilot.ps1 -ServiceSourceDirectory .\agent\publish\Service -HelperSourceDirectory .\agent\publish\SessionHelper -ServiceConfigPath .\agent\publish\Service\appsettings.json -HelperConfigPath .\agent\publish\SessionHelper\appsettings.json -HelperTaskUser CONTOSO\pilot.user -StartService
 powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Uninstall-AgentPilot.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\publish\Service\Write-AgentProtectedToken.ps1 -Token 'v2:replace-with-issued-device-token' -Path 'C:\ProgramData\EmployeeBehaviorAgent\secrets\agent-token.protected.json' -Scope LocalMachine -Force
@@ -38,6 +40,7 @@ Production gates:
 - `ProtectedTokenPath` points to an existing DPAPI token file.
 - The publish package root validates with `Test-AgentPublish.ps1`.
 - The installer package project builds from `agent\publish` and validates with `Test-AgentInstallerPackage.ps1`.
+- The WiX MSI wrapper builds and validates with `Build-AgentMsi.ps1` and `Test-AgentMsiPackage.ps1`.
 - Strict production validation expects the nested `Launcher\` publish output to be present.
 - The launcher opens from `agent\publish\EmployeeBehavior.Agent.Launcher.exe`, not from the installed service or helper directories.
 - `WorkSessionStatePath` is either left at the default ProgramData location or explicitly aligned with the launcher on the same machine.

@@ -1,0 +1,23 @@
+<Project Sdk="WixToolset.Sdk/6.0.2">
+  <PropertyGroup>
+    <OutputType>Package</OutputType>
+    <TargetName>EmployeeBehavior.Agent.Installer</TargetName>
+    <InstallerPayloadRoot Condition="'$(InstallerPayloadRoot)' == ''">$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\artifacts\EmployeeBehavior.Agent.InstallerPackage'))</InstallerPayloadRoot>
+    <DefineConstants>InstallerPayloadRoot=$(InstallerPayloadRoot)</DefineConstants>
+    <Cultures>en-us</Cultures>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="WixToolset.Heat" Version="6.0.2" />
+    <HarvestDirectory Include="$(InstallerPayloadRoot)">
+      <ComponentGroupName>InstallerPayloadGroup</ComponentGroupName>
+      <DirectoryRefId>INSTALLFOLDER</DirectoryRefId>
+      <SuppressRootDirectory>true</SuppressRootDirectory>
+      <SuppressRegistry>true</SuppressRegistry>
+      <SuppressCom>true</SuppressCom>
+      <GenerateGuidsNow>true</GenerateGuidsNow>
+      <KeepEmptyDirectories>true</KeepEmptyDirectories>
+      <PreprocessorVariable>var.InstallerPayloadRoot</PreprocessorVariable>
+    </HarvestDirectory>
+  </ItemGroup>
+</Project>

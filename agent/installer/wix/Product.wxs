@@ -1,0 +1,25 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+    Name="Employee Behavior Agent Installer"
+    Manufacturer="Employee Behavior Monitor"
+    Version="0.1.0.0"
+    UpgradeCode="6E989DD3-2BD9-48F5-82C4-C8375AE6F550"
+    Language="1033"
+    Scope="perMachine"
+    InstallerVersion="500"
+    Compressed="yes">
+    <SummaryInformation Description="Stages the Employee Behavior Agent installer package under Program Files for operator-driven install, validation, and rollback." />
+    <MajorUpgrade DowngradeErrorMessage="A newer version of Employee Behavior Agent Installer is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <StandardDirectory Id="ProgramFilesFolder">
+      <Directory Id="COMPANYDIR" Name="EmployeeBehaviorAgent">
+        <Directory Id="INSTALLFOLDER" Name="InstallerPackage" />
+      </Directory>
+    </StandardDirectory>
+
+    <Feature Id="MainFeature" Title="Employee Behavior Agent Installer Package" Level="1">
+      <ComponentGroupRef Id="InstallerPayloadGroup" />
+    </Feature>
+  </Package>
+</Wix>
