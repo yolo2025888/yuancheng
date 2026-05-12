@@ -58,3 +58,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\Run-AgentInstalledAcceptan
   -HelperTaskUser CONTOSO\pilot.user `
   -EmployeeCode 'E-001'
 ```
+
+Acceptance artifacts:
+
+- `acceptance-report\install.log`
+- `acceptance-report\validate.log`
+- `acceptance-report\deployment-report.json`
+- `acceptance-report\lifecycle-result.json`
+- `acceptance-report\environment.json`
+- `acceptance-report\acceptance-summary.json`
+- optional `acceptance-report.zip` when archive support is enabled later

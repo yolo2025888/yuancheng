@@ -8,7 +8,8 @@ param(
     [string]$ApiHealthPath = "/health",
     [string]$LogRootPath = "C:\ProgramData\EmployeeBehaviorAgent\logs",
     [int]$TimeoutSeconds = 5,
-    [switch]$RequireInstalledHelperTask
+    [switch]$RequireInstalledHelperTask,
+    [string]$ReportPath = ''
 )
 
 Set-StrictMode -Version Latest
@@ -748,6 +749,33 @@ if ($null -ne $serviceUri) {
 }
 
 $results | Format-Table -AutoSize
+
+if (-not [string]::IsNullOrWhiteSpace($ReportPath)) {
+    $resolvedReportPath = [System.IO.Path]::GetFullPath($ReportPath)
+    $reportDirectory = Split-Path -Parent $resolvedReportPath
+    if (-not [string]::IsNullOrWhiteSpace($reportDirectory)) {
+        New-Item -ItemType Directory -Path $reportDirectory -Force | Out-Null
+    }
+
+    $statusCounts = @{
+        PASS = @($results | Where-Object { $_.Status -eq 'PASS' }).Count
+        WARN = @($results | Where-Object { $_.Status -eq 'WARN' }).Count
+        FAIL = @($results | Where-Object { $_.Status -eq 'FAIL' }).Count
+    }
+
+    [pscustomobject]@{
+        GeneratedAt = (Get-Date).ToString('O')
+        RequireInstalledHelperTask = [bool]$RequireInstalledHelperTask
+        ServiceConfigPath = $resolvedServiceConfig
+        HelperConfigPath = $resolvedHelperConfig
+        LauncherTargetDirectory = [System.IO.Path]::GetFullPath($LauncherTargetDirectory)
+        LogRootPath = [System.IO.Path]::GetFullPath($LogRootPath)
+        TimeoutSeconds = $TimeoutSeconds
+        HasFailure = [bool]$hasFailure
+        StatusCounts = $statusCounts
+        Results = $results
+    } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $resolvedReportPath -Encoding UTF8
+}
 
 if ($hasFailure) {
     exit 1

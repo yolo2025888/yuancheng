@@ -6,7 +6,8 @@ param(
     [switch]$RequireInstalledHelperTask,
     [switch]$RunLifecycleSmoke,
     [string]$EmployeeCode = 'E-001',
-    [string]$LifecycleReportPath = ''
+    [string]$LifecycleReportPath = '',
+    [string]$DeploymentReportPath = ''
 )
 
 Set-StrictMode -Version Latest
@@ -52,6 +53,9 @@ $parameters = @{
 
 if ($RequireInstalledHelperTask) {
     $parameters.RequireInstalledHelperTask = $true
+}
+if (-not [string]::IsNullOrWhiteSpace($DeploymentReportPath)) {
+    $parameters.ReportPath = $DeploymentReportPath
 }
 
 & $validatorPath @parameters

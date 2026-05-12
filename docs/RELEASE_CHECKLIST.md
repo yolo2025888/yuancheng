@@ -59,6 +59,7 @@ Production gates:
 - Strict production validation uses real `appsettings.json`; example config fallback must fail.
 - Runtime smoke validation shows the launcher opens without starting Service or SessionHelper before clock-in.
 - Installed lifecycle validation confirms clock-in on a service/task-managed endpoint records attendance and shows current background status without directly starting local Service or SessionHelper executables.
+- Installed acceptance captures structured evidence such as `deployment-report.json`, `lifecycle-result.json`, and `acceptance-summary.json`.
 - Local attendance smoke validation proves agent clock submission, admin attendance listing, anomaly classification, and review still work as one flow.
 - Web console route smoke validation proves the review queue, attendance, devices, screenshot detail, GitHub risk, and access-role menus still have matching routes, permissions, pages, and API hooks.
 - Screenshot capture guard validation prevents the invalid `SourceCopy | CaptureBlt` enum combination from returning.

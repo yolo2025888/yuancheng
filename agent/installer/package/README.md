@@ -55,3 +55,12 @@ Combined install + validate + lifecycle acceptance:
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\Run-AgentInstalledAcceptance.ps1 -HelperTaskUser CONTOSO\pilot.user -EmployeeCode 'E-001'
 ```
+
+Acceptance report output:
+
+- `acceptance-report\install.log`
+- `acceptance-report\validate.log`
+- `acceptance-report\deployment-report.json`
+- `acceptance-report\lifecycle-result.json`
+- `acceptance-report\environment.json`
+- `acceptance-report\acceptance-summary.json`

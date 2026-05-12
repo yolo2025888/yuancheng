@@ -12,6 +12,7 @@ param(
     [switch]$StartHelperTask,
     [switch]$SkipInstall,
     [switch]$SkipValidate,
+    [switch]$ArchiveReport,
     [switch]$Cleanup,
     [switch]$RemoveInstalledFiles
 )
@@ -91,6 +92,7 @@ $validateArguments = @{
     RequireInstalledHelperTask = $true
     RunLifecycleSmoke = $true
     EmployeeCode = $EmployeeCode
+    DeploymentReportPath = Join-Path $resolvedReportDirectory 'deployment-report.json'
     LifecycleReportPath = Join-Path $resolvedReportDirectory 'lifecycle-result.json'
 }
 
@@ -120,7 +122,21 @@ $summary = [ordered]@{
     InstallSucceeded = $false
     ValidateSucceeded = $false
     CleanupExecuted = $false
+    ArchiveReport = [bool]$ArchiveReport
 }
+
+[pscustomobject]@{
+    MachineName = $env:COMPUTERNAME
+    UserName = $env:USERNAME
+    HelperTaskUser = $HelperTaskUser
+    InstallRoot = $InstallRoot
+    DataDirectory = $DataDirectory
+    LogDirectory = $LogDirectory
+    PackageRoot = $resolvedPackageRoot
+    ServiceConfigPath = if ([string]::IsNullOrWhiteSpace($ServiceConfigPath)) { '' } else { Resolve-FullPath -Path $ServiceConfigPath }
+    HelperConfigPath = if ([string]::IsNullOrWhiteSpace($HelperConfigPath)) { '' } else { Resolve-FullPath -Path $HelperConfigPath }
+    GeneratedAt = (Get-Date).ToString('O')
+} | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $resolvedReportDirectory 'environment.json') -Encoding UTF8
 
 try {
     if (-not $SkipInstall) {
@@ -140,6 +156,20 @@ finally {
     }
 
     $summary.CompletedAt = (Get-Date).ToString('O')
+    $summary.DeploymentReportPath = Join-Path $resolvedReportDirectory 'deployment-report.json'
+    $summary.LifecycleReportPath = Join-Path $resolvedReportDirectory 'lifecycle-result.json'
+    $summary.EnvironmentReportPath = Join-Path $resolvedReportDirectory 'environment.json'
     $summaryPath = Join-Path $resolvedReportDirectory 'acceptance-summary.json'
+    $summary.AcceptanceSummaryPath = $summaryPath
+    $reportArchivePath = $null
+    if ($ArchiveReport) {
+        $reportArchivePath = $resolvedReportDirectory.TrimEnd('\') + '.zip'
+        if (Test-Path -LiteralPath $reportArchivePath) {
+            Remove-Item -LiteralPath $reportArchivePath -Force
+        }
+
+        Compress-Archive -Path (Join-Path $resolvedReportDirectory '*') -DestinationPath $reportArchivePath -CompressionLevel Optimal
+    }
+    $summary.ReportArchivePath = $reportArchivePath
     [pscustomobject]$summary | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $summaryPath -Encoding UTF8
 }

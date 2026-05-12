@@ -279,6 +279,15 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\installer\artifacts\
   -EmployeeCode 'E-001'
 ```
 
+Acceptance report output is written under the installer package root by default:
+
+- `acceptance-report\install.log`
+- `acceptance-report\validate.log`
+- `acceptance-report\deployment-report.json`
+- `acceptance-report\lifecycle-result.json`
+- `acceptance-report\environment.json`
+- `acceptance-report\acceptance-summary.json`
+
 ## Dry-run validation flow
 
 Use `DryRun=true` first. This validates local capture, named-pipe wiring, and contract shape without sending live heartbeat or screenshot payloads to the backend.
