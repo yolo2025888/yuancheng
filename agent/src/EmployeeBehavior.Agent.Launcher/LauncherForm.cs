@@ -5,6 +5,7 @@ namespace EmployeeBehavior.Agent.Launcher;
 
 internal sealed class LauncherForm : Form
 {
+    private readonly LauncherAutomationOptions _automationOptions;
     private readonly AgentProcessManager _agentProcessManager = new();
     private readonly AttendanceStore _attendanceStore = new();
     private readonly AttendanceReporter _attendanceReporter = new();
@@ -31,8 +32,9 @@ internal sealed class LauncherForm : Form
     private DateTimeOffset? _clockInAt;
     private DateTimeOffset? _clockOutAt;
 
-    public LauncherForm()
+    public LauncherForm(LauncherAutomationOptions? automationOptions = null)
     {
+        _automationOptions = automationOptions ?? new LauncherAutomationOptions(null, false);
         Text = "Employee Clock";
         StartPosition = FormStartPosition.CenterScreen;
         MinimumSize = new Size(480, 560);
@@ -53,6 +55,10 @@ internal sealed class LauncherForm : Form
         {
             _employeeTextBox.Focus();
             _ = ReplayPendingAsync("startup");
+            if (_automationOptions.IsEnabled)
+            {
+                _ = RunAutomationAsync();
+            }
         };
     }
 
@@ -191,13 +197,13 @@ internal sealed class LauncherForm : Form
         AddTop(_attendancePanel, title);
     }
 
-    private async Task ClockInAsync()
+    private async Task<bool> ClockInAsync()
     {
         var employeeCode = _employeeTextBox.Text.Trim();
         if (string.IsNullOrWhiteSpace(employeeCode))
         {
             _loginErrorLabel.Text = "Enter an employee code.";
-            return;
+            return false;
         }
 
         _loginErrorLabel.Text = string.Empty;
@@ -216,13 +222,14 @@ internal sealed class LauncherForm : Form
         {
             await _attendanceStore.SetWorkSessionStateAsync("clock_out", _currentEmployeeProfile, _clockInAt.Value);
             _loginErrorLabel.Text = ex.Message;
-            return;
+            return false;
         }
 
         await _attendanceStore.AppendAsync("clock_in", _currentEmployeeProfile, _clockInAt.Value);
         ShowAttendance(processStatus);
         _ = RefreshRuleSummaryAsync();
         _ = ReplayPendingAsync("clock-in");
+        return true;
     }
 
     private async Task ClockOutAsync()
@@ -269,6 +276,26 @@ internal sealed class LauncherForm : Form
             $"Profile: {profile.Source} - {profile.Message}{Environment.NewLine}" +
             $"Rule source: {profile.RuleSource}{Environment.NewLine}" +
             $"Rules: {ruleSummary}{ruleStatus}";
+    }
+
+    private async Task RunAutomationAsync()
+    {
+        try
+        {
+            _employeeTextBox.Text = _automationOptions.AutoClockInEmployeeCode ?? string.Empty;
+            var success = await ClockInAsync();
+            if (_automationOptions.ExitAfterClockIn)
+            {
+                Environment.ExitCode = success ? 0 : 1;
+                await Task.Delay(1500);
+                Close();
+            }
+        }
+        catch
+        {
+            Environment.ExitCode = 1;
+            Close();
+        }
     }
 
     private void RefreshDuration()

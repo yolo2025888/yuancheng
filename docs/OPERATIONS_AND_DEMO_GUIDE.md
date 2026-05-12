@@ -18,6 +18,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Uninstall-Ag
 
 For packaged delivery rehearsal, use the generated entry points under `agent\installer\artifacts\EmployeeBehavior.Agent.InstallerPackage\`, especially `Install-AgentInstallerPackage.ps1` and `Validate-AgentInstallerPackage.ps1`.
 
+For a real installed endpoint, use `tools\Test-AgentInstalledLifecycle.ps1` from the packaged installer directory to verify the launcher clock-in path without spawning new local background processes.
+
 Before a pilot or production demo, confirm the employee-facing disclosure covers full multi-display screenshots, active window title, process name/path, session/lock/RDP/idle metadata, aggregate input counts, purpose, access roles, retention, and appeal channel.
 
 Provision the DPAPI protected token file first, then switch the published service config to production mode before validation:

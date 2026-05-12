@@ -162,7 +162,8 @@ if ($toolsRootExists) {
     foreach ($toolFile in @(
         'Install-AgentPilot.ps1',
         'Uninstall-AgentPilot.ps1',
-        'Test-AgentDeployment.ps1'
+        'Test-AgentDeployment.ps1',
+        'Test-AgentInstalledLifecycle.ps1'
     )) {
         $null = Test-RequiredFile -Path (Join-Path $toolsRoot $toolFile) -Check "Bundled tool $toolFile"
     }

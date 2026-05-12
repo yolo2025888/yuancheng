@@ -271,6 +271,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\installer\artifacts\
   -RequireInstalledHelperTask
 ```
 
+Installed lifecycle smoke:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\installer\artifacts\EmployeeBehavior.Agent.InstallerPackage\tools\Test-AgentInstalledLifecycle.ps1 `
+  -LauncherExecutablePath 'C:\Program Files\EmployeeBehaviorAgent\Launcher\EmployeeBehavior.Agent.Launcher.exe' `
+  -EmployeeCode 'E-001'
+```
+
 ## Dry-run validation flow
 
 Use `DryRun=true` first. This validates local capture, named-pipe wiring, and contract shape without sending live heartbeat or screenshot payloads to the backend.
@@ -325,7 +333,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Install-Agen
 7. If you keep service/task wrappers, stdout/stderr redirection is optional. The binaries now append to the recommended `logs\` directory by default unless `Logging:File:Path` overrides it.
 8. Start the helper task or have the pilot user sign in so the logon trigger fires.
 9. Run `Test-AgentDeployment.ps1` against the installed target directories with `-RequireInstalledHelperTask`, and confirm it does not report hidden tray, console-mode, environment override, missing helper task, missing `EmployeeBehavior.Agent.Service` registration, wrong service binary path, or scheduled-task argument failures. Also record the reported Windows service start mode and current state.
-10. Validate the launcher lifecycle on the installed endpoint: opening the launcher still must not start new background processes before clock-in, and clock-in must record attendance while showing the current service/helper status instead of directly starting local background executables.
+10. Validate the launcher lifecycle on the installed endpoint: opening the launcher still must not start new background processes before clock-in, and clock-in must record attendance while showing the current service/helper status instead of directly starting local background executables. Use `Test-AgentInstalledLifecycle.ps1` when the endpoint is fully installed.
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Test-AgentDeployment.ps1 `

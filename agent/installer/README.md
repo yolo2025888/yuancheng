@@ -34,9 +34,18 @@ The assembled delivery directory contains:
 - `tools\Install-AgentPilot.ps1`
 - `tools\Uninstall-AgentPilot.ps1`
 - `tools\Test-AgentDeployment.ps1`
+- `tools\Test-AgentInstalledLifecycle.ps1`
 
 Installed endpoint validation:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\Validate-AgentInstallerPackage.ps1 -RequireInstalledHelperTask
+```
+
+Installed lifecycle acceptance:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-AgentInstalledLifecycle.ps1 `
+  -LauncherExecutablePath 'C:\Program Files\EmployeeBehaviorAgent\Launcher\EmployeeBehavior.Agent.Launcher.exe' `
+  -EmployeeCode 'E-001'
 ```

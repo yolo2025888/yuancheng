@@ -53,6 +53,9 @@
     <ToolScripts Include="$(AgentRoot)scripts\Test-AgentDeployment.ps1">
       <PackageRelativePath>Test-AgentDeployment.ps1</PackageRelativePath>
     </ToolScripts>
+    <ToolScripts Include="$(AgentRoot)scripts\Test-AgentInstalledLifecycle.ps1">
+      <PackageRelativePath>Test-AgentInstalledLifecycle.ps1</PackageRelativePath>
+    </ToolScripts>
   </ItemGroup>
 
   <Target Name="CleanPackageOutput">

@@ -13,6 +13,7 @@ This package assembles the Windows agent payloads plus direct install, uninstall
 - `tools\Install-AgentPilot.ps1`
 - `tools\Uninstall-AgentPilot.ps1`
 - `tools\Test-AgentDeployment.ps1`
+- `tools\Test-AgentInstalledLifecycle.ps1`
 
 ## Validate package contents
 
@@ -40,4 +41,10 @@ Add `-RemoveServiceDirectory`, `-RemoveHelperDirectory`, or `-RemoveLauncherDire
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-AgentDeployment.ps1 -ServiceConfigPath 'C:\Program Files\EmployeeBehaviorAgent\Service\appsettings.json' -HelperConfigPath 'C:\Program Files\EmployeeBehaviorAgent\SessionHelper\appsettings.json' -RequireInstalledHelperTask
+```
+
+Installed lifecycle smoke:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-AgentInstalledLifecycle.ps1 -LauncherExecutablePath 'C:\Program Files\EmployeeBehaviorAgent\Launcher\EmployeeBehavior.Agent.Launcher.exe' -EmployeeCode 'E-001'
 ```

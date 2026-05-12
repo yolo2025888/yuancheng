@@ -55,6 +55,7 @@ Production gates:
 - The installed helper scheduled task does not include `--console`.
 - Runtime smoke or pilot validation confirms the expected log files are created at the default ProgramData paths or the configured `Logging:File:Path` overrides.
 - `Test-AgentDeployment.ps1` only passes API reachability when `GET /health` returns a 2xx response.
+- Installed endpoints can pass `Test-AgentInstalledLifecycle.ps1` against the installed launcher path.
 - Strict production validation uses real `appsettings.json`; example config fallback must fail.
 - Runtime smoke validation shows the launcher opens without starting Service or SessionHelper before clock-in.
 - Installed lifecycle validation confirms clock-in on a service/task-managed endpoint records attendance and shows current background status without directly starting local Service or SessionHelper executables.
