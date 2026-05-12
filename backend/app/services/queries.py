@@ -4,6 +4,7 @@ from collections import defaultdict
 from datetime import date, datetime, time, timezone
 from uuid import UUID
 
+from sqlalchemy import and_, or_
 from sqlmodel import Session, select
 
 from app.models import AttendanceRecord, AuditLog, BehaviorEvent, Device, Employee, Policy, Role, ScreenDiff, Screenshot, User
@@ -44,6 +45,7 @@ from app.services.access_control import (
     ACCESS_ROLE_TEMPLATES,
     access_template_for_role,
 )
+from app.services.access_scope import EmployeeAccessScope
 from app.services.audit import AuditContext, AuditService
 from app.services.policies import PolicyService
 from app.services.screen_analysis import classify_screenshot_activity
@@ -384,10 +386,19 @@ class QueryService:
         event_type: str | None,
         start_from: datetime | None,
         end_to: datetime | None,
+        scope: EmployeeAccessScope | None = None,
     ) -> BehaviorEventListResponse:
+        if scope is not None and not scope.all_employees:
+            if not scope.employee_ids:
+                return BehaviorEventListResponse(items=[], total=0)
+            if employee_id is not None and employee_id not in scope.employee_ids:
+                return BehaviorEventListResponse(items=[], total=0)
+
         statement = select(BehaviorEvent).order_by(BehaviorEvent.start_at.desc())
         if employee_id is not None:
             statement = statement.where(BehaviorEvent.employee_id == employee_id)
+        if scope is not None and not scope.all_employees:
+            statement = statement.where(BehaviorEvent.employee_id.in_(list(scope.employee_ids)))
         if severity is not None:
             statement = statement.where(BehaviorEvent.severity == severity)
         if status is not None:
@@ -428,9 +439,11 @@ class QueryService:
             total=len(events),
         )
 
-    def get_event(self, event_id: UUID) -> BehaviorEventDetail | None:
+    def get_event(self, event_id: UUID, scope: EmployeeAccessScope | None = None) -> BehaviorEventDetail | None:
         event = self.session.get(BehaviorEvent, event_id)
         if event is None:
+            return None
+        if scope is not None and not scope.all_employees and event.employee_id not in scope.employee_ids:
             return None
         return self._build_event_detail(event=event)
 
@@ -440,9 +453,12 @@ class QueryService:
         payload: BehaviorEventReviewRequest,
         *,
         audit_context: AuditContext | None = None,
+        scope: EmployeeAccessScope | None = None,
     ) -> BehaviorEventDetail | None:
         event = self.session.get(BehaviorEvent, event_id)
         if event is None:
+            return None
+        if scope is not None and not scope.all_employees and event.employee_id not in scope.employee_ids:
             return None
 
         if payload.status is not None:
@@ -470,12 +486,17 @@ class QueryService:
         device_id: UUID | None,
         employee_id: UUID | None,
         limit: int,
+        scope: EmployeeAccessScope | None = None,
     ) -> ScreenshotListResponse:
         statement = select(Screenshot).order_by(Screenshot.captured_at.desc())
         if device_id is not None:
             statement = statement.where(Screenshot.device_id == device_id)
         if employee_id is not None:
             statement = statement.where(Screenshot.employee_id == employee_id)
+        if scope is not None and not scope.all_employees:
+            if not scope.employee_ids:
+                return ScreenshotListResponse(items=[], total=0)
+            statement = statement.where(Screenshot.employee_id.in_(list(scope.employee_ids)))
 
         screenshots = self.session.exec(statement.limit(limit)).all()
         diff_map = self._screen_diff_map([screenshot.id for screenshot in screenshots])
@@ -492,9 +513,11 @@ class QueryService:
             total=len(screenshots),
         )
 
-    def get_screenshot(self, screenshot_id: UUID) -> ScreenshotItem | None:
+    def get_screenshot(self, screenshot_id: UUID, scope: EmployeeAccessScope | None = None) -> ScreenshotItem | None:
         screenshot = self.session.get(Screenshot, screenshot_id)
         if screenshot is None:
+            return None
+        if scope is not None and not scope.all_employees and screenshot.employee_id not in scope.employee_ids:
             return None
         diff_map = self._screen_diff_map([screenshot.id])
         return self._build_screenshot_item(
@@ -541,7 +564,11 @@ class QueryService:
         employee_no: str | None,
         machine_name: str | None,
         limit: int,
+        scope: EmployeeAccessScope | None = None,
     ) -> AttendanceListResponse:
+        if scope is not None and not scope.all_employees and not scope.employee_ids:
+            return AttendanceListResponse(items=[], total=0, generated_at=datetime.now(timezone.utc))
+
         statement = select(AttendanceRecord).order_by(AttendanceRecord.occurred_at.desc())
         if work_date is not None:
             statement = statement.where(AttendanceRecord.work_date == work_date)
@@ -555,6 +582,18 @@ class QueryService:
             statement = statement.where(AttendanceRecord.employee_no == employee_no)
         if machine_name is not None:
             statement = statement.where(AttendanceRecord.machine_name == machine_name)
+        if scope is not None and not scope.all_employees:
+            employee_ids = list(scope.employee_ids)
+            scoped_employee_nos = self._unambiguous_employee_nos_for_scope(scope)
+            statement = statement.where(
+                or_(
+                    AttendanceRecord.employee_id.in_(employee_ids),
+                    and_(
+                        AttendanceRecord.employee_id.is_(None),
+                        AttendanceRecord.employee_no.in_(scoped_employee_nos),
+                    ),
+                )
+            )
 
         records = self.session.exec(statement.limit(limit)).all()
         employee_ids = [record.employee_id for record in records if record.employee_id is not None]
@@ -583,9 +622,45 @@ class QueryService:
             generated_at=datetime.now(timezone.utc),
         )
 
-    def list_employees(self) -> EmployeeListResponse:
-        employees = self.session.exec(select(Employee).order_by(Employee.employee_no.asc(), Employee.name.asc())).all()
-        devices = self.session.exec(select(Device)).all()
+    def _unambiguous_employee_nos_for_scope(self, scope: EmployeeAccessScope) -> list[str]:
+        if scope.all_employees or not scope.employee_ids:
+            return []
+
+        scoped_employees = self.session.exec(
+            select(Employee).where(Employee.id.in_(list(scope.employee_ids)))
+        ).all()
+        candidate_employee_nos = sorted({employee.employee_no for employee in scoped_employees})
+        if not candidate_employee_nos:
+            return []
+
+        employees_by_no: dict[str, list[Employee]] = defaultdict(list)
+        for employee in self.session.exec(select(Employee).where(Employee.employee_no.in_(candidate_employee_nos))).all():
+            employees_by_no[employee.employee_no].append(employee)
+
+        return [
+            employee_no
+            for employee_no, employees in employees_by_no.items()
+            if len(employees) == 1 and employees[0].id in scope.employee_ids
+        ]
+
+    def list_employees(self, scope: EmployeeAccessScope | None = None) -> EmployeeListResponse:
+        statement = select(Employee).order_by(Employee.employee_no.asc(), Employee.name.asc())
+        if scope is not None and not scope.all_employees:
+            if not scope.employee_ids:
+                return EmployeeListResponse(items=[], total=0)
+            statement = statement.where(Employee.id.in_(list(scope.employee_ids)))
+
+        employees = self.session.exec(statement).all()
+        employee_ids = {employee.id for employee in employees}
+        device_statement = select(Device)
+        if scope is not None and not scope.all_employees:
+            if not employee_ids:
+                devices = []
+            else:
+                device_statement = device_statement.where(Device.employee_id.in_(employee_ids))
+                devices = self.session.exec(device_statement).all()
+        else:
+            devices = self.session.exec(device_statement).all()
         active_policy = PolicyService(self.session).ensure_default_policy()
         policy_summary = PolicySummary.model_validate(active_policy) if active_policy is not None else None
 
@@ -616,9 +691,16 @@ class QueryService:
             total=len(employees),
         )
 
-    def list_devices(self) -> DeviceListResponse:
-        devices = self.session.exec(select(Device).order_by(Device.last_heartbeat_at.desc(), Device.hostname.asc())).all()
-        employees = self.session.exec(select(Employee)).all()
+    def list_devices(self, scope: EmployeeAccessScope | None = None) -> DeviceListResponse:
+        statement = select(Device).order_by(Device.last_heartbeat_at.desc(), Device.hostname.asc())
+        if scope is not None and not scope.all_employees:
+            if not scope.employee_ids:
+                return DeviceListResponse(items=[], total=0)
+            statement = statement.where(Device.employee_id.in_(list(scope.employee_ids)))
+
+        devices = self.session.exec(statement).all()
+        employee_ids = {device.employee_id for device in devices if device.employee_id is not None}
+        employees = self.session.exec(select(Employee).where(Employee.id.in_(employee_ids))).all() if employee_ids else []
         employees_by_id = {employee.id: employee for employee in employees}
 
         items = []
@@ -883,12 +965,42 @@ class QueryService:
             factors=sorted_factors,
         )
 
-    def _build_risk_snapshot(self) -> tuple[datetime, list[EmployeeRiskScoreItem], dict[str, int], list[Device], list[BehaviorEvent], list[Screenshot]]:
+    def _build_risk_snapshot(
+        self,
+        scope: EmployeeAccessScope | None = None,
+    ) -> tuple[
+        datetime,
+        list[EmployeeRiskScoreItem],
+        dict[str, int],
+        list[Employee],
+        list[Device],
+        list[BehaviorEvent],
+        list[Screenshot],
+    ]:
         generated_at = datetime.now(timezone.utc)
-        employees = self.session.exec(select(Employee).order_by(Employee.employee_no.asc(), Employee.name.asc())).all()
-        devices = self.session.exec(select(Device).order_by(Device.hostname.asc())).all()
-        events = self.session.exec(select(BehaviorEvent).order_by(BehaviorEvent.start_at.desc())).all()
-        screenshots = self.session.exec(select(Screenshot).order_by(Screenshot.captured_at.desc())).all()
+        employee_statement = select(Employee).order_by(Employee.employee_no.asc(), Employee.name.asc())
+        device_statement = select(Device).order_by(Device.hostname.asc())
+        event_statement = select(BehaviorEvent).order_by(BehaviorEvent.start_at.desc())
+        screenshot_statement = select(Screenshot).order_by(Screenshot.captured_at.desc())
+        if scope is not None and not scope.all_employees:
+            if not scope.employee_ids:
+                empty_coverage = {
+                    "active_policy_count": 0,
+                    "targeted_active_policy_count": 0,
+                    "employees_with_targeted_policy": 0,
+                    "employees_default_only": 0,
+                }
+                return generated_at, [], empty_coverage, [], [], [], []
+            employee_ids = list(scope.employee_ids)
+            employee_statement = employee_statement.where(Employee.id.in_(employee_ids))
+            device_statement = device_statement.where(Device.employee_id.in_(employee_ids))
+            event_statement = event_statement.where(BehaviorEvent.employee_id.in_(employee_ids))
+            screenshot_statement = screenshot_statement.where(Screenshot.employee_id.in_(employee_ids))
+
+        employees = self.session.exec(employee_statement).all()
+        devices = self.session.exec(device_statement).all()
+        events = self.session.exec(event_statement).all()
+        screenshots = self.session.exec(screenshot_statement).all()
 
         devices_by_employee: dict[UUID, list[Device]] = defaultdict(list)
         for device in devices:
@@ -953,10 +1065,12 @@ class QueryService:
             "employees_with_targeted_policy": employees_with_targeted_policy,
             "employees_default_only": employees_default_only,
         }
-        return generated_at, risk_scores, coverage, devices, events, screenshots
+        return generated_at, risk_scores, coverage, employees, devices, events, screenshots
 
-    def get_dashboard_summary(self) -> DashboardSummaryResponse:
-        generated_at, risk_scores, coverage, devices, events, screenshots = self._build_risk_snapshot()
+    def get_dashboard_summary(self, scope: EmployeeAccessScope | None = None) -> DashboardSummaryResponse:
+        generated_at, risk_scores, coverage, employees, devices, events, screenshots = self._build_risk_snapshot(
+            scope=scope
+        )
         risk_distribution = RiskLevelBreakdown()
         for item in risk_scores:
             setattr(risk_distribution, item.label, getattr(risk_distribution, item.label) + 1)
@@ -977,7 +1091,6 @@ class QueryService:
             if (screenshot_window_start - ensure_utc(screenshot.captured_at)).total_seconds() <= 24 * 60 * 60
         )
 
-        employees = self.session.exec(select(Employee)).all()
         return DashboardSummaryResponse(
             generated_at=generated_at,
             employee_count=len(employees),
@@ -998,14 +1111,24 @@ class QueryService:
             top_risks=risk_scores[:5],
         )
 
-    def list_review_queue(self, limit: int = 100) -> ReviewQueueResponse:
+    def list_review_queue(self, limit: int = 100, scope: EmployeeAccessScope | None = None) -> ReviewQueueResponse:
         generated_at = datetime.now(timezone.utc)
-        events = self.session.exec(
+        if scope is not None and not scope.all_employees and not scope.employee_ids:
+            return ReviewQueueResponse(items=[], total=0, generated_at=generated_at)
+
+        event_statement = (
             select(BehaviorEvent)
             .where(BehaviorEvent.status.in_(REVIEWABLE_EVENT_STATUSES))
             .order_by(BehaviorEvent.start_at.desc())
-        ).all()
-        devices = self.session.exec(select(Device)).all()
+        )
+        device_statement = select(Device)
+        if scope is not None and not scope.all_employees:
+            employee_ids = list(scope.employee_ids)
+            event_statement = event_statement.where(BehaviorEvent.employee_id.in_(employee_ids))
+            device_statement = device_statement.where(Device.employee_id.in_(employee_ids))
+
+        events = self.session.exec(event_statement).all()
+        devices = self.session.exec(device_statement).all()
         employee_ids = {event.employee_id for event in events} | {
             device.employee_id for device in devices if device.employee_id is not None
         }
@@ -1106,8 +1229,12 @@ class QueryService:
             return False
         return _age_seconds(device.last_heartbeat_at, generated_at) >= STALE_DEVICE_AFTER_SECONDS
 
-    def list_risk_scores(self, limit: int | None = None) -> EmployeeRiskScoreListResponse:
-        generated_at, risk_scores, _, _, _, _ = self._build_risk_snapshot()
+    def list_risk_scores(
+        self,
+        limit: int | None = None,
+        scope: EmployeeAccessScope | None = None,
+    ) -> EmployeeRiskScoreListResponse:
+        generated_at, risk_scores, _, _, _, _, _ = self._build_risk_snapshot(scope=scope)
         items = risk_scores if limit is None else risk_scores[:limit]
         return EmployeeRiskScoreListResponse(
             items=items,
@@ -1115,13 +1242,26 @@ class QueryService:
             generated_at=generated_at,
         )
 
-    def list_github_risks(self, limit: int = 200) -> GitHubRiskEventListResponse:
-        events = self.session.exec(
+    def list_github_risks(
+        self,
+        limit: int = 200,
+        scope: EmployeeAccessScope | None = None,
+    ) -> GitHubRiskEventListResponse:
+        if scope is not None and not scope.all_employees and not scope.employee_ids:
+            return GitHubRiskEventListResponse(
+                items=[],
+                total=0,
+                generated_at=datetime.now(timezone.utc),
+                trend=[],
+            )
+        statement = (
             select(BehaviorEvent)
             .where(BehaviorEvent.event_type.like("github_%"))
             .order_by(BehaviorEvent.start_at.desc())
-            .limit(limit)
-        ).all()
+        )
+        if scope is not None and not scope.all_employees:
+            statement = statement.where(BehaviorEvent.employee_id.in_(list(scope.employee_ids)))
+        events = self.session.exec(statement.limit(limit)).all()
         employees = (
             {
                 employee.id: employee
@@ -1238,15 +1378,26 @@ class QueryService:
     def get_access_matrix(self) -> AccessMatrixResponse:
         roles = self.session.exec(select(Role).order_by(Role.name.asc())).all()
         users = self.session.exec(select(User).order_by(User.username.asc())).all()
+        employee_ids = {user.employee_id for user in users if user.employee_id is not None}
+        employees = (
+            self.session.exec(select(Employee).where(Employee.id.in_(employee_ids))).all()
+            if employee_ids
+            else []
+        )
+        employees_by_id = {employee.id: employee for employee in employees}
 
         users_by_role: dict[UUID, list[AccessRoleUserItem]] = defaultdict(list)
         unassigned_users: list[AccessRoleUserItem] = []
         for user in users:
+            employee = employees_by_id.get(user.employee_id) if user.employee_id is not None else None
             user_item = AccessRoleUserItem(
                 id=user.id,
                 username=user.username,
                 display_name=user.display_name,
                 email=user.email,
+                employee_id=user.employee_id,
+                employee_name=employee.name if employee is not None else None,
+                employee_no=employee.employee_no if employee is not None else None,
                 status=user.status,
             )
             if user.role_id is None:

@@ -851,6 +851,7 @@ def test_screenshot_direct_upload_persists_image_and_thumb(
         username="reviewer.screenshots",
         password="reviewer-password",
         role_name="Reviewer",
+        employee_id=seeded_device["employee_id"],
     )
     metadata_response = client.get(f"/api/screenshots/{payload['screenshot_id']}", headers=reviewer_headers)
     assert metadata_response.status_code == 200

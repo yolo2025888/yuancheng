@@ -94,6 +94,12 @@ export function AttendancePage() {
       if (result.records) {
         setRows(result.records);
         messageApi.success(`${record.employee} marked as ${reviewStatusLabel(reviewStatus)}.`);
+      } else if (result.errorCode === 'forbidden') {
+        messageApi.error('You do not have permission to review this attendance record.');
+      } else if (result.errorCode === 'not_found') {
+        messageApi.error('This attendance record is no longer available.');
+      } else if (result.errorCode === 'invalid') {
+        messageApi.error('The attendance review update was rejected.');
       } else {
         messageApi.warning('Review was not saved by the backend. The table was left unchanged.');
       }

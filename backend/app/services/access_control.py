@@ -85,6 +85,11 @@ ACCESS_CAPABILITY_DEFINITIONS = (
         "label": "Access planning",
         "description": "View the recommended role and permission planning matrix.",
     },
+    {
+        "key": "access_matrix.manage",
+        "label": "Access binding management",
+        "description": "Bind application users to employee identities for scoped data access.",
+    },
 )
 
 ACCESS_ROLE_TEMPLATES = (

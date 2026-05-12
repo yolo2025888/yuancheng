@@ -58,6 +58,35 @@ def test_login_accepts_email_identifier_for_existing_user(client: TestClient, au
     assert login_response.json()["user"]["username"] == "email.user"
 
 
+def test_auth_responses_include_employee_binding(
+    client: TestClient,
+    seeded_device: dict[str, str],
+    auth_headers,
+) -> None:
+    auth_headers(
+        username="bound.reviewer",
+        password="bound-password",
+        role_name="Reviewer",
+        employee_id=seeded_device["employee_id"],
+    )
+
+    login_response = client.post(
+        "/api/auth/login",
+        json={"username": "bound.reviewer", "password": "bound-password"},
+    )
+
+    assert login_response.status_code == 200
+    login_payload = login_response.json()
+    assert login_payload["user"]["employee_id"] == seeded_device["employee_id"]
+
+    me_response = client.get(
+        "/api/auth/me",
+        headers={"Authorization": f"Bearer {login_payload['access_token']}"},
+    )
+    assert me_response.status_code == 200
+    assert me_response.json()["employee_id"] == seeded_device["employee_id"]
+
+
 def test_login_bootstraps_dev_admin_with_email_identifier(client: TestClient) -> None:
     login_response = client.post(
         "/api/auth/login",

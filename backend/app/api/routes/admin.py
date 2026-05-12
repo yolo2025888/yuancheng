@@ -4,12 +4,14 @@ from datetime import date, datetime, timedelta, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from app.api.deps import get_audit_context, get_session, get_settings, require_agent_token, require_permissions
 from app.core.config import Settings
 from app.schemas.admin import (
     AccessMatrixResponse,
+    AccessRoleUserItem,
+    AccessUserEmployeeBindingRequest,
     AttendanceClockRequest,
     AttendanceListResponse,
     AttendanceRecordItem,
@@ -35,7 +37,7 @@ from app.schemas.admin import (
     ReviewQueueResponse,
     ScreenshotRetentionCleanupResponse,
 )
-from app.models import Device
+from app.models import AttendanceRecord, Device, Employee, User
 from app.services.queries import QueryService
 from app.services.audit import AuditContext, AuditService
 from app.services.agent_auth import (
@@ -49,6 +51,8 @@ from app.services.attendance_rules import AttendanceRuleService, format_rule_tim
 from app.services.employee_admin import EmployeeAdminService
 from app.services.policies import PolicyService
 from app.services.retention import ScreenshotRetentionService
+from app.services.access_scope import require_employee_in_scope, resolve_employee_access_scope
+from app.services.auth import AuthenticatedPrincipal
 
 router = APIRouter(prefix="/api", tags=["admin"])
 
@@ -56,17 +60,19 @@ router = APIRouter(prefix="/api", tags=["admin"])
 @router.get("/employees", response_model=EmployeeListResponse)
 def list_employees(
     session: Session = Depends(get_session),
-    _: object = Depends(require_permissions("directory.view")),
+    principal: AuthenticatedPrincipal = Depends(require_permissions("directory.view")),
 ) -> EmployeeListResponse:
-    return QueryService(session).list_employees()
+    scope = resolve_employee_access_scope(session, principal)
+    return QueryService(session).list_employees(scope=scope)
 
 
 @router.get("/devices", response_model=DeviceListResponse)
 def list_devices(
     session: Session = Depends(get_session),
-    _: object = Depends(require_permissions("directory.view")),
+    principal: AuthenticatedPrincipal = Depends(require_permissions("directory.view")),
 ) -> DeviceListResponse:
-    return QueryService(session).list_devices()
+    scope = resolve_employee_access_scope(session, principal)
+    return QueryService(session).list_devices(scope=scope)
 
 
 @router.post("/devices/{device_id}/agent-token", response_model=DeviceAgentTokenIssueResponse)
@@ -137,36 +143,40 @@ def revoke_device_agent_token(
 @router.get("/dashboard/summary", response_model=DashboardSummaryResponse)
 def get_dashboard_summary(
     session: Session = Depends(get_session),
-    _: object = Depends(require_permissions("dashboard.view")),
+    principal: AuthenticatedPrincipal = Depends(require_permissions("dashboard.view")),
 ) -> DashboardSummaryResponse:
-    return QueryService(session).get_dashboard_summary()
+    scope = resolve_employee_access_scope(session, principal)
+    return QueryService(session).get_dashboard_summary(scope=scope)
 
 
 @router.get("/risk/scores", response_model=EmployeeRiskScoreListResponse)
 def list_risk_scores(
     limit: int = Query(default=100, ge=1, le=500),
     session: Session = Depends(get_session),
-    _: object = Depends(require_permissions("risk_scores.view")),
+    principal: AuthenticatedPrincipal = Depends(require_permissions("risk_scores.view")),
 ) -> EmployeeRiskScoreListResponse:
-    return QueryService(session).list_risk_scores(limit=limit)
+    scope = resolve_employee_access_scope(session, principal)
+    return QueryService(session).list_risk_scores(limit=limit, scope=scope)
 
 
 @router.get("/github-risks", response_model=GitHubRiskEventListResponse)
 def list_github_risks(
     limit: int = Query(default=200, ge=1, le=1000),
     session: Session = Depends(get_session),
-    _: object = Depends(require_permissions("github_risks.view")),
+    principal: AuthenticatedPrincipal = Depends(require_permissions("github_risks.view")),
 ) -> GitHubRiskEventListResponse:
-    return QueryService(session).list_github_risks(limit=limit)
+    scope = resolve_employee_access_scope(session, principal)
+    return QueryService(session).list_github_risks(limit=limit, scope=scope)
 
 
 @router.get("/review-queue", response_model=ReviewQueueResponse)
 def list_review_queue(
     limit: int = Query(default=100, ge=1, le=500),
     session: Session = Depends(get_session),
-    _: object = Depends(require_permissions("events.review")),
+    principal: AuthenticatedPrincipal = Depends(require_permissions("events.review")),
 ) -> ReviewQueueResponse:
-    return QueryService(session).list_review_queue(limit=limit)
+    scope = resolve_employee_access_scope(session, principal)
+    return QueryService(session).list_review_queue(limit=limit, scope=scope)
 
 
 @router.post("/github-risks", response_model=GitHubRiskEventItem, status_code=status.HTTP_201_CREATED)
@@ -174,8 +184,10 @@ def create_github_risk(
     payload: GitHubRiskEventCreateRequest,
     session: Session = Depends(get_session),
     audit_context: AuditContext = Depends(get_audit_context),
-    _: object = Depends(require_permissions("github_risks.manage")),
+    principal: AuthenticatedPrincipal = Depends(require_permissions("github_risks.manage")),
 ) -> GitHubRiskEventItem:
+    scope = resolve_employee_access_scope(session, principal)
+    require_employee_in_scope(scope, payload.employee_id)
     try:
         return QueryService(session).create_github_risk(payload, audit_context=audit_context)
     except ValueError as exc:
@@ -189,6 +201,40 @@ def get_access_matrix(
     _: object = Depends(require_permissions("access_matrix.view")),
 ) -> AccessMatrixResponse:
     return QueryService(session).get_access_matrix()
+
+
+@router.put("/access/users/{user_id}/employee", response_model=AccessRoleUserItem)
+def bind_access_user_employee(
+    user_id: UUID,
+    payload: AccessUserEmployeeBindingRequest,
+    session: Session = Depends(get_session),
+    _: object = Depends(require_permissions("access_matrix.manage")),
+) -> AccessRoleUserItem:
+    user = session.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    employee = None
+    if payload.employee_id is not None:
+        employee = session.get(Employee, payload.employee_id)
+        if employee is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found")
+
+    user.employee_id = payload.employee_id
+    session.add(user)
+    session.commit()
+    session.refresh(user)
+
+    return AccessRoleUserItem(
+        id=user.id,
+        username=user.username,
+        display_name=user.display_name,
+        email=user.email,
+        employee_id=user.employee_id,
+        employee_name=employee.name if employee is not None else None,
+        employee_no=employee.employee_no if employee is not None else None,
+        status=user.status,
+    )
 
 
 @router.get("/policies", response_model=PolicyListResponse)
@@ -241,8 +287,9 @@ def list_attendance(
     machine_name: str | None = Query(default=None),
     limit: int = Query(default=200, ge=1, le=1000),
     session: Session = Depends(get_session),
-    _: object = Depends(require_permissions("attendance.view")),
+    principal: AuthenticatedPrincipal = Depends(require_permissions("attendance.view")),
 ) -> AttendanceListResponse:
+    scope = resolve_employee_access_scope(session, principal)
     return QueryService(session).list_attendance(
         work_date=work_date,
         anomaly_status=anomaly_status,
@@ -251,6 +298,7 @@ def list_attendance(
         employee_no=(employee_no.strip() or None) if employee_no is not None else None,
         machine_name=(machine_name.strip() or None) if machine_name is not None else None,
         limit=limit,
+        scope=scope,
     )
 
 
@@ -288,8 +336,24 @@ def review_attendance_record(
     payload: AttendanceReviewRequest,
     session: Session = Depends(get_session),
     audit_context: AuditContext = Depends(get_audit_context),
-    _: object = Depends(require_permissions("attendance.manage")),
+    principal: AuthenticatedPrincipal = Depends(require_permissions("attendance.manage")),
 ) -> AttendanceRecordItem:
+    scope = resolve_employee_access_scope(session, principal)
+    existing_record = session.get(AttendanceRecord, record_id)
+    if existing_record is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Attendance record not found")
+    scoped_record_employee_id = existing_record.employee_id
+    if scoped_record_employee_id is None and existing_record.employee_no is not None:
+        matching_employees = session.exec(
+            select(Employee).where(Employee.employee_no == existing_record.employee_no)
+        ).all()
+        if len(matching_employees) == 1:
+            scoped_record_employee_id = matching_employees[0].id
+    if scoped_record_employee_id is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Attendance record not found")
+    if not scope.all_employees and scoped_record_employee_id not in scope.employee_ids:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Attendance record not found")
+
     record = AttendanceService(session).review_record(record_id, payload, audit_context=audit_context)
     if record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Attendance record not found")
@@ -302,6 +366,7 @@ def review_attendance_record(
         employee_no=None,
         machine_name=None,
         limit=1000,
+        scope=scope,
     )
     for item in refreshed.items:
         if item.id == record.id:

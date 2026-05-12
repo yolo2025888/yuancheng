@@ -20,6 +20,7 @@ def _build_auth_user_response(principal: AuthenticatedPrincipal) -> AuthUserResp
         email=user.email,
         role_id=user.role_id,
         role_name=principal.role_name,
+        employee_id=user.employee_id,
         status=user.status,
         permissions=sorted(principal.permissions),
     )

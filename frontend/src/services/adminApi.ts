@@ -103,7 +103,11 @@ type AttendanceRuleMutationResult = {
   data?: AttendanceRuleSummary;
   errorCode?: 'forbidden' | 'not_found' | 'invalid' | 'unavailable';
 };
-type AttendanceReviewResult = { apiStatus: ApiStatus; records?: AttendanceRecord[] };
+type AttendanceReviewResult = {
+  apiStatus: ApiStatus;
+  records?: AttendanceRecord[];
+  errorCode?: 'forbidden' | 'not_found' | 'invalid' | 'unavailable';
+};
 type DashboardSummaryData = ApiResult<{
   kpis: KpiMetric[];
   workStatusSeries: StatusBucket[];
@@ -1240,8 +1244,50 @@ export const adminApi = {
         records: refreshed.data
       };
     } catch (error) {
+      const status = readErrorStatus(error);
+
+      if (status === 401 || status === 403) {
+        return {
+          apiStatus: {
+            source: 'mock',
+            state: 'unavailable',
+            label: 'Access denied',
+            detail: `Attendance review access denied: ${getErrorMessage(error)}`,
+            endpoint
+          },
+          errorCode: 'forbidden'
+        };
+      }
+
+      if (status === 404) {
+        return {
+          apiStatus: {
+            source: 'mock',
+            state: 'unavailable',
+            label: 'Record unavailable',
+            detail: `Attendance record is unavailable: ${getErrorMessage(error)}`,
+            endpoint
+          },
+          errorCode: 'not_found'
+        };
+      }
+
+      if (status === 400 || status === 422) {
+        return {
+          apiStatus: {
+            source: 'mock',
+            state: 'unavailable',
+            label: 'Validation failed',
+            detail: `Attendance review rejected: ${getErrorMessage(error)}`,
+            endpoint
+          },
+          errorCode: 'invalid'
+        };
+      }
+
       return {
-        apiStatus: fallbackStatus(endpoint, `Attendance review was not saved: ${getErrorMessage(error)}`)
+        apiStatus: fallbackStatus(endpoint, `Attendance review was not saved: ${getErrorMessage(error)}`),
+        errorCode: 'unavailable'
       };
     }
   },

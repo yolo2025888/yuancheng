@@ -30,6 +30,7 @@ class AuthUserResponse(BaseModel):
     email: str | None = None
     role_id: UUID | None = None
     role_name: str | None = None
+    employee_id: UUID | None = None
     status: str
     permissions: list[str]
 

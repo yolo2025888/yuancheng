@@ -211,6 +211,7 @@ class User(TimestampedUUIDModel, table=True):
     email: str | None = Field(default=None, index=True)
     password_hash: str
     role_id: UUID | None = Field(default=None, foreign_key="roles.id")
+    employee_id: UUID | None = Field(default=None, foreign_key="employees.id", index=True)
     status: str = Field(default="active", index=True)
 
 

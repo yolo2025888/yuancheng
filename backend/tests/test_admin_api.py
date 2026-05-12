@@ -1419,6 +1419,15 @@ def test_access_matrix_endpoint_returns_roles_users_and_recommended_planning_mat
     unassigned_user_id = uuid4()
 
     with Session(app.state.engine) as session:
+        employee_id = uuid4()
+        session.add(
+            Employee(
+                id=employee_id,
+                name="Alice Worker",
+                employee_no="E-ACCESS-001",
+                department="Engineering",
+            )
+        )
         session.add(
             Role(
                 id=admin_role_id,
@@ -1474,6 +1483,7 @@ def test_access_matrix_endpoint_returns_roles_users_and_recommended_planning_mat
     assert "screenshots.metadata.view" in admin_role["permission_keys"]
     assert "screenshots.image.view" in admin_role["permission_keys"]
     assert "screenshots.retention.manage" in admin_role["permission_keys"]
+    assert "access_matrix.manage" in admin_role["permission_keys"]
 
     reviewer_role = next(role for role in payload["roles"] if role["name"] == "Reviewer")
     assert reviewer_role["source"] == "existing"
@@ -1491,9 +1501,23 @@ def test_access_matrix_endpoint_returns_roles_users_and_recommended_planning_mat
             "username": "bob.pending",
             "display_name": "Bob Pending",
             "email": "bob@example.com",
+            "employee_id": None,
+            "employee_name": None,
+            "employee_no": None,
             "status": "pending",
         }
     ]
+
+    bind_response = client.put(
+        f"/api/access/users/{unassigned_user_id}/employee",
+        headers=headers,
+        json={"employee_id": str(employee_id)},
+    )
+    assert bind_response.status_code == 200
+    bound_user = bind_response.json()
+    assert bound_user["employee_id"] == str(employee_id)
+    assert bound_user["employee_name"] == "Alice Worker"
+    assert bound_user["employee_no"] == "E-ACCESS-001"
 
 
 def test_agent_attendance_records_are_token_gated_listed_and_reviewed(
@@ -1568,6 +1592,7 @@ def test_agent_attendance_records_are_token_gated_listed_and_reviewed(
         username="attendance.manager",
         password="manager-password",
         role_name="Manager",
+        employee_id=seeded_device["employee_id"],
     )
     list_response = client.get(
         "/api/attendance",
@@ -1653,6 +1678,7 @@ def test_attendance_list_resolves_employee_by_employee_no_when_id_is_missing(
         username="attendance.lookup",
         password="manager-password",
         role_name="Manager",
+        employee_id=seeded_device["employee_id"],
     )
     response = client.get(
         "/api/attendance",
@@ -1665,6 +1691,60 @@ def test_attendance_list_resolves_employee_by_employee_no_when_id_is_missing(
     assert [item["id"] for item in payload["items"]] == [str(record_id)]
     assert payload["items"][0]["employee_name"] == "Alice"
     assert payload["items"][0]["department"] == "Engineering"
+
+
+def test_attendance_scope_fails_closed_when_employee_no_is_ambiguous(
+    client: TestClient,
+    seeded_device: dict[str, str],
+    auth_headers,
+) -> None:
+    occurred_at = datetime(2026, 5, 12, 9, 40, tzinfo=timezone.utc)
+    record_id = uuid4()
+
+    with Session(client.app.state.engine) as session:
+        session.add(
+            Employee(
+                name="Duplicate Alice",
+                employee_no="E-001",
+                department="Support",
+            )
+        )
+        session.add(
+            AttendanceRecord(
+                id=record_id,
+                employee_no="E-001",
+                user_name="Alice",
+                machine_name="DEV-PC-001",
+                event_type="clock_in",
+                occurred_at=occurred_at,
+                work_date=occurred_at.date(),
+                anomaly_status="late",
+                anomaly_reasons_json=["Clock-in after 09:30"],
+                source="launcher",
+            )
+        )
+        session.commit()
+
+    headers = auth_headers(
+        username="attendance.ambiguous",
+        password="manager-password",
+        role_name="Risk Analyst",
+        employee_id=seeded_device["employee_id"],
+    )
+    list_response = client.get(
+        "/api/attendance",
+        headers=headers,
+        params={"employee_no": "E-001"},
+    )
+    review_response = client.post(
+        f"/api/attendance/{record_id}/review",
+        headers=headers,
+        json={"review_status": "reviewed", "review_note": "Should fail closed."},
+    )
+
+    assert list_response.status_code == 200
+    assert list_response.json()["items"] == []
+    assert review_response.status_code == 404
 
 
 def test_attendance_rules_endpoint_uses_view_permission(client: TestClient, auth_headers) -> None:

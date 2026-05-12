@@ -8,6 +8,8 @@ from sqlmodel import Session
 
 from app.api.deps import get_session, require_permissions
 from app.schemas.query import TimelineResponse
+from app.services.access_scope import require_employee_in_scope, resolve_employee_access_scope
+from app.services.auth import AuthenticatedPrincipal
 from app.services.queries import QueryService
 
 router = APIRouter(prefix="/api/employees", tags=["timeline"])
@@ -18,6 +20,8 @@ def get_employee_timeline(
     employee_id: UUID,
     date_value: date = Query(alias="date"),
     session: Session = Depends(get_session),
-    _: object = Depends(require_permissions("screenshots.metadata.view")),
+    principal: AuthenticatedPrincipal = Depends(require_permissions("screenshots.metadata.view")),
 ) -> TimelineResponse:
+    scope = resolve_employee_access_scope(session, principal)
+    require_employee_in_scope(scope, employee_id)
     return QueryService(session).get_employee_timeline(employee_id=employee_id, date_value=date_value)

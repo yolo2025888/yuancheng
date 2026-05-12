@@ -8,7 +8,9 @@ from sqlmodel import Session
 
 from app.api.deps import get_audit_context, get_session, require_permissions
 from app.schemas.query import BehaviorEventDetail, BehaviorEventListResponse, BehaviorEventReviewRequest
+from app.services.access_scope import resolve_employee_access_scope
 from app.services.audit import AuditContext
+from app.services.auth import AuthenticatedPrincipal
 from app.services.queries import QueryService
 
 router = APIRouter(prefix="/api/events", tags=["events"])
@@ -23,8 +25,9 @@ def list_events(
     start_from: datetime | None = Query(default=None, alias="from"),
     end_to: datetime | None = Query(default=None, alias="to"),
     session: Session = Depends(get_session),
-    _: object = Depends(require_permissions("events.review")),
+    principal: AuthenticatedPrincipal = Depends(require_permissions("events.review")),
 ) -> BehaviorEventListResponse:
+    scope = resolve_employee_access_scope(session, principal)
     return QueryService(session).list_events(
         employee_id=employee_id,
         severity=severity,
@@ -32,6 +35,7 @@ def list_events(
         event_type=event_type,
         start_from=start_from,
         end_to=end_to,
+        scope=scope,
     )
 
 
@@ -39,9 +43,10 @@ def list_events(
 def get_event(
     event_id: UUID,
     session: Session = Depends(get_session),
-    _: object = Depends(require_permissions("events.review")),
+    principal: AuthenticatedPrincipal = Depends(require_permissions("events.review")),
 ) -> BehaviorEventDetail:
-    event = QueryService(session).get_event(event_id)
+    scope = resolve_employee_access_scope(session, principal)
+    event = QueryService(session).get_event(event_id, scope=scope)
     if event is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
     return event
@@ -53,9 +58,10 @@ def review_event(
     payload: BehaviorEventReviewRequest,
     session: Session = Depends(get_session),
     audit_context: AuditContext = Depends(get_audit_context),
-    _: object = Depends(require_permissions("events.review")),
+    principal: AuthenticatedPrincipal = Depends(require_permissions("events.review")),
 ) -> BehaviorEventDetail:
-    event = QueryService(session).review_event(event_id, payload, audit_context=audit_context)
+    scope = resolve_employee_access_scope(session, principal)
+    event = QueryService(session).review_event(event_id, payload, audit_context=audit_context, scope=scope)
     if event is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
     return event

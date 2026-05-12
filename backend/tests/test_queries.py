@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from uuid import UUID
+from pathlib import Path
+from uuid import UUID, uuid4
 
 from fastapi.testclient import TestClient
-from sqlmodel import Session
+from sqlmodel import Session, select
 
-from app.models import BehaviorEvent, ScreenDiff, Screenshot
+from app.models import AttendanceRecord, BehaviorEvent, Device, Employee, ScreenDiff, Screenshot, User
 
 
 def test_timeline_and_events_queries(client: TestClient, seeded_device: dict[str, str], auth_headers) -> None:
@@ -190,3 +191,259 @@ def test_screenshot_list_and_detail_queries(client: TestClient, seeded_device: d
     assert detail_payload["risk_events"] == []
     assert detail_payload["activity_type"] == "development"
     assert detail_payload["activity_summary"]
+
+
+def test_scoped_role_limits_directory_screenshots_images_and_timeline(
+    client: TestClient,
+    seeded_device: dict[str, str],
+    auth_headers,
+) -> None:
+    admin_headers = auth_headers(bootstrap=True)
+    scoped_headers = auth_headers(
+        username="dana.manager",
+        password="manager-password",
+        role_name="Risk Analyst",
+        display_name="Dana",
+        email="dana@example.test",
+    )
+    unbound_headers = auth_headers(
+        username="E-001",
+        password="unbound-password",
+        role_name="Risk Analyst",
+        display_name="Unbound Analyst",
+        email="E-001@example.test",
+    )
+    employee_id = UUID(seeded_device["employee_id"])
+    device_id = UUID(seeded_device["device_id"])
+    manager_employee_id = uuid4()
+    other_manager_employee_id = uuid4()
+    other_employee_id = uuid4()
+    other_device_id = uuid4()
+    storage_root = Path(client.app.state.settings.storage_root_dir)
+    in_scope_image = storage_root / "screenshots" / "in-scope.png"
+    in_scope_thumb = storage_root / "screenshots" / "in-scope-thumb.png"
+    out_scope_image = storage_root / "screenshots" / "out-scope.png"
+    out_scope_thumb = storage_root / "screenshots" / "out-scope-thumb.png"
+    for path in (in_scope_image, in_scope_thumb, out_scope_image, out_scope_thumb):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"image")
+
+    with Session(client.app.state.engine) as session:
+        user = session.exec(select(User).where(User.username == "dana.manager")).one()
+        user.employee_id = manager_employee_id
+        session.add(user)
+
+        session.add(
+            Employee(
+                id=manager_employee_id,
+                name="Dana",
+                employee_no="M-001",
+                department="Engineering",
+                job_role="Engineering Manager",
+            )
+        )
+        session.add(
+            Employee(
+                id=other_manager_employee_id,
+                name="Dana",
+                employee_no="M-002",
+                department="Engineering",
+                job_role="Engineering Manager",
+            )
+        )
+        employee = session.get(Employee, employee_id)
+        assert employee is not None
+        employee.manager_id = manager_employee_id
+        employee.manager_name = "Dana"
+        session.add(employee)
+
+        session.add(
+            Employee(
+                id=other_employee_id,
+                name="Bob",
+                employee_no="E-002",
+                department="Engineering",
+                manager_id=other_manager_employee_id,
+                manager_name="Dana",
+            )
+        )
+        session.add(
+            Device(
+                id=other_device_id,
+                employee_id=other_employee_id,
+                hostname="DEV-PC-002",
+                os_type="windows",
+                agent_version="0.1.0",
+                status="online",
+            )
+        )
+        session.add(
+            Screenshot(
+                employee_id=employee_id,
+                device_id=device_id,
+                captured_at=datetime(2026, 5, 11, 9, 0, tzinfo=timezone.utc),
+                image_uri=in_scope_image.relative_to(storage_root.parent).as_posix(),
+                thumb_uri=in_scope_thumb.relative_to(storage_root.parent).as_posix(),
+                width=1,
+                height=1,
+                upload_status="completed",
+            )
+        )
+        session.add(
+            Screenshot(
+                employee_id=other_employee_id,
+                device_id=other_device_id,
+                captured_at=datetime(2026, 5, 11, 10, 0, tzinfo=timezone.utc),
+                image_uri=out_scope_image.relative_to(storage_root.parent).as_posix(),
+                thumb_uri=out_scope_thumb.relative_to(storage_root.parent).as_posix(),
+                width=1,
+                height=1,
+                upload_status="completed",
+            )
+        )
+        session.add(
+            BehaviorEvent(
+                employee_id=employee_id,
+                device_id=device_id,
+                event_type="github_clone",
+                severity="high",
+                start_at=datetime(2026, 5, 11, 9, 5, tzinfo=timezone.utc),
+                status="open",
+                reason="In-scope review.",
+                details_json={
+                    "repository": "company/private-repo",
+                    "action": "clone",
+                    "risk_rule": "Sensitive repository clone",
+                },
+            )
+        )
+        session.add(
+            BehaviorEvent(
+                employee_id=other_employee_id,
+                device_id=other_device_id,
+                event_type="github_fetch",
+                severity="critical",
+                start_at=datetime(2026, 5, 11, 10, 5, tzinfo=timezone.utc),
+                status="open",
+                reason="Out-of-scope review.",
+                details_json={
+                    "repository": "company/other-repo",
+                    "action": "fetch",
+                    "risk_rule": "Frequent fetch",
+                },
+            )
+        )
+        session.add(
+            AttendanceRecord(
+                employee_id=employee_id,
+                device_id=device_id,
+                employee_no="E-001",
+                user_name="Alice",
+                machine_name="DEV-PC-001",
+                event_type="clock_in",
+                occurred_at=datetime(2026, 5, 11, 8, 58, tzinfo=timezone.utc),
+                work_date=datetime(2026, 5, 11, tzinfo=timezone.utc).date(),
+            )
+        )
+        session.add(
+            AttendanceRecord(
+                employee_id=other_employee_id,
+                device_id=other_device_id,
+                employee_no="E-002",
+                user_name="Bob",
+                machine_name="DEV-PC-002",
+                event_type="clock_in",
+                occurred_at=datetime(2026, 5, 11, 8, 57, tzinfo=timezone.utc),
+                work_date=datetime(2026, 5, 11, tzinfo=timezone.utc).date(),
+            )
+        )
+        session.commit()
+
+        screenshots = session.exec(select(Screenshot).order_by(Screenshot.captured_at.asc())).all()
+        in_scope_screenshot_id = screenshots[0].id
+        out_scope_screenshot_id = screenshots[1].id
+        events = session.exec(select(BehaviorEvent).order_by(BehaviorEvent.start_at.asc())).all()
+        in_scope_event_id = events[0].id
+        out_scope_event_id = events[1].id
+        attendance_records = session.exec(select(AttendanceRecord).order_by(AttendanceRecord.occurred_at.asc())).all()
+        out_scope_attendance_id = attendance_records[0].id
+        in_scope_attendance_id = attendance_records[1].id
+
+    employees_response = client.get("/api/employees", headers=scoped_headers)
+    unbound_employees_response = client.get("/api/employees", headers=unbound_headers)
+    devices_response = client.get("/api/devices", headers=scoped_headers)
+    dashboard_response = client.get("/api/dashboard/summary", headers=scoped_headers)
+    risk_scores_response = client.get("/api/risk/scores", headers=scoped_headers)
+    github_risks_response = client.get("/api/github-risks", headers=scoped_headers)
+    attendance_response = client.get("/api/attendance", headers=scoped_headers)
+    screenshots_response = client.get("/api/screenshots", headers=scoped_headers)
+    in_scope_detail_response = client.get(f"/api/screenshots/{in_scope_screenshot_id}", headers=scoped_headers)
+    out_scope_detail_response = client.get(f"/api/screenshots/{out_scope_screenshot_id}", headers=scoped_headers)
+    out_scope_image_response = client.get(
+        f"/api/screenshots/{out_scope_screenshot_id}/image",
+        params={"reason": "Manager scope check"},
+        headers=admin_headers,
+    )
+    scoped_out_scope_image_response = client.get(
+        f"/api/screenshots/{out_scope_screenshot_id}/image",
+        params={"reason": "Scoped role check"},
+        headers=scoped_headers,
+    )
+    out_scope_timeline_response = client.get(
+        f"/api/employees/{other_employee_id}/timeline",
+        params={"date": "2026-05-11"},
+        headers=scoped_headers,
+    )
+    review_queue_response = client.get("/api/review-queue", headers=scoped_headers)
+    events_response = client.get("/api/events", headers=scoped_headers)
+    in_scope_event_response = client.get(f"/api/events/{in_scope_event_id}", headers=scoped_headers)
+    out_scope_event_response = client.get(f"/api/events/{out_scope_event_id}", headers=scoped_headers)
+    out_scope_event_review_response = client.post(
+        f"/api/events/{out_scope_event_id}/review",
+        headers=scoped_headers,
+        json={"status": "dismissed", "review_note": "Should not be allowed"},
+    )
+    out_scope_attendance_review_response = client.post(
+        f"/api/attendance/{out_scope_attendance_id}/review",
+        headers=scoped_headers,
+        json={"review_status": "reviewed", "review_note": "Should not be allowed"},
+    )
+
+    assert employees_response.status_code == 200
+    assert {item["id"] for item in employees_response.json()["items"]} == {
+        str(manager_employee_id),
+        str(employee_id),
+    }
+    assert unbound_employees_response.status_code == 200
+    assert unbound_employees_response.json()["items"] == []
+    assert devices_response.status_code == 200
+    assert [item["id"] for item in devices_response.json()["items"]] == [str(device_id)]
+    assert dashboard_response.status_code == 200
+    assert dashboard_response.json()["employee_count"] == 2
+    assert dashboard_response.json()["device_count"] == 1
+    assert dashboard_response.json()["open_event_count"] == 1
+    assert risk_scores_response.status_code == 200
+    assert {item["employee_id"] for item in risk_scores_response.json()["items"]} == {
+        str(manager_employee_id),
+        str(employee_id),
+    }
+    assert github_risks_response.status_code == 200
+    assert [item["id"] for item in github_risks_response.json()["items"]] == [str(in_scope_event_id)]
+    assert attendance_response.status_code == 200
+    assert [item["id"] for item in attendance_response.json()["items"]] == [str(in_scope_attendance_id)]
+    assert screenshots_response.status_code == 200
+    assert [item["id"] for item in screenshots_response.json()["items"]] == [str(in_scope_screenshot_id)]
+    assert in_scope_detail_response.status_code == 200
+    assert out_scope_detail_response.status_code == 404
+    assert out_scope_image_response.status_code == 200
+    assert scoped_out_scope_image_response.status_code == 403
+    assert scoped_out_scope_image_response.json()["detail"] == "Employee is outside the current access scope"
+    assert out_scope_timeline_response.status_code == 403
+    assert review_queue_response.status_code == 200
+    assert [item["related_event_id"] for item in review_queue_response.json()["items"]] == [str(in_scope_event_id)]
+    assert events_response.status_code == 200
+    assert [item["id"] for item in events_response.json()["items"]] == [str(in_scope_event_id)]
+    assert in_scope_event_response.status_code == 200
+    assert out_scope_event_response.status_code == 404
+    assert out_scope_event_review_response.status_code == 404
+    assert out_scope_attendance_review_response.status_code == 404

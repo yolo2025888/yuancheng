@@ -457,6 +457,9 @@ class AccessRoleUserItem(BaseModel):
     username: str
     display_name: str | None = None
     email: str | None = None
+    employee_id: UUID | None = None
+    employee_name: str | None = None
+    employee_no: str | None = None
     status: str
 
 
@@ -475,6 +478,10 @@ class AccessMatrixResponse(BaseModel):
     capabilities: list[AccessCapabilityItem]
     roles: list[AccessRoleMatrixItem]
     unassigned_users: list[AccessRoleUserItem] = Field(default_factory=list)
+
+
+class AccessUserEmployeeBindingRequest(BaseModel):
+    employee_id: UUID | None = None
 
 
 class EmployeeImportResponse(BaseModel):

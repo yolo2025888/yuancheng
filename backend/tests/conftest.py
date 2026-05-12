@@ -4,7 +4,7 @@ from collections.abc import Generator
 from datetime import datetime, timedelta, timezone
 import os
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -94,6 +94,7 @@ def auth_headers(client: TestClient):
         role_name: str | None = "Admin",
         display_name: str = "Test Admin",
         email: str | None = "test-admin@example.test",
+        employee_id: str | UUID | None = None,
         status: str = "active",
         bootstrap: bool = False,
     ) -> dict[str, str]:
@@ -117,6 +118,7 @@ def auth_headers(client: TestClient):
                         username=username,
                         display_name=display_name,
                         email=email,
+                        employee_id=UUID(str(employee_id)) if employee_id is not None else None,
                         password_hash=hash_password(
                             password,
                             iterations=client.app.state.settings.password_hash_iterations,
@@ -128,6 +130,7 @@ def auth_headers(client: TestClient):
                 else:
                     user.display_name = display_name
                     user.email = email
+                    user.employee_id = UUID(str(employee_id)) if employee_id is not None else None
                     user.password_hash = hash_password(
                         password,
                         iterations=client.app.state.settings.password_hash_iterations,

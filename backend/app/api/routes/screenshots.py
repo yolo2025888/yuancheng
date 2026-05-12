@@ -10,7 +10,9 @@ from app.api.deps import get_audit_context, get_session, get_settings, require_p
 from app.core.config import Settings
 from app.models import Screenshot
 from app.schemas.query import ScreenshotItem, ScreenshotListResponse
+from app.services.access_scope import require_employee_in_scope, resolve_employee_access_scope
 from app.services.audit import AuditContext, AuditService
+from app.services.auth import AuthenticatedPrincipal
 from app.services.queries import QueryService
 from app.services.storage import LocalScreenshotStorage
 
@@ -23,12 +25,14 @@ def list_screenshots(
     employee_id: UUID | None = Query(default=None),
     limit: int = Query(default=20, ge=1, le=200),
     session: Session = Depends(get_session),
-    _: object = Depends(require_permissions("screenshots.metadata.view")),
+    principal: AuthenticatedPrincipal = Depends(require_permissions("screenshots.metadata.view")),
 ) -> ScreenshotListResponse:
+    scope = resolve_employee_access_scope(session, principal)
     return QueryService(session).list_screenshots(
         device_id=device_id,
         employee_id=employee_id,
         limit=limit,
+        scope=scope,
     )
 
 
@@ -36,9 +40,10 @@ def list_screenshots(
 def get_screenshot(
     screenshot_id: UUID,
     session: Session = Depends(get_session),
-    _: object = Depends(require_permissions("screenshots.metadata.view")),
+    principal: AuthenticatedPrincipal = Depends(require_permissions("screenshots.metadata.view")),
 ) -> ScreenshotItem:
-    screenshot = QueryService(session).get_screenshot(screenshot_id)
+    scope = resolve_employee_access_scope(session, principal)
+    screenshot = QueryService(session).get_screenshot(screenshot_id, scope=scope)
     if screenshot is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Screenshot not found")
     return screenshot
@@ -51,9 +56,11 @@ def get_screenshot_image(
     session: Session = Depends(get_session),
     settings: Settings = Depends(get_settings),
     audit_context: AuditContext = Depends(get_audit_context),
-    _: object = Depends(require_permissions("screenshots.image.view")),
+    principal: AuthenticatedPrincipal = Depends(require_permissions("screenshots.image.view")),
 ) -> FileResponse:
     screenshot = _get_screenshot_record(session, screenshot_id)
+    scope = resolve_employee_access_scope(session, principal)
+    require_employee_in_scope(scope, screenshot.employee_id)
     access_reason = _validate_access_reason(reason)
     response = _build_screenshot_file_response(settings, screenshot.image_uri, "Screenshot image not found")
     _log_screenshot_file_access(
@@ -73,9 +80,11 @@ def get_screenshot_thumbnail(
     session: Session = Depends(get_session),
     settings: Settings = Depends(get_settings),
     audit_context: AuditContext = Depends(get_audit_context),
-    _: object = Depends(require_permissions("screenshots.image.view")),
+    principal: AuthenticatedPrincipal = Depends(require_permissions("screenshots.image.view")),
 ) -> FileResponse:
     screenshot = _get_screenshot_record(session, screenshot_id)
+    scope = resolve_employee_access_scope(session, principal)
+    require_employee_in_scope(scope, screenshot.employee_id)
     access_reason = _validate_access_reason(reason)
     response = _build_screenshot_file_response(settings, screenshot.thumb_uri, "Screenshot thumbnail not found")
     _log_screenshot_file_access(
