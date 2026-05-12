@@ -9,6 +9,7 @@
 
   <ItemGroup>
     <PackageReference Include="WixToolset.Heat" Version="6.0.2" />
+    <PackageReference Include="WixToolset.Util.wixext" Version="6.0.2" />
     <HarvestDirectory Include="$(InstallerPayloadRoot)">
       <ComponentGroupName>InstallerPayloadGroup</ComponentGroupName>
       <DirectoryRefId>INSTALLFOLDER</DirectoryRefId>

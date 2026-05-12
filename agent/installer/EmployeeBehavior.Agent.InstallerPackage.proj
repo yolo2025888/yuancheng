@@ -32,6 +32,12 @@
     <PackageEntryFiles Include="$(MSBuildThisFileDirectory)package\Install-AgentInstallerPackage.ps1">
       <PackageRelativePath>Install-AgentInstallerPackage.ps1</PackageRelativePath>
     </PackageEntryFiles>
+    <PackageEntryFiles Include="$(MSBuildThisFileDirectory)package\Invoke-MsiPackagedInstall.ps1">
+      <PackageRelativePath>Invoke-MsiPackagedInstall.ps1</PackageRelativePath>
+    </PackageEntryFiles>
+    <PackageEntryFiles Include="$(MSBuildThisFileDirectory)package\Invoke-MsiPackagedUninstall.ps1">
+      <PackageRelativePath>Invoke-MsiPackagedUninstall.ps1</PackageRelativePath>
+    </PackageEntryFiles>
     <PackageEntryFiles Include="$(MSBuildThisFileDirectory)package\Uninstall-AgentInstallerPackage.ps1">
       <PackageRelativePath>Uninstall-AgentInstallerPackage.ps1</PackageRelativePath>
     </PackageEntryFiles>

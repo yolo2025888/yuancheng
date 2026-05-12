@@ -12,6 +12,40 @@
     <MajorUpgrade DowngradeErrorMessage="A newer version of Employee Behavior Agent Installer is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
+    <Property Id="RUNPACKAGEDINSTALL" Value="0" Secure="yes" />
+    <Property Id="HELPERTASKUSER" Secure="yes" />
+    <Property Id="RUNPACKAGEDUNINSTALL" Value="1" Secure="yes" />
+
+    <SetProperty
+      Id="RunPackagedInstall"
+      Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -ExecutionPolicy Bypass -File &quot;[INSTALLFOLDER]Invoke-MsiPackagedInstall.ps1&quot; -PackageRoot &quot;[INSTALLFOLDER]&quot; -HelperTaskUser &quot;[HELPERTASKUSER]&quot;"
+      Before="RunPackagedInstall"
+      Sequence="execute"
+      Condition="NOT Installed AND RUNPACKAGEDINSTALL=1 AND HELPERTASKUSER" />
+
+    <CustomAction
+      Id="RunPackagedInstall"
+      BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)"
+      DllEntry="WixQuietExec"
+      Execute="deferred"
+      Impersonate="no"
+      Return="check" />
+
+    <SetProperty
+      Id="RunPackagedUninstall"
+      Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -ExecutionPolicy Bypass -File &quot;[INSTALLFOLDER]Invoke-MsiPackagedUninstall.ps1&quot; -PackageRoot &quot;[INSTALLFOLDER]&quot; -RemoveInstalledFiles"
+      Before="RunPackagedUninstall"
+      Sequence="execute"
+      Condition="REMOVE~=&quot;ALL&quot; AND RUNPACKAGEDUNINSTALL=1" />
+
+    <CustomAction
+      Id="RunPackagedUninstall"
+      BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)"
+      DllEntry="WixQuietExec"
+      Execute="deferred"
+      Impersonate="no"
+      Return="check" />
+
     <StandardDirectory Id="ProgramFilesFolder">
       <Directory Id="COMPANYDIR" Name="EmployeeBehaviorAgent">
         <Directory Id="INSTALLFOLDER" Name="InstallerPackage" />
@@ -21,5 +55,10 @@
     <Feature Id="MainFeature" Title="Employee Behavior Agent Installer Package" Level="1">
       <ComponentGroupRef Id="InstallerPayloadGroup" />
     </Feature>
+
+    <InstallExecuteSequence>
+      <Custom Action="RunPackagedInstall" After="InstallFiles" Condition="NOT Installed AND RUNPACKAGEDINSTALL=1 AND HELPERTASKUSER" />
+      <Custom Action="RunPackagedUninstall" Before="RemoveFiles" Condition="REMOVE~=&quot;ALL&quot; AND RUNPACKAGEDUNINSTALL=1" />
+    </InstallExecuteSequence>
   </Package>
 </Wix>

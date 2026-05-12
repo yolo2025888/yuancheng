@@ -151,6 +151,8 @@ $launcherRootExists = Test-RequiredDirectory -Path $launcherRoot -Check 'Launche
 foreach ($rootFile in @(
     'README.md',
     'Install-AgentInstallerPackage.ps1',
+    'Invoke-MsiPackagedInstall.ps1',
+    'Invoke-MsiPackagedUninstall.ps1',
     'Run-AgentInstalledAcceptance.ps1',
     'Validate-AgentInstallerPackage.ps1',
     'Uninstall-AgentInstallerPackage.ps1',
