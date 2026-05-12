@@ -43,8 +43,70 @@ function Test-UnsafeProductionHost {
         $normalizedHost -eq '127.0.0.1' -or
         $normalizedHost -eq '::1' -or
         $normalizedHost.EndsWith('.local') -or
+        $normalizedHost.EndsWith('.example') -or
+        $normalizedHost.EndsWith('.test') -or
+        $normalizedHost.EndsWith('.invalid') -or
+        $normalizedHost -eq 'example.com' -or
+        $normalizedHost.EndsWith('.example.com') -or
+        $normalizedHost -eq 'example.net' -or
+        $normalizedHost.EndsWith('.example.net') -or
+        $normalizedHost -eq 'example.org' -or
+        $normalizedHost.EndsWith('.example.org') -or
         $normalizedHost.Contains('example.internal') -or
         $normalizedHost.Contains('replace-')
+}
+
+function Test-ReadableFile {
+    param(
+        [string]$Path
+    )
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return $false
+    }
+
+    $stream = $null
+    try {
+        $stream = [System.IO.File]::OpenRead($Path)
+        return $true
+    }
+    catch {
+        return $false
+    }
+    finally {
+        if ($null -ne $stream) {
+            $stream.Dispose()
+        }
+    }
+}
+
+function Test-IssuedV2ApiToken {
+    param(
+        [string]$Value
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        return $false
+    }
+
+    return $Value.Trim().StartsWith('v2:', [System.StringComparison]::OrdinalIgnoreCase)
+}
+
+function Resolve-DefaultConfigPath {
+    param(
+        [Parameter(Mandatory)]
+        [string]$ScriptRoot
+    )
+
+    $resolvedScriptRoot = [System.IO.Path]::GetFullPath($ScriptRoot)
+    $scriptDirectoryName = Split-Path -Leaf $resolvedScriptRoot
+    $localConfigPath = Join-Path $resolvedScriptRoot 'appsettings.json'
+
+    if ($scriptDirectoryName -ieq 'Service' -and (Test-Path -LiteralPath $localConfigPath -PathType Leaf)) {
+        return $localConfigPath
+    }
+
+    return Join-Path $resolvedScriptRoot '..\publish\Service\appsettings.json'
 }
 
 if ($ClearApiToken -and $PSBoundParameters.ContainsKey('ApiToken')) {
@@ -59,7 +121,7 @@ else {
 }
 
 if ([string]::IsNullOrWhiteSpace($ConfigPath)) {
-    $ConfigPath = Join-Path $scriptRoot '..\publish\Service\appsettings.json'
+    $ConfigPath = Resolve-DefaultConfigPath -ScriptRoot $scriptRoot
 }
 
 $resolvedConfigPath = [System.IO.Path]::GetFullPath([System.Environment]::ExpandEnvironmentVariables($ConfigPath))
@@ -87,23 +149,9 @@ if (-not [System.IO.Path]::IsPathRooted($resolvedProtectedTokenPath)) {
     throw "ProtectedTokenPath must resolve to a rooted path: $ProtectedTokenPath"
 }
 
-if ($ClearApiToken -and -not (Test-Path -LiteralPath $resolvedProtectedTokenPath -PathType Leaf)) {
+$protectedTokenReadable = Test-ReadableFile -Path $resolvedProtectedTokenPath
+if ($ClearApiToken -and -not $protectedTokenReadable) {
     throw "ProtectedTokenPath must point to an existing protected token file when -ClearApiToken is used: $resolvedProtectedTokenPath"
-}
-
-if ($ClearApiToken) {
-    $tokenFileStream = $null
-    try {
-        $tokenFileStream = [System.IO.File]::OpenRead($resolvedProtectedTokenPath)
-    }
-    catch {
-        throw "ProtectedTokenPath must be readable when -ClearApiToken is used: $resolvedProtectedTokenPath"
-    }
-    finally {
-        if ($null -ne $tokenFileStream) {
-            $tokenFileStream.Dispose()
-        }
-    }
 }
 
 $rawConfig = Get-Content -LiteralPath $resolvedConfigPath -Raw
@@ -125,6 +173,7 @@ $agentService.ProtectedTokenPath = $resolvedProtectedTokenPath
 $agentService.DryRun = $false
 
 $apiTokenMode = 'preserved'
+$effectiveApiToken = ''
 if ($ClearApiToken) {
     $agentService.ApiToken = ''
     $apiTokenMode = 'cleared'
@@ -140,7 +189,15 @@ elseif ($PSBoundParameters.ContainsKey('ApiToken')) {
     }
 
     $agentService.ApiToken = $normalizedApiToken
+    $effectiveApiToken = $normalizedApiToken
     $apiTokenMode = 'updated'
+}
+else {
+    $effectiveApiToken = [string]$agentService.ApiToken
+}
+
+if (-not $protectedTokenReadable -and -not (Test-IssuedV2ApiToken -Value $effectiveApiToken)) {
+    throw "DryRun=false requires either a readable ProtectedTokenPath file or an issued v2:<device_id>:<secret> ApiToken."
 }
 
 $config | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $resolvedConfigPath -Encoding UTF8

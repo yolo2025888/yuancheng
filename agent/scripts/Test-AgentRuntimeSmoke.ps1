@@ -2,6 +2,7 @@
 param(
     [string]$PublishRoot = '',
     [int]$StartupTimeoutSeconds = 10,
+    [switch]$AllowExistingBackgroundProcesses,
     [switch]$CleanupStartedProcesses
 )
 
@@ -66,6 +67,17 @@ if (-not (Test-Path -LiteralPath $launcherPath -PathType Leaf)) {
 $before = @{}
 foreach ($name in $processNames) {
     $before[$name] = @(Get-ProcessIdsByName -Name $name)
+}
+
+$existingBackgroundProcesses = @(
+    foreach ($name in $backgroundProcessNames) {
+        if (@($before[$name]).Count -gt 0) {
+            $name
+        }
+    }
+)
+if ($existingBackgroundProcesses.Count -gt 0 -and -not $AllowExistingBackgroundProcesses) {
+    throw "Runtime smoke requires a clean state before launch. Stop existing background process(es) first: $($existingBackgroundProcesses -join ', ')."
 }
 
 $startedLauncher = $null

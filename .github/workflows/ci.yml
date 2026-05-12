@@ -36,6 +36,9 @@ jobs:
       - name: Run backend tests
         run: python -m pytest
 
+      - name: Run backend attendance smoke
+        run: python scripts/smoke_attendance_flow.py
+
   frontend:
     name: Frontend build and audit
     runs-on: ubuntu-latest
@@ -114,17 +117,40 @@ jobs:
             'github/workflows/ci.yml',
             'agent/README.md',
             'docs/AGENT_DEPLOYMENT_RUNBOOK.md',
+            'agent/scripts/Test-LauncherDisclosure.ps1',
+            'agent/src/EmployeeBehavior.Agent.Launcher/LauncherForm.cs',
             'agent/src/EmployeeBehavior.Agent.SessionHelper/appsettings.json.example',
+            'frontend/src/pages/ScreenshotDetail.tsx',
+            'frontend/src/services/adminApi.ts',
             'frontend/src/pages/Policies.tsx'
           )
-          $matches = Get-ChildItem -Recurse -File |
+          $excludedPathPrefixes = @(
+            '.git/',
+            '.codex-pytmp/',
+            '.codex-smoke-tmp/',
+            '.pytest_cache/',
+            '.pytest_tmp/',
+            'frontend/node_modules/',
+            'frontend/dist/',
+            'agent/publish/'
+          )
+          $excludedPathFragments = @(
+            '/bin/',
+            '/obj/'
+          )
+          $excludedFiles = @(
+            'frontend/package-lock.json'
+          )
+          $candidateFiles = Get-ChildItem -Recurse -File -ErrorAction SilentlyContinue |
             Where-Object {
-              $_.FullName -notmatch '\\.git\\' -and
-              $_.FullName -notmatch 'frontend[\\/]node_modules' -and
-              $_.FullName -notmatch 'agent[\\/]publish' -and
-              $_.FullName -notmatch '[\\/]bin[\\/]' -and
-              $_.FullName -notmatch '[\\/]obj[\\/]'
-            } |
+              $relative = Resolve-Path -Relative $_.FullName
+              $relative = $relative.TrimStart('.', '/', '\').Replace('\', '/')
+              $isExcludedPrefix = @($excludedPathPrefixes | Where-Object { $relative.StartsWith($_, [System.StringComparison]::OrdinalIgnoreCase) }).Count -gt 0
+              $isExcludedFragment = @($excludedPathFragments | Where-Object { $relative.IndexOf($_, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 }).Count -gt 0
+              -not $isExcludedPrefix -and -not $isExcludedFragment -and $excludedFiles -notcontains $relative
+            }
+
+          $matches = $candidateFiles |
             Select-String -Pattern $patterns -SimpleMatch |
             Where-Object {
               $relative = Resolve-Path -Relative $_.Path
@@ -150,7 +176,7 @@ jobs:
             'MINIO_ROOT_PASSWORD:\s*monitor',
             'MINIO_ROOT_USER:\s*monitor'
           )
-          $matches = Get-ChildItem -Recurse -File |
+          $matches = Get-ChildItem -Recurse -File -ErrorAction SilentlyContinue |
             Where-Object {
               $_.FullName -notmatch '\\.git\\' -and
               $_.FullName -notmatch 'frontend[\\/]node_modules' -and
@@ -219,6 +245,84 @@ jobs:
           -ServiceConfigPath ./agent/src/EmployeeBehavior.Agent.Service/appsettings.json.example
           -HelperConfigPath ./agent/src/EmployeeBehavior.Agent.SessionHelper/appsettings.json.example
 
+      - name: Run agent safety smoke scripts
+        shell: pwsh
+        run: |
+          ./agent/scripts/Test-LauncherDisclosure.ps1
+          ./agent/scripts/Test-ScreenshotCaptureGuard.ps1
+
+      - name: Smoke Set-AgentProductionConfig success path
+        shell: pwsh
+        run: |
+          $tempRoot = Join-Path $env:RUNNER_TEMP 'set-agent-production-config-success'
+          if (Test-Path -LiteralPath $tempRoot) {
+            Remove-Item -LiteralPath $tempRoot -Recurse -Force
+          }
+
+          New-Item -ItemType Directory -Path $tempRoot | Out-Null
+          $configPath = Join-Path $tempRoot 'appsettings.json'
+          $tokenPath = Join-Path $tempRoot 'agent-token.protected.json'
+
+          Copy-Item -LiteralPath ./agent/src/EmployeeBehavior.Agent.Service/appsettings.json.example -Destination $configPath -Force
+          Set-Content -LiteralPath $tokenPath -Value '{"token":"smoke"}' -Encoding UTF8
+
+          $result = ./agent/scripts/Set-AgentProductionConfig.ps1 `
+            -ConfigPath $configPath `
+            -ApiBaseUrl 'https://agent-ci.company-monitoring.com' `
+            -ProtectedTokenPath $tokenPath `
+            -ClearApiToken
+
+          if (-not $result) {
+            throw 'Set-AgentProductionConfig.ps1 did not return a result object for the success smoke path.'
+          }
+
+          $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
+          if ($config.AgentService.ApiBaseUrl -ne 'https://agent-ci.company-monitoring.com') {
+            throw "Expected ApiBaseUrl rewrite to persist in $configPath."
+          }
+
+          if ($config.AgentService.ProtectedTokenPath -ne $tokenPath) {
+            throw "Expected ProtectedTokenPath rewrite to persist in $configPath."
+          }
+
+          if ($config.AgentService.DryRun -ne $false) {
+            throw "Expected DryRun=false after Set-AgentProductionConfig success smoke in $configPath."
+          }
+
+          if ($config.AgentService.ApiToken -ne '') {
+            throw "Expected ApiToken to be cleared after Set-AgentProductionConfig success smoke in $configPath."
+          }
+
+          if ($result.ApiTokenMode -ne 'cleared') {
+            throw "Expected ApiTokenMode=cleared but got '$($result.ApiTokenMode)'."
+          }
+
+      - name: Smoke Set-AgentProductionConfig rejection path
+        shell: pwsh
+        run: |
+          $tempRoot = Join-Path $env:RUNNER_TEMP 'set-agent-production-config-reject'
+          if (Test-Path -LiteralPath $tempRoot) {
+            Remove-Item -LiteralPath $tempRoot -Recurse -Force
+          }
+
+          New-Item -ItemType Directory -Path $tempRoot | Out-Null
+          $configPath = Join-Path $tempRoot 'appsettings.json'
+          Copy-Item -LiteralPath ./agent/src/EmployeeBehavior.Agent.Service/appsettings.json.example -Destination $configPath -Force
+
+          try {
+            ./agent/scripts/Set-AgentProductionConfig.ps1 `
+              -ConfigPath $configPath `
+              -ApiBaseUrl 'https://api.company.example' `
+              -ProtectedTokenPath (Join-Path $tempRoot 'missing-token.protected.json') `
+              -ClearApiToken
+            throw 'Expected Set-AgentProductionConfig.ps1 rejection smoke to fail for reserved ApiBaseUrl.'
+          }
+          catch {
+            if ($_.Exception.Message -notmatch 'not suitable for production') {
+              throw
+            }
+          }
+
       - name: Validate agent publish package shape
         shell: pwsh
         run: |
@@ -245,3 +349,12 @@ jobs:
           Copy-Item -LiteralPath ./agent/src/EmployeeBehavior.Agent.SessionHelper/appsettings.json.example -Destination (Join-Path $helperOutput 'appsettings.json') -Force
 
           ./agent/scripts/Test-AgentPublish.ps1 -PublishRoot $publishRoot
+
+          $tokenPath = Join-Path $serviceOutput 'agent-token.protected.json'
+          Set-Content -LiteralPath $tokenPath -Value '{"token":"strict-publish-smoke"}' -Encoding UTF8
+          ./agent/scripts/Set-AgentProductionConfig.ps1 `
+            -ConfigPath (Join-Path $serviceOutput 'appsettings.json') `
+            -ApiBaseUrl 'https://agent-ci.company-monitoring.com' `
+            -ProtectedTokenPath $tokenPath `
+            -ClearApiToken
+          ./agent/scripts/Test-AgentPublish.ps1 -PublishRoot $publishRoot -StrictProduction

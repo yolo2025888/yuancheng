@@ -236,7 +236,14 @@ function Test-PlaceholderValue {
     }
 
     $normalized = $Value.Trim().ToLowerInvariant()
-    return $normalized.Contains("replace-") -or $normalized.Contains("example.internal")
+    return $normalized.Contains("replace-") -or
+        $normalized.Contains("example.internal") -or
+        $normalized.Contains(".example") -or
+        $normalized.Contains("example.com") -or
+        $normalized.Contains("example.net") -or
+        $normalized.Contains("example.org") -or
+        $normalized.Contains(".test") -or
+        $normalized.Contains(".invalid")
 }
 
 function Get-AgentTokenShape {
