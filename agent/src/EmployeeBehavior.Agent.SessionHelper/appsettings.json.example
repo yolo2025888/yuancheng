@@ -12,6 +12,11 @@
     "_toggleNote": "SampleLogIntervalSeconds only affects liveness logging. Aggregate counters reset when SessionSnapshotCollector reads IInputActivityCounter, not when the monitor logs."
   },
   "Logging": {
+    "File": {
+      "_note": "Optional override. When empty, the helper appends to %ProgramData%\\EmployeeBehaviorAgent\\logs\\helper.log.",
+      "Enabled": true,
+      "Path": "C:\\ProgramData\\EmployeeBehaviorAgent\\logs\\helper.log"
+    },
     "LogLevel": {
       "Default": "Information",
       "Microsoft": "Warning"

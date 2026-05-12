@@ -1,11 +1,11 @@
 using EmployeeBehavior.Agent.SessionHelper.App;
 using EmployeeBehavior.Agent.SessionHelper.Capture;
 using EmployeeBehavior.Agent.SessionHelper.Configuration;
+using EmployeeBehavior.Agent.SessionHelper.Logging;
 using EmployeeBehavior.Agent.SessionHelper.Monitoring;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace EmployeeBehavior.Agent.SessionHelper;
@@ -38,13 +38,7 @@ internal static class Program
         builder.Services.AddHostedService<SessionHelperMonitor>();
         builder.Services.AddHostedService<NamedPipeSessionServer>();
 
-        builder.Logging.ClearProviders();
-        builder.Logging.AddConfiguration(builder.Configuration.GetSection("Logging"));
-        builder.Logging.AddSimpleConsole(options =>
-        {
-            options.SingleLine = true;
-            options.TimestampFormat = "yyyy-MM-dd HH:mm:ss ";
-        });
+        builder.Logging.AddAgentLogging(builder.Configuration);
 
         using var host = builder.Build();
         await host.StartAsync();

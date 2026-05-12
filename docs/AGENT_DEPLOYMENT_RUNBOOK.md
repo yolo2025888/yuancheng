@@ -44,7 +44,7 @@ Minimum operational prerequisites:
 
 ## Recommended filesystem layout
 
-The current code hard-codes only the device identity path. It does not yet write its own Event Log or file sink entries. For pilot deployments, keep a simple and explicit layout:
+The current code persists device identity, upload queue state, and built-in file logs under `ProgramData` by default. For pilot deployments, keep a simple and explicit layout:
 
 ```text
 C:\Program Files\EmployeeBehaviorAgent\Service\
@@ -66,10 +66,12 @@ C:\ProgramData\EmployeeBehaviorAgent\
 
 Log note:
 
-- The current code configures console logging only.
-- During local dry-run, logs appear in the console window.
-- For installed pilots, use your service/task wrapper or installer to redirect stdout/stderr into `C:\ProgramData\EmployeeBehaviorAgent\logs\`.
-- Do not claim Windows Event Log coverage yet; the code has a TODO for future Event Log or file sink wiring.
+- Both processes keep console logging and also append to built-in file logs by default.
+- Default file paths:
+  - `C:\ProgramData\EmployeeBehaviorAgent\logs\service.log`
+  - `C:\ProgramData\EmployeeBehaviorAgent\logs\helper.log`
+- Override either path with `Logging:File:Path` when the pilot needs a different persistent location.
+- Do not claim Windows Event Log coverage yet; this change adds only a minimal file sink.
 
 ## Configuration checklist
 
@@ -109,6 +111,8 @@ Start from `agent/src/EmployeeBehavior.Agent.Service/appsettings.json.example` a
   Lease expiry for in-flight queue items after service interruption. Current default is `300`.
 - `DefaultPolicy`
   Bootstrap policy used before the backend returns a newer one.
+- `Logging:File:Path`
+  Optional full file path override. Leave it unset or keep the default to append to `C:\ProgramData\EmployeeBehaviorAgent\logs\service.log`.
 
 Protected token provisioning:
 
@@ -174,6 +178,8 @@ Start from `agent/src/EmployeeBehavior.Agent.SessionHelper/appsettings.json.exam
   Current default is `5`.
 - `SampleLogIntervalSeconds`
   Liveness logging only. This does not change upload cadence and does not reset counters.
+- `Logging:File:Path`
+  Optional full file path override. Leave it unset or keep the default to append to `C:\ProgramData\EmployeeBehaviorAgent\logs\helper.log`.
 
 ## Build and package basics
 
@@ -242,7 +248,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Install-Agen
 ```
 
 6. If the installer is being run by an admin on behalf of another user, set `-HelperTaskUser` explicitly to the pilot account instead of relying on the current user default.
-7. Redirect both process outputs to the recommended `logs\` directory during pilot rollout if you wrap the binaries. The current code still emits console logging only.
+7. If you keep service/task wrappers, stdout/stderr redirection is optional. The binaries now append to the recommended `logs\` directory by default unless `Logging:File:Path` overrides it.
 8. Start the helper task or have the pilot user sign in so the logon trigger fires.
 9. Run `Test-AgentDeployment.ps1` against the installed target directories with `-RequireInstalledHelperTask`, and confirm it does not report hidden tray, console-mode, environment override, missing helper task, missing `EmployeeBehavior.Agent.Service` registration, wrong service binary path, or scheduled-task argument failures. Also record the reported Windows service start mode and current state.
 
@@ -310,8 +316,8 @@ For an already installed pilot or production endpoint, add `-RequireInstalledHel
    - `is_remote_session` and `is_rdp_session` change as expected during remote access.
    - `idle_seconds` increases when no input is present.
 9. Operational logging:
-   - `service.log` and `helper.log` exist if your wrapper redirects stdout/stderr.
-   - If no files exist, do not assume logs are preserved elsewhere.
+   - `service.log` and `helper.log` exist at the default ProgramData paths, or at the configured `Logging:File:Path` overrides.
+   - If no files exist after startup, verify the configured file paths are writable and do not assume logs are preserved elsewhere.
 
 ## Upgrade and rollback
 
@@ -347,7 +353,7 @@ Optional destructive cleanup is explicit through `-RemoveServiceDirectory`, `-Re
 
 ## Known current limitations
 
-- No built-in file sink or Windows Event Log sink is wired yet.
+- No Windows Event Log sink is wired yet.
 - No installer project is present in this repository yet.
 - No self-updater is present yet.
 - The upload queue is durable across restarts, but it is still a local JSONL file intended for one service instance per device.

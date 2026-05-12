@@ -2045,6 +2045,43 @@ def test_agent_attendance_scoped_token_uses_bound_device_for_early_leave(
     assert payload["anomaly_reasons"] == ["Clock-out before 18:00"]
 
 
+def test_agent_attendance_scoped_token_uses_bound_employee_identity(
+    client: TestClient,
+    seeded_device: dict[str, str],
+) -> None:
+    scoped_headers = {"Authorization": f"Bearer {seeded_device['agent_token']}"}
+    with Session(client.app.state.engine) as session:
+        session.add(
+            Employee(
+                id=uuid4(),
+                name="Bob",
+                employee_no="E-002",
+                department="Engineering",
+            )
+        )
+        session.commit()
+
+    response = client.post(
+        "/api/agent/attendance",
+        headers=scoped_headers,
+        json={
+            "employee_no": "E-002",
+            "user_name": "Bob",
+            "machine_name": "DEV-PC-001",
+            "event_type": "clock_in",
+            "occurred_at": "2026-05-12T08:30:00Z",
+            "source": "launcher",
+        },
+    )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["employee_id"] == seeded_device["employee_id"]
+    assert payload["employee_no"] == "E-001"
+    assert payload["employee_name"] == "Alice"
+    assert payload["user_name"] == "Alice"
+
+
 def test_agent_attendance_scoped_token_can_create_unmatched_employee_record(
     client: TestClient,
 ) -> None:

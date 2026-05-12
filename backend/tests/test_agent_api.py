@@ -100,6 +100,46 @@ def test_agent_can_resolve_employee_by_employee_no(
     assert missing_response.json()["detail"] == "Employee not found"
 
 
+def test_scoped_agent_employee_resolver_does_not_enumerate_other_employees(
+    client: TestClient,
+    seeded_device: dict[str, str],
+    agent_headers: dict[str, str],
+) -> None:
+    with Session(client.app.state.engine) as session:
+        session.add(
+            Employee(
+                id=uuid4(),
+                name="Bob",
+                employee_no="E-002",
+                department="Engineering",
+            )
+        )
+        session.commit()
+
+    response = client.get(
+        "/api/agent/employees/resolve",
+        headers=agent_headers,
+        params={"employee_no": "E-002"},
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Employee not found"
+
+
+def test_legacy_global_agent_token_can_resolve_employee_in_test_environment(
+    client: TestClient,
+    seeded_device: dict[str, str],
+) -> None:
+    response = client.get(
+        "/api/agent/employees/resolve",
+        headers={"Authorization": f"Bearer {client.app.state.settings.agent_api_token}"},
+        params={"employee_no": "E-001"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["id"] == seeded_device["employee_id"]
+
+
 def test_agent_can_fetch_default_attendance_rules(client: TestClient, agent_headers: dict[str, str]) -> None:
     unauthenticated_response = client.get("/api/agent/attendance/rules")
     response = client.get("/api/agent/attendance/rules", headers=agent_headers)

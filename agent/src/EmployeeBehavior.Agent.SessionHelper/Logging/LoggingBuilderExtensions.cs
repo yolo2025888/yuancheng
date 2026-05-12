@@ -1,4 +1,7 @@
-namespace EmployeeBehavior.Agent.Service.Logging;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
+
+namespace EmployeeBehavior.Agent.SessionHelper.Logging;
 
 public static class LoggingBuilderExtensions
 {
@@ -16,7 +19,7 @@ public static class LoggingBuilderExtensions
 
         var fileOptions = configuration.GetSection("Logging:File").Get<PersistentFileLoggerOptions>()
             ?? new PersistentFileLoggerOptions();
-        loggingBuilder.AddProvider(new PersistentFileLoggerProvider(fileOptions, "service.log"));
+        loggingBuilder.AddProvider(new PersistentFileLoggerProvider(fileOptions, "helper.log"));
 
         return loggingBuilder;
     }

@@ -387,6 +387,7 @@ def create_agent_attendance_record(
 ) -> AttendanceRecordItem:
     if agent_principal.device_id is not None:
         payload = payload.model_copy(update={"device_id": agent_principal.device_id})
+        payload = _bind_attendance_payload_to_agent_device(session, agent_principal, payload)
     record = AttendanceService(session).create_clock_record(payload)
     refreshed = QueryService(session).list_attendance(
         work_date=record.work_date,
@@ -419,6 +420,25 @@ def create_agent_attendance_record(
         created_at=record.created_at,
         updated_at=record.updated_at,
     )
+
+
+def _bind_attendance_payload_to_agent_device(
+    session: Session,
+    agent_principal: AgentPrincipal,
+    payload: AttendanceClockRequest,
+) -> AttendanceClockRequest:
+    if agent_principal.device_id is None:
+        return payload
+
+    device = session.get(Device, agent_principal.device_id)
+    if device is None or device.employee_id is None:
+        return payload
+
+    employee = session.get(Employee, device.employee_id)
+    if employee is None:
+        return payload
+
+    return payload.model_copy(update={"employee_no": employee.employee_no, "user_name": employee.name})
 
 
 @router.get("/admin/export/employees")

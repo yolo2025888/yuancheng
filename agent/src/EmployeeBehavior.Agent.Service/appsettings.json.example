@@ -34,6 +34,11 @@
     }
   },
   "Logging": {
+    "File": {
+      "_note": "Optional override. When empty, the service appends to %ProgramData%\\EmployeeBehaviorAgent\\logs\\service.log.",
+      "Enabled": true,
+      "Path": "C:\\ProgramData\\EmployeeBehaviorAgent\\logs\\service.log"
+    },
     "LogLevel": {
       "Default": "Information",
       "Microsoft": "Warning"

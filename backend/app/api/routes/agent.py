@@ -8,7 +8,7 @@ from sqlmodel import Session, select
 
 from app.api.deps import get_session, get_settings, require_agent_device, require_agent_token
 from app.core.config import Settings
-from app.models import Employee
+from app.models import Device, Employee
 from app.schemas.agent import (
     AgentEmployeeResponse,
     AttendanceRuleResponse,
@@ -31,7 +31,7 @@ router = APIRouter(prefix="/api/agent", tags=["agent"])
 @router.get("/employees/resolve", response_model=AgentEmployeeResponse)
 def resolve_employee(
     employee_no: str = Query(..., min_length=1, max_length=64),
-    _: AgentPrincipal = Depends(require_agent_token),
+    agent_principal: AgentPrincipal = Depends(require_agent_token),
     session: Session = Depends(get_session),
 ) -> AgentEmployeeResponse:
     normalized_employee_no = employee_no.strip()
@@ -41,6 +41,7 @@ def resolve_employee(
     employee = session.exec(select(Employee).where(Employee.employee_no == normalized_employee_no)).first()
     if employee is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found")
+    _require_agent_employee_scope(session, agent_principal, employee)
     return AgentEmployeeResponse.model_validate(employee)
 
 
@@ -56,6 +57,17 @@ def get_attendance_rules(
         clock_in_late_after=format_rule_time(rules.clock_in_late_after),
         clock_out_early_before=format_rule_time(rules.clock_out_early_before),
     )
+
+
+def _require_agent_employee_scope(session: Session, agent_principal: AgentPrincipal, employee: Employee) -> None:
+    if agent_principal.legacy_global_token:
+        return
+    if agent_principal.device_id is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found")
+
+    device = session.get(Device, agent_principal.device_id)
+    if device is None or device.employee_id != employee.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found")
 
 
 @router.post("/heartbeat", response_model=HeartbeatResponse)

@@ -30,6 +30,7 @@ Production gates:
 - `ApiBaseUrl` is the production API URL.
 - `DryRun` is `false`.
 - `ProtectedTokenPath` points to an existing DPAPI token file.
+- `Logging:File:Path` is either left at the default ProgramData location or overridden to another writable persistent file path for both service and helper.
 - Device tokens use issued v2 device-scoped tokens.
 - `SessionHelper.EnableTrayIcon` is `true`.
 - `SessionHelper.RunInConsole` is `false`.
@@ -41,6 +42,7 @@ Production gates:
 - Installed deployment validation reports the Windows service start mode and current state.
 - The installed helper scheduled task exists and can be inspected by `Test-AgentDeployment.ps1`.
 - The installed helper scheduled task does not include `--console`.
+- Runtime smoke or pilot validation confirms the expected log files are created at the default ProgramData paths or the configured `Logging:File:Path` overrides.
 - `Test-AgentDeployment.ps1` only passes API reachability when `GET /health` returns a 2xx response.
 - Strict production validation uses real `appsettings.json`; example config fallback must fail.
 - Runtime smoke validation shows the launcher opens without starting Service or SessionHelper before clock-in.

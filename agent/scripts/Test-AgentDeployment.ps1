@@ -704,7 +704,7 @@ if (Test-Path -LiteralPath $LogRootPath) {
     Add-CheckResult -Check "Log root path" -Status "PASS" -Detail "Log directory '$LogRootPath' exists."
 }
 else {
-    Add-CheckResult -Check "Log root path" -Status "WARN" -Detail "Log directory '$LogRootPath' does not exist. Current agent code only emits console logs, so deployed log capture depends on wrapper or installer redirection."
+    Add-CheckResult -Check "Log root path" -Status "WARN" -Detail "Log directory '$LogRootPath' does not exist yet. The built-in file logger creates the directory on first write unless Logging:File:Path points elsewhere."
 }
 
 if ($null -ne $serviceUri) {
