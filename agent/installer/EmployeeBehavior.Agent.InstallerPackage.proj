@@ -41,6 +41,9 @@
     <PackageEntryFiles Include="$(MSBuildThisFileDirectory)package\Validate-AgentInstallerPackage.ps1">
       <PackageRelativePath>Validate-AgentInstallerPackage.ps1</PackageRelativePath>
     </PackageEntryFiles>
+    <PackageEntryFiles Include="$(MSBuildThisFileDirectory)package\Run-AgentInstalledAcceptance.ps1">
+      <PackageRelativePath>Run-AgentInstalledAcceptance.ps1</PackageRelativePath>
+    </PackageEntryFiles>
     <PackageEntryFiles Include="$(ValidateScript)">
       <PackageRelativePath>Test-AgentInstallerPackage.ps1</PackageRelativePath>
     </PackageEntryFiles>

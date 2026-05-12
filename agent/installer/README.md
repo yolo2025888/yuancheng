@@ -28,6 +28,7 @@ The assembled delivery directory contains:
 - `payload\SessionHelper\`
 - `payload\Launcher\`
 - `Install-AgentInstallerPackage.ps1`
+- `Run-AgentInstalledAcceptance.ps1`
 - `Validate-AgentInstallerPackage.ps1`
 - `Uninstall-AgentInstallerPackage.ps1`
 - `Test-AgentInstallerPackage.ps1`
@@ -47,5 +48,13 @@ Installed lifecycle acceptance:
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-AgentInstalledLifecycle.ps1 `
   -LauncherExecutablePath 'C:\Program Files\EmployeeBehaviorAgent\Launcher\EmployeeBehavior.Agent.Launcher.exe' `
+  -EmployeeCode 'E-001'
+```
+
+One-command installed acceptance:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\Run-AgentInstalledAcceptance.ps1 `
+  -HelperTaskUser CONTOSO\pilot.user `
   -EmployeeCode 'E-001'
 ```

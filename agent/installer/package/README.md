@@ -8,6 +8,7 @@ This package assembles the Windows agent payloads plus direct install, uninstall
 - `payload\SessionHelper\`
 - `payload\Launcher\`
 - `Install-AgentInstallerPackage.ps1`
+- `Run-AgentInstalledAcceptance.ps1`
 - `Uninstall-AgentInstallerPackage.ps1`
 - `Test-AgentInstallerPackage.ps1`
 - `tools\Install-AgentPilot.ps1`
@@ -47,4 +48,10 @@ Installed lifecycle smoke:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-AgentInstalledLifecycle.ps1 -LauncherExecutablePath 'C:\Program Files\EmployeeBehaviorAgent\Launcher\EmployeeBehavior.Agent.Launcher.exe' -EmployeeCode 'E-001'
+```
+
+Combined install + validate + lifecycle acceptance:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\Run-AgentInstalledAcceptance.ps1 -HelperTaskUser CONTOSO\pilot.user -EmployeeCode 'E-001'
 ```

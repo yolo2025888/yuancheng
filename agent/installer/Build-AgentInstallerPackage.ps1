@@ -161,6 +161,7 @@ function Build-PackageFromExistingPublish {
     Copy-Item -LiteralPath (Join-Path $agentRoot 'scripts\Set-AgentProductionConfig.ps1') -Destination (Join-Path $serviceTarget 'Set-AgentProductionConfig.ps1') -Force
     Copy-Item -LiteralPath (Join-Path $agentRoot 'scripts\Write-AgentProtectedToken.ps1') -Destination (Join-Path $serviceTarget 'Write-AgentProtectedToken.ps1') -Force
     Copy-Item -LiteralPath (Join-Path $scriptRoot 'package\Install-AgentInstallerPackage.ps1') -Destination (Join-Path $stageDirectory 'Install-AgentInstallerPackage.ps1') -Force
+    Copy-Item -LiteralPath (Join-Path $scriptRoot 'package\Run-AgentInstalledAcceptance.ps1') -Destination (Join-Path $stageDirectory 'Run-AgentInstalledAcceptance.ps1') -Force
     Copy-Item -LiteralPath (Join-Path $scriptRoot 'package\Uninstall-AgentInstallerPackage.ps1') -Destination (Join-Path $stageDirectory 'Uninstall-AgentInstallerPackage.ps1') -Force
     Copy-Item -LiteralPath (Join-Path $scriptRoot 'package\README.md') -Destination (Join-Path $stageDirectory 'README.md') -Force
     Copy-Item -LiteralPath (Join-Path $scriptRoot 'package\Validate-AgentInstallerPackage.ps1') -Destination (Join-Path $stageDirectory 'Validate-AgentInstallerPackage.ps1') -Force
