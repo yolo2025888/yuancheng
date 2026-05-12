@@ -1,6 +1,8 @@
 [CmdletBinding()]
 param(
     [string]$PackageRoot = '',
+    [string]$InstallRoot = 'C:\Program Files\EmployeeBehaviorAgent',
+    [string]$DataDirectory = 'C:\ProgramData\EmployeeBehaviorAgent',
     [switch]$RemoveInstalledFiles
 )
 
@@ -26,11 +28,15 @@ if (-not (Test-Path -LiteralPath $uninstallScriptPath -PathType Leaf)) {
     throw "Bundled uninstall entrypoint not found: $uninstallScriptPath"
 }
 
-$arguments = @{}
+$arguments = @{
+    InstallRoot = $InstallRoot
+    DataDirectory = $DataDirectory
+}
 if ($RemoveInstalledFiles) {
     $arguments.RemoveServiceDirectory = $true
     $arguments.RemoveHelperDirectory = $true
     $arguments.RemoveLauncherDirectory = $true
+    $arguments.RemoveLogDirectory = $true
 }
 
 & $uninstallScriptPath @arguments

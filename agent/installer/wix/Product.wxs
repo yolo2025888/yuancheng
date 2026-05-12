@@ -14,6 +14,7 @@
 
     <Property Id="RUNPACKAGEDINSTALL" Value="0" Secure="yes" />
     <Property Id="HELPERTASKUSER" Secure="yes" />
+    <Property Id="STARTHELPERTASK" Value="0" Secure="yes" />
     <Property Id="RUNPACKAGEDUNINSTALL" Value="1" Secure="yes" />
 
     <SetProperty
