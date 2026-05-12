@@ -51,7 +51,7 @@ from app.services.attendance_rules import AttendanceRuleService, format_rule_tim
 from app.services.employee_admin import EmployeeAdminService
 from app.services.policies import PolicyService
 from app.services.retention import ScreenshotRetentionService
-from app.services.access_scope import require_employee_in_scope, resolve_employee_access_scope
+from app.services.access_scope import require_device_in_scope, require_employee_in_scope, resolve_employee_access_scope
 from app.services.auth import AuthenticatedPrincipal
 
 router = APIRouter(prefix="/api", tags=["admin"])
@@ -81,8 +81,10 @@ def issue_device_agent_token(
     session: Session = Depends(get_session),
     settings: Settings = Depends(get_settings),
     audit_context: AuditContext = Depends(get_audit_context),
-    _: object = Depends(require_permissions("device_tokens.manage")),
+    principal: AuthenticatedPrincipal = Depends(require_permissions("device_tokens.manage")),
 ) -> DeviceAgentTokenIssueResponse:
+    scope = resolve_employee_access_scope(session, principal)
+    require_device_in_scope(session, scope, device_id)
     device = session.get(Device, device_id)
     if device is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device not found")
@@ -118,8 +120,10 @@ def revoke_device_agent_token(
     device_id: UUID,
     session: Session = Depends(get_session),
     audit_context: AuditContext = Depends(get_audit_context),
-    _: object = Depends(require_permissions("device_tokens.manage")),
+    principal: AuthenticatedPrincipal = Depends(require_permissions("device_tokens.manage")),
 ) -> DeviceAgentTokenRevokeResponse:
+    scope = resolve_employee_access_scope(session, principal)
+    require_device_in_scope(session, scope, device_id)
     device = session.get(Device, device_id)
     if device is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device not found")

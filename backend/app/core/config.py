@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     def is_test(self) -> bool:
         return self.environment.strip().casefold() == "test"
 
+    @property
+    def allows_bootstrap_admin(self) -> bool:
+        return self.environment.strip().casefold() in {"development", "test"}
+
     @model_validator(mode="after")
     def validate_production_auth_settings(self) -> "Settings":
         normalized_environment = self.environment.strip().casefold()

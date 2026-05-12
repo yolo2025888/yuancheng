@@ -343,7 +343,7 @@ If you need to unregister the pilot installation without deleting identity data 
 powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Uninstall-AgentPilot.ps1
 ```
 
-Optional destructive cleanup is explicit through `-RemoveServiceDirectory`, `-RemoveHelperDirectory`, `-RemoveLogDirectory`, `-RemoveUploadQueue`, and `-RemoveDeviceIdentity`.
+Optional destructive cleanup is explicit through `-RemoveServiceDirectory`, `-RemoveHelperDirectory`, `-RemoveLogDirectory`, `-RemoveUploadQueue`, and `-RemoveDeviceIdentity`. `-RemoveUploadQueue` removes both `upload-queue.jsonl` and `upload-queue-payloads\` so queued screenshot payloads do not remain after rollback.
 
 ## Known current limitations
 
@@ -351,7 +351,7 @@ Optional destructive cleanup is explicit through `-RemoveServiceDirectory`, `-Re
 - No installer project is present in this repository yet.
 - No self-updater is present yet.
 - The upload queue is durable across restarts, but it is still a local JSONL file intended for one service instance per device.
-- If operators delete the queue file or any future temp payload files referenced by queued entries, pending uploads can still be lost.
+- If operators delete only selected queue payload files referenced by queued entries, pending uploads can still be lost.
 - Queue growth is bounded only by local disk availability while the backend is unavailable.
 
 ## Operator handoff notes

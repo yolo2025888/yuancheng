@@ -167,7 +167,7 @@ class AuthService:
         return payload
 
     def _bootstrap_admin_if_allowed(self, *, username: str, password: str) -> None:
-        if self.settings.is_production:
+        if not self.settings.allows_bootstrap_admin:
             return
         if username not in {self.settings.bootstrap_admin_username, self.settings.bootstrap_admin_email}:
             return

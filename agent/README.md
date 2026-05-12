@@ -187,7 +187,7 @@ Typical uninstall that removes registrations but keeps binaries and identity dat
 powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\scripts\Uninstall-AgentPilot.ps1
 ```
 
-Optional cleanup switches are explicit: `-RemoveServiceDirectory`, `-RemoveHelperDirectory`, `-RemoveLogDirectory`, `-RemoveUploadQueue`, and `-RemoveDeviceIdentity`.
+Optional cleanup switches are explicit: `-RemoveServiceDirectory`, `-RemoveHelperDirectory`, `-RemoveLogDirectory`, `-RemoveUploadQueue`, and `-RemoveDeviceIdentity`. `-RemoveUploadQueue` removes both `upload-queue.jsonl` and the sibling `upload-queue-payloads\` directory.
 
 ## Upload queue persistence
 

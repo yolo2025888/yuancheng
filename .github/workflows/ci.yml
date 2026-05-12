@@ -342,7 +342,7 @@ jobs:
           dotnet publish ./agent/src/EmployeeBehavior.Agent.SessionHelper/EmployeeBehavior.Agent.SessionHelper.csproj --configuration Release --runtime win-x64 --self-contained false --output $helperOutput
           dotnet publish ./agent/src/EmployeeBehavior.Agent.Launcher/EmployeeBehavior.Agent.Launcher.csproj --configuration Release --runtime win-x64 --self-contained false --output $launcherOutput
 
-          Copy-Item -LiteralPath (Join-Path $launcherOutput 'EmployeeBehavior.Agent.Launcher.exe') -Destination (Join-Path $publishRoot 'EmployeeBehavior.Agent.Launcher.exe') -Force
+          Copy-Item -Path (Join-Path $launcherOutput '*') -Destination $publishRoot -Recurse -Force
           Copy-Item -LiteralPath ./agent/scripts/Write-AgentProtectedToken.ps1 -Destination (Join-Path $serviceOutput 'Write-AgentProtectedToken.ps1') -Force
           Copy-Item -LiteralPath ./agent/scripts/Set-AgentProductionConfig.ps1 -Destination (Join-Path $serviceOutput 'Set-AgentProductionConfig.ps1') -Force
           Copy-Item -LiteralPath ./agent/src/EmployeeBehavior.Agent.Service/appsettings.json.example -Destination (Join-Path $serviceOutput 'appsettings.json') -Force
@@ -358,3 +358,4 @@ jobs:
             -ProtectedTokenPath $tokenPath `
             -ClearApiToken
           ./agent/scripts/Test-AgentPublish.ps1 -PublishRoot $publishRoot -StrictProduction
+          ./agent/scripts/Test-AgentRuntimeSmoke.ps1 -PublishRoot $publishRoot -CleanupStartedProcesses

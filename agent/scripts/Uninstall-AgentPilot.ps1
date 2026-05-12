@@ -73,6 +73,7 @@ $resolvedHelperTargetDirectory = Resolve-FullPath -Path $HelperTargetDirectory
 $resolvedDataDirectory = Resolve-FullPath -Path $DataDirectory
 $resolvedLogDirectory = Join-Path -Path $resolvedDataDirectory -ChildPath 'logs'
 $resolvedUploadQueuePath = Join-Path -Path $resolvedDataDirectory -ChildPath 'upload-queue.jsonl'
+$resolvedUploadPayloadDirectory = Join-Path -Path $resolvedDataDirectory -ChildPath 'upload-queue-payloads'
 $resolvedDeviceIdentityPath = Join-Path -Path $resolvedDataDirectory -ChildPath 'device-id.json'
 
 $service = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
@@ -116,6 +117,7 @@ if ($RemoveLogDirectory) {
 
 if ($RemoveUploadQueue) {
     Remove-FileIfRequested -Path $resolvedUploadQueuePath -Label 'upload queue file'
+    Remove-DirectoryIfRequested -Path $resolvedUploadPayloadDirectory -Label 'upload queue payload directory'
 }
 
 if ($RemoveDeviceIdentity) {
@@ -130,4 +132,5 @@ if ($RemoveDeviceIdentity) {
     DataDirectory      = $resolvedDataDirectory
     DeviceIdentityPath = $resolvedDeviceIdentityPath
     UploadQueuePath    = $resolvedUploadQueuePath
+    UploadPayloadPath   = $resolvedUploadPayloadDirectory
 }

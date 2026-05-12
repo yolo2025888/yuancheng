@@ -35,6 +35,46 @@ const requiredSurfaces = [
     apiSignals: ['/api/review-queue']
   },
   {
+    key: 'realtime',
+    label: 'Realtime Status',
+    path: '/realtime-status',
+    permissions: ['screenshots.metadata.view', 'dashboard.view'],
+    component: 'RealtimeStatusPage',
+    page: 'src/pages/RealtimeStatus.tsx',
+    pageSignals: ['Realtime Status', 'getRealtimeStatus'],
+    apiSignals: ['/health']
+  },
+  {
+    key: 'employees',
+    label: 'Employees',
+    path: '/employees',
+    permission: 'directory.view',
+    component: 'EmployeesPage',
+    page: 'src/pages/Employees.tsx',
+    pageSignals: ['Employees', 'getEmployees'],
+    apiSignals: ['/api/employees']
+  },
+  {
+    key: 'devices',
+    label: 'Devices',
+    path: '/devices',
+    permission: 'directory.view',
+    component: 'DevicesPage',
+    page: 'src/pages/Devices.tsx',
+    pageSignals: ['Agent Token', 'handleIssueToken'],
+    apiSignals: ['/api/devices']
+  },
+  {
+    key: 'timeline',
+    label: 'Timeline',
+    path: '/timeline',
+    permission: 'screenshots.metadata.view',
+    component: 'TimelinePage',
+    page: 'src/pages/Timeline.tsx',
+    pageSignals: ['Timeline', 'getTimeline'],
+    apiSignals: ['/api/employees/${discoveredEmployeeId}/timeline']
+  },
+  {
     key: 'events',
     label: 'Events',
     path: '/events',
@@ -53,16 +93,6 @@ const requiredSurfaces = [
     page: 'src/pages/Attendance.tsx',
     pageSignals: ['reviewAttendance', 'attendance.manage'],
     apiSignals: ['/api/attendance', '/api/attendance/rules/default']
-  },
-  {
-    key: 'devices',
-    label: 'Devices',
-    path: '/devices',
-    permission: 'directory.view',
-    component: 'DevicesPage',
-    page: 'src/pages/Devices.tsx',
-    pageSignals: ['Agent Token', 'handleIssueToken'],
-    apiSignals: ['/api/devices']
   },
   {
     key: 'screenshot-detail',
@@ -93,6 +123,26 @@ const requiredSurfaces = [
     page: 'src/pages/AccessRoles.tsx',
     pageSignals: ['permission', 'role'],
     apiSignals: ['/api/access']
+  },
+  {
+    key: 'policies',
+    label: 'Policies',
+    path: '/policies',
+    permission: 'policies.manage',
+    component: 'PoliciesPage',
+    page: 'src/pages/Policies.tsx',
+    pageSignals: ['Policies', 'getPolicies'],
+    apiSignals: ['/api/policies']
+  },
+  {
+    key: 'audit-logs',
+    label: 'Audit Logs',
+    path: '/audit-logs',
+    permission: 'audit_logs.view',
+    component: 'AuditLogsPage',
+    page: 'src/pages/AuditLogs.tsx',
+    pageSignals: ['Audit Logs', 'getAuditLogs'],
+    apiSignals: ['/api/audit-logs']
   }
 ];
 
@@ -108,11 +158,11 @@ for (const surface of requiredSurfaces) {
   const pageSource = readFileSync(pagePath, 'utf8');
   const routePath = surface.path === '/' ? "{ index: true" : `path: '${surface.path.slice(1)}'`;
 
+  const permissions = surface.permissions ?? [surface.permission];
   const routeChecks = [
     [`key: '${surface.key}'`, 'nav key'],
     [`label: '${surface.label}'`, 'nav label'],
     [`path: '${surface.path}'`, 'nav path'],
-    [surface.permission, 'permission'],
     [surface.component, 'lazy component'],
     [routePath, 'router child path']
   ];
@@ -120,6 +170,12 @@ for (const surface of requiredSurfaces) {
   for (const [needle, label] of routeChecks) {
     if (!routerSource.includes(needle)) {
       failures.push(`${surface.key}: missing ${label} signal "${needle}" in router.tsx`);
+    }
+  }
+
+  for (const permission of permissions) {
+    if (!routerSource.includes(permission)) {
+      failures.push(`${surface.key}: missing permission signal "${permission}" in router.tsx`);
     }
   }
 
@@ -157,6 +213,6 @@ console.log(JSON.stringify({
   checkedSurfaces: requiredSurfaces.map((surface) => ({
     key: surface.key,
     path: surface.path,
-    permission: surface.permission
+    permissions: surface.permissions ?? [surface.permission]
   }))
 }, null, 2));

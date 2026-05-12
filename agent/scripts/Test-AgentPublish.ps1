@@ -383,6 +383,10 @@ $serviceExe = Join-Path $serviceDirectory 'EmployeeBehavior.Agent.Service.exe'
 $helperExe = Join-Path $helperDirectory 'EmployeeBehavior.Agent.SessionHelper.exe'
 $launcherExe = Join-Path $resolvedPublishRoot 'EmployeeBehavior.Agent.Launcher.exe'
 $nestedLauncherExe = Join-Path $launcherDirectory 'EmployeeBehavior.Agent.Launcher.exe'
+$launcherDll = Join-Path $resolvedPublishRoot 'EmployeeBehavior.Agent.Launcher.dll'
+$launcherRuntimeConfig = Join-Path $resolvedPublishRoot 'EmployeeBehavior.Agent.Launcher.runtimeconfig.json'
+$nestedLauncherDll = Join-Path $launcherDirectory 'EmployeeBehavior.Agent.Launcher.dll'
+$nestedLauncherRuntimeConfig = Join-Path $launcherDirectory 'EmployeeBehavior.Agent.Launcher.runtimeconfig.json'
 $writerScript = Join-Path $serviceDirectory 'Write-AgentProtectedToken.ps1'
 
 $serviceExists = Test-Executable -Path $serviceExe -Check 'Service executable'
@@ -399,6 +403,22 @@ else {
 
 if ($launcherExists -and -not $nestedLauncherExists) {
     Add-CheckResult -Check 'Nested launcher packaging' -Status (Get-ModeStatus -PilotStatus 'WARN') -Detail "The package can still start from '$launcherExe', but the nested Launcher copy is missing."
+}
+
+if ($launcherExists) {
+    $nestedLauncherNeedsFrameworkFiles = (Test-Path -LiteralPath $nestedLauncherDll -PathType Leaf) -or (Test-Path -LiteralPath $nestedLauncherRuntimeConfig -PathType Leaf)
+    if ($nestedLauncherNeedsFrameworkFiles) {
+        $rootLauncherHasFrameworkFiles = (Test-Path -LiteralPath $launcherDll -PathType Leaf) -and (Test-Path -LiteralPath $launcherRuntimeConfig -PathType Leaf)
+        if ($rootLauncherHasFrameworkFiles) {
+            Add-CheckResult -Check 'Launcher runtime files' -Status 'PASS' -Detail 'Root launcher includes framework-dependent DLL and runtimeconfig files.'
+        }
+        else {
+            Add-CheckResult -Check 'Launcher runtime files' -Status 'FAIL' -Detail 'Root launcher is missing EmployeeBehavior.Agent.Launcher.dll or EmployeeBehavior.Agent.Launcher.runtimeconfig.json from the framework-dependent publish output.'
+        }
+    }
+    else {
+        Add-CheckResult -Check 'Launcher runtime files' -Status 'PASS' -Detail 'Root launcher appears self-contained or native; framework-dependent runtime files are not required.'
+    }
 }
 
 if (Test-Path -LiteralPath $writerScript -PathType Leaf) {

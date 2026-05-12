@@ -9,6 +9,8 @@ Before a pilot or production demo, confirm the employee-facing disclosure covers
 
 Provision the DPAPI protected token file first, then switch the published service config to production mode before validation:
 
+Regenerate `agent\publish` for the exact commit being demoed, or download the matching CI artifact before running these commands.
+
 ```powershell
 Set-Location backend; python .\scripts\smoke_attendance_flow.py; Set-Location ..
 Set-Location frontend; npm run smoke:routes; npm run build; Set-Location ..

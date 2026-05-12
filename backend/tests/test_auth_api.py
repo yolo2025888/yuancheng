@@ -222,6 +222,16 @@ def test_production_settings_accept_strong_auth_secret() -> None:
     assert settings.is_production is True
 
 
+def test_staging_settings_do_not_allow_bootstrap_admin() -> None:
+    settings = Settings(
+        environment="staging",
+        auth_secret="staging-secret-with-enough-entropy-2026",
+        agent_api_token="staging-agent-token-with-enough-entropy",
+    )
+
+    assert settings.allows_bootstrap_admin is False
+
+
 def test_settings_default_fail_closed_without_explicit_secrets(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("EBM_ENVIRONMENT", raising=False)
     monkeypatch.delenv("EBM_AUTH_SECRET", raising=False)

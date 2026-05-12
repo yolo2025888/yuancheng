@@ -2,6 +2,8 @@
 
 Run these checks before rollout:
 
+Regenerate `agent\publish` immediately before these commands or use the matching CI artifact. The directory is ignored generated output, so a stale local copy is not release evidence.
+
 ```powershell
 python -m compileall backend\app backend\tests
 python -m pytest backend\tests -q

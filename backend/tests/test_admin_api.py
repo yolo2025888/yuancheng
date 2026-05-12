@@ -343,6 +343,60 @@ def test_device_agent_token_revoke_requires_device_tokens_manage_permission(
         assert revoked_audit is None
 
 
+def test_device_agent_token_management_is_limited_to_device_scope(
+    client: TestClient,
+    seeded_device: dict[str, str],
+) -> None:
+    principal = AuthenticatedPrincipal(
+        user=User(
+            username="device.token.manager",
+            password_hash="placeholder",
+            employee_id=UUID(seeded_device["employee_id"]),
+            status="active",
+        ),
+        role_name="Device Token Manager",
+        permissions={"device_tokens.manage"},
+    )
+
+    other_employee_id = uuid4()
+    other_device_id = uuid4()
+    with Session(client.app.state.engine) as session:
+        session.add(
+            Employee(
+                id=other_employee_id,
+                name="Bob",
+                employee_no="E-002",
+                department="Engineering",
+            )
+        )
+        session.add(
+            Device(
+                id=other_device_id,
+                employee_id=other_employee_id,
+                hostname="DEV-PC-002",
+                os_type="windows",
+                agent_version="0.1.0",
+                screen_count=1,
+                status="online",
+            )
+        )
+        session.commit()
+
+    client.app.dependency_overrides[get_current_auth_principal] = lambda: principal
+    try:
+        in_scope_issue = client.post(f"/api/devices/{seeded_device['device_id']}/agent-token")
+        out_of_scope_issue = client.post(f"/api/devices/{other_device_id}/agent-token")
+        out_of_scope_revoke = client.post(f"/api/devices/{other_device_id}/agent-token/revoke")
+    finally:
+        client.app.dependency_overrides.pop(get_current_auth_principal, None)
+
+    assert in_scope_issue.status_code == 200
+    assert out_of_scope_issue.status_code == 403
+    assert out_of_scope_issue.json()["detail"] == "Device is outside the current access scope"
+    assert out_of_scope_revoke.status_code == 403
+    assert out_of_scope_revoke.json()["detail"] == "Device is outside the current access scope"
+
+
 def test_reissuing_device_agent_token_rotates_secret_and_invalidates_old_token(
     client: TestClient,
     seeded_device: dict[str, str],
@@ -682,6 +736,122 @@ def test_screenshot_retention_cleanup_keeps_failed_file_uri_and_audits_failure(
         assert failure_log.target_id == screenshot_id
         assert "files_failed=1" in (failure_log.reason or "")
         assert f"job_id={payload['job_id']}" in (failure_log.reason or "")
+
+
+def test_screenshot_retention_cleanup_uses_default_retention_when_no_policy(
+    client: TestClient,
+    seeded_device: dict[str, str],
+    auth_headers,
+) -> None:
+    headers = auth_headers(bootstrap=True)
+    employee_id = UUID(seeded_device["employee_id"])
+    device_id = UUID(seeded_device["device_id"])
+    storage_root = Path(client.app.state.settings.storage_root_dir)
+    expired_image = storage_root / "screenshots" / "default-expired.png"
+    expired_image.parent.mkdir(parents=True, exist_ok=True)
+    expired_image.write_bytes(b"image")
+    screenshot_id = uuid4()
+
+    with Session(client.app.state.engine) as session:
+        for policy in session.exec(select(Policy)).all():
+            policy.is_active = False
+            session.add(policy)
+        session.add(
+            Screenshot(
+                id=screenshot_id,
+                employee_id=employee_id,
+                device_id=device_id,
+                captured_at=datetime.now(timezone.utc) - timedelta(days=31),
+                width=1,
+                height=1,
+                image_uri=expired_image.relative_to(storage_root.parent).as_posix(),
+                upload_status="completed",
+            )
+        )
+        session.commit()
+
+    response = client.post("/api/admin/screenshots/retention/cleanup", headers=headers)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["retention_days"] == client.app.state.settings.default_retention_days
+    assert payload["expired_count"] == 1
+    assert payload["files_deleted"] == 1
+    assert not expired_image.exists()
+
+
+def test_screenshot_retention_cleanup_uses_shortest_active_policy_and_counts_missing_files(
+    client: TestClient,
+    seeded_device: dict[str, str],
+    auth_headers,
+) -> None:
+    headers = auth_headers(bootstrap=True)
+    employee_id = UUID(seeded_device["employee_id"])
+    device_id = UUID(seeded_device["device_id"])
+    storage_root = Path(client.app.state.settings.storage_root_dir)
+    missing_image = storage_root / "screenshots" / "missing.png"
+    missing_thumb = storage_root / "screenshots" / "missing_thumb.png"
+    screenshot_id = uuid4()
+
+    with Session(client.app.state.engine) as session:
+        session.add(
+            Policy(
+                name="long-retention",
+                version="2026.05-long",
+                screenshot_interval_seconds=10,
+                no_change_threshold=4,
+                retention_days=30,
+                is_active=True,
+                rules_json={},
+            )
+        )
+        session.add(
+            Policy(
+                name="short-retention",
+                version="2026.05-short",
+                screenshot_interval_seconds=10,
+                no_change_threshold=4,
+                retention_days=3,
+                is_active=True,
+                rules_json={},
+            )
+        )
+        session.add(
+            Screenshot(
+                id=screenshot_id,
+                employee_id=employee_id,
+                device_id=device_id,
+                captured_at=datetime.now(timezone.utc) - timedelta(days=4),
+                width=1,
+                height=1,
+                image_uri=missing_image.relative_to(storage_root.parent).as_posix(),
+                thumb_uri=missing_thumb.relative_to(storage_root.parent).as_posix(),
+                upload_status="completed",
+            )
+        )
+        session.commit()
+
+    response = client.post("/api/admin/screenshots/retention/cleanup", headers=headers)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["retention_days"] == 3
+    assert payload["expired_count"] == 1
+    assert payload["records_updated"] == 1
+    assert payload["files_deleted"] == 0
+    assert payload["files_missing"] == 2
+    assert payload["files_failed"] == 0
+
+    with Session(client.app.state.engine) as session:
+        screenshot = session.get(Screenshot, screenshot_id)
+        item_audit_log = session.exec(
+            select(AuditLog).where(AuditLog.action == "screenshot.retention.deleted")
+        ).one()
+
+        assert screenshot is not None
+        assert screenshot.image_uri is None
+        assert screenshot.thumb_uri is None
+        assert "files_missing=2" in (item_audit_log.reason or "")
 
 
 def test_event_review_updates_status_and_note(client: TestClient, seeded_device: dict[str, str], auth_headers) -> None:
