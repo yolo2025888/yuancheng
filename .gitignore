@@ -16,6 +16,10 @@ logs/
 
 # Local agent/orchestration state
 .omx/
+.codex-tmp/
+.codex-pytmp/
+.codex-smoke-tmp/
+.pytest_tmp/
 
 # Local databases
 *.db

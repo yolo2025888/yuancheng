@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
+    "smoke:routes": "node scripts/smoke_console_routes.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

@@ -21,3 +21,11 @@ Run tests:
 ```bash
 pytest
 ```
+
+Run the local attendance smoke flow:
+
+```bash
+python scripts/smoke_attendance_flow.py
+```
+
+The smoke flow uses a temporary SQLite database and verifies the path from agent clock-in submission to admin attendance listing, anomaly classification, and review.

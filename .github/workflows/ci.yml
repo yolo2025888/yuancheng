@@ -57,7 +57,9 @@ jobs:
         run: npm ci
 
       - name: Build frontend
-        run: npm run build
+        run: |
+          npm run smoke:routes
+          npm run build
 
       - name: Audit production frontend dependencies
         run: npm audit --omit=dev --audit-level=high
@@ -194,6 +196,10 @@ jobs:
             'agent/scripts/Uninstall-AgentPilot.ps1',
             'agent/scripts/Test-AgentDeployment.ps1',
             'agent/scripts/Test-AgentPublish.ps1',
+            'agent/scripts/Test-AgentRuntimeSmoke.ps1',
+            'agent/scripts/Test-LauncherDisclosure.ps1',
+            'agent/scripts/Test-ScreenshotCaptureGuard.ps1',
+            'agent/scripts/Set-AgentProductionConfig.ps1',
             'agent/scripts/Write-AgentProtectedToken.ps1'
           )
           foreach ($script in $scripts) {
@@ -234,6 +240,7 @@ jobs:
 
           Copy-Item -LiteralPath (Join-Path $launcherOutput 'EmployeeBehavior.Agent.Launcher.exe') -Destination (Join-Path $publishRoot 'EmployeeBehavior.Agent.Launcher.exe') -Force
           Copy-Item -LiteralPath ./agent/scripts/Write-AgentProtectedToken.ps1 -Destination (Join-Path $serviceOutput 'Write-AgentProtectedToken.ps1') -Force
+          Copy-Item -LiteralPath ./agent/scripts/Set-AgentProductionConfig.ps1 -Destination (Join-Path $serviceOutput 'Set-AgentProductionConfig.ps1') -Force
           Copy-Item -LiteralPath ./agent/src/EmployeeBehavior.Agent.Service/appsettings.json.example -Destination (Join-Path $serviceOutput 'appsettings.json') -Force
           Copy-Item -LiteralPath ./agent/src/EmployeeBehavior.Agent.SessionHelper/appsettings.json.example -Destination (Join-Path $helperOutput 'appsettings.json') -Force
 

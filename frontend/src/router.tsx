@@ -133,7 +133,7 @@ export const navRoutes: NavRoute[] = [
     label: 'GitHub Risk',
     path: '/github-risk',
     icon: <GithubOutlined />,
-    permissionKeys: ['risk_scores.view']
+    permissionKeys: ['github_risks.view']
   }
 ];
 
