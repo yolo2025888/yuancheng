@@ -12,6 +12,8 @@ from app.schemas.admin import (
     AccessMatrixResponse,
     AccessRoleUserItem,
     AccessUserEmployeeBindingRequest,
+    AIScreenshotAnalysisSettings,
+    AIScreenshotAnalysisSettingsUpdateRequest,
     AttendanceClockRequest,
     AttendanceListResponse,
     AttendanceRecordItem,
@@ -23,12 +25,16 @@ from app.schemas.admin import (
     DeviceAgentTokenRevokeResponse,
     DashboardSummaryResponse,
     DeviceListResponse,
+    EmployeeCreateRequest,
+    EmployeeDeleteResponse,
     EmployeeRiskScoreListResponse,
     GitHubRiskEventCreateRequest,
     GitHubRiskEventItem,
     GitHubRiskEventListResponse,
     EmployeeImportResponse,
     EmployeeListResponse,
+    EmployeeItem,
+    EmployeeUpdateRequest,
     PolicyActivationRequest,
     PolicyCreateRequest,
     PolicyItem,
@@ -64,6 +70,58 @@ def list_employees(
 ) -> EmployeeListResponse:
     scope = resolve_employee_access_scope(session, principal)
     return QueryService(session).list_employees(scope=scope)
+
+
+@router.post("/employees", response_model=EmployeeItem, status_code=status.HTTP_201_CREATED)
+def create_employee(
+    payload: EmployeeCreateRequest,
+    session: Session = Depends(get_session),
+    audit_context: AuditContext = Depends(get_audit_context),
+    _: object = Depends(require_permissions("directory.manage")),
+) -> EmployeeItem:
+    try:
+        employee = EmployeeAdminService(session).create_employee(payload, audit_context=audit_context)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    item = QueryService(session).get_employee_item(employee.id)
+    if item is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found")
+    return item
+
+
+@router.put("/employees/{employee_id}", response_model=EmployeeItem)
+def update_employee(
+    employee_id: UUID,
+    payload: EmployeeUpdateRequest,
+    session: Session = Depends(get_session),
+    audit_context: AuditContext = Depends(get_audit_context),
+    _: object = Depends(require_permissions("directory.manage")),
+) -> EmployeeItem:
+    try:
+        employee = EmployeeAdminService(session).update_employee(employee_id, payload, audit_context=audit_context)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    if employee is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found")
+
+    item = QueryService(session).get_employee_item(employee.id)
+    if item is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found")
+    return item
+
+
+@router.delete("/employees/{employee_id}", response_model=EmployeeDeleteResponse)
+def delete_employee(
+    employee_id: UUID,
+    session: Session = Depends(get_session),
+    audit_context: AuditContext = Depends(get_audit_context),
+    _: object = Depends(require_permissions("directory.manage")),
+) -> EmployeeDeleteResponse:
+    employee = EmployeeAdminService(session).delete_employee(employee_id, audit_context=audit_context)
+    if employee is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found")
+    return EmployeeDeleteResponse(id=employee.id, deleted_at=employee.updated_at)
 
 
 @router.get("/devices", response_model=DeviceListResponse)
@@ -249,6 +307,27 @@ def list_policies(
     return QueryService(session).list_policies()
 
 
+@router.get("/admin/ai-analysis/settings", response_model=AIScreenshotAnalysisSettings)
+def get_ai_analysis_settings(
+    session: Session = Depends(get_session),
+    _: object = Depends(require_permissions("policies.manage")),
+) -> AIScreenshotAnalysisSettings:
+    return PolicyService(session).get_ai_analysis_settings()
+
+
+@router.put("/admin/ai-analysis/settings", response_model=AIScreenshotAnalysisSettings)
+def update_ai_analysis_settings(
+    payload: AIScreenshotAnalysisSettingsUpdateRequest,
+    session: Session = Depends(get_session),
+    audit_context: AuditContext = Depends(get_audit_context),
+    _: object = Depends(require_permissions("policies.manage")),
+) -> AIScreenshotAnalysisSettings:
+    try:
+        return PolicyService(session).update_ai_analysis_settings(payload, audit_context=audit_context)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
 @router.get("/audit-logs", response_model=AuditLogListResponse)
 def list_audit_logs(
     limit: int = Query(default=100, ge=1, le=500),
@@ -388,6 +467,7 @@ def create_agent_attendance_record(
     if agent_principal.device_id is not None:
         payload = payload.model_copy(update={"device_id": agent_principal.device_id})
         payload = _bind_attendance_payload_to_agent_device(session, agent_principal, payload)
+    _require_active_attendance_employee(session, payload)
     record = AttendanceService(session).create_clock_record(payload)
     refreshed = QueryService(session).list_attendance(
         work_date=record.work_date,
@@ -439,6 +519,18 @@ def _bind_attendance_payload_to_agent_device(
         return payload
 
     return payload.model_copy(update={"employee_no": employee.employee_no, "user_name": employee.name})
+
+
+def _require_active_attendance_employee(session: Session, payload: AttendanceClockRequest) -> None:
+    employee_no = (payload.employee_no or "").strip()
+    if not employee_no:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="employee_no is required")
+
+    employee = session.exec(select(Employee).where(Employee.employee_no == employee_no)).first()
+    if employee is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found")
+    if employee.status != "active":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Employee is not active")
 
 
 @router.get("/admin/export/employees")
@@ -512,7 +604,7 @@ def create_policy(
         policy = PolicyService(session).create_policy(payload, audit_context=audit_context)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    return PolicyItem.model_validate(policy)
+    return PolicyService(session).serialize_policy(policy)
 
 
 @router.put("/policies/{policy_id}", response_model=PolicyItem)
@@ -529,7 +621,7 @@ def update_policy(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     if policy is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Policy not found")
-    return PolicyItem.model_validate(policy)
+    return PolicyService(session).serialize_policy(policy)
 
 
 @router.post("/policies/{policy_id}/activation", response_model=PolicyItem)
@@ -543,4 +635,17 @@ def set_policy_activation(
     policy = PolicyService(session).set_policy_activation(policy_id, payload, audit_context=audit_context)
     if policy is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Policy not found")
-    return PolicyItem.model_validate(policy)
+    return PolicyService(session).serialize_policy(policy)
+
+
+@router.delete("/policies/{policy_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_policy(
+    policy_id: UUID,
+    session: Session = Depends(get_session),
+    audit_context: AuditContext = Depends(get_audit_context),
+    _: object = Depends(require_permissions("policies.manage")),
+) -> Response:
+    deleted = PolicyService(session).delete_policy(policy_id, audit_context=audit_context)
+    if not deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Policy not found")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

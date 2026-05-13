@@ -1,3 +1,4 @@
+import { useI18n } from '../../i18n/I18nContext';
 import { EChartPanel } from './EChartPanel';
 
 type GitHubTrendChartProps = {
@@ -5,9 +6,11 @@ type GitHubTrendChartProps = {
 };
 
 export function GitHubTrendChart({ data }: GitHubTrendChartProps) {
+  const { t } = useI18n();
+
   return (
     <EChartPanel
-      title="GitHub Risk Trend"
+      title={t('chart.githubTrend', 'GitHub Risk Trend')}
       option={{
         tooltip: { trigger: 'axis' },
         grid: { left: 24, right: 20, top: 24, bottom: 24, containLabel: true },

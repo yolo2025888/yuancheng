@@ -1,4 +1,5 @@
 import type { HeatmapPoint } from '../../types/models';
+import { useI18n } from '../../i18n/I18nContext';
 import { EChartPanel } from './EChartPanel';
 
 type EmployeeHeatmapChartProps = {
@@ -6,6 +7,7 @@ type EmployeeHeatmapChartProps = {
 };
 
 export function EmployeeHeatmapChart({ data }: EmployeeHeatmapChartProps) {
+  const { t, text } = useI18n();
   const employees = Array.from(new Set(data.map((item) => item.employee)));
   const slots = Array.from(new Set(data.map((item) => item.slot)));
 
@@ -13,12 +15,12 @@ export function EmployeeHeatmapChart({ data }: EmployeeHeatmapChartProps) {
     const tuple = (params.data ?? []) as [number, number, number, string];
     const [slotIndex, employeeIndex, riskLevel, status] = tuple;
 
-    return `${employees[employeeIndex]}<br/>${slots[slotIndex]}<br/>${status} / level ${riskLevel}`;
+    return `${employees[employeeIndex]}<br/>${slots[slotIndex]}<br/>${text(status)} / ${t('chart.level', 'level {{level}}', { level: riskLevel })}`;
   };
 
   return (
     <EChartPanel
-      title="Employee Risk Heatmap"
+      title={t('chart.employeeHeatmap', 'Employee Risk Heatmap')}
       option={{
         tooltip: {
           position: 'top',

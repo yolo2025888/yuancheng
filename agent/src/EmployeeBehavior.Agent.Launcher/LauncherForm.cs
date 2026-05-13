@@ -210,6 +210,14 @@ internal sealed class LauncherForm : Form
         _loginSyncStatusLabel.Text = "Resolving employee profile...";
         _currentEmployeeCode = employeeCode;
         _currentEmployeeProfile = await _employeeProfileResolver.ResolveAsync(employeeCode);
+        if (!_currentEmployeeProfile.LoginAllowed)
+        {
+            _loginSyncStatusLabel.Text = "Sync: employee verification failed";
+            _loginErrorLabel.Text = BuildLoginBlockedText(_currentEmployeeProfile);
+            _currentEmployeeProfile = null;
+            return false;
+        }
+
         _clockInAt = DateTimeOffset.Now;
         await _attendanceStore.SetWorkSessionStateAsync("clock_in", _currentEmployeeProfile, _clockInAt.Value);
 
@@ -266,6 +274,16 @@ internal sealed class LauncherForm : Form
     {
         var department = string.IsNullOrWhiteSpace(profile.Department) ? string.Empty : $"    Department: {profile.Department}";
         return $"Employee: {profile.DisplayName} ({profile.EmployeeNo}){department}";
+    }
+
+    private static string BuildLoginBlockedText(EmployeeProfile profile)
+    {
+        if (profile.Source == "blocked")
+        {
+            return "非本公司在职员工，不能登录。";
+        }
+
+        return $"无法校验员工身份，不能登录。{profile.Message}";
     }
 
     private static string BuildRuleSummaryText(EmployeeProfile profile)

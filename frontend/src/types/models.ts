@@ -204,6 +204,16 @@ export type EmployeeRecord = {
   policyName?: string;
 };
 
+export type EmployeeMutationInput = {
+  name: string;
+  employeeNo: string;
+  department?: string;
+  role?: string;
+  manager?: string;
+  githubAccount?: string;
+  status?: string;
+};
+
 export type DeviceRecord = {
   key: string;
   deviceName: string;
@@ -239,9 +249,30 @@ export type TimelineSegment = {
 
 export type ScreenshotListItem = {
   id: string;
+  employeeId?: string;
+  employeeName?: string;
+  employeeNo?: string;
+  department?: string;
+  deviceId?: string;
   capturedAt: string;
+  capturedDate?: string | null;
+  capturedAtRaw?: string | null;
+  sortTimestamp?: number | null;
+  captureBatchKey?: string | null;
   thumbUri?: string | null;
   imageUri?: string | null;
+  screenIndex?: number;
+  windowTitle?: string | null;
+  uploadStatus?: string | null;
+  ocrStatus?: string | null;
+  analysisStatus?: string | null;
+  fileRetentionStatus?: string | null;
+  retentionDecision?: string | null;
+  retentionReason?: string | null;
+  isAbnormal?: boolean;
+  retainUntil?: string | null;
+  imageDeletedAt?: string | null;
+  thumbDeletedAt?: string | null;
   activityType: string;
   activeApp?: string | null;
   activityConfidence?: number | null;
@@ -255,6 +286,21 @@ export type ScreenshotListItem = {
   changeMetrics: ChangeMetrics;
   linkedRisks: LinkedRiskRecord[];
   noChangeStreakTriggered: boolean;
+  aiAnalysis?: ScreenshotAiAnalysis;
+};
+
+export type PolicyAiAnalysisSettings = {
+  enabled: boolean;
+  provider?: string;
+  model?: string;
+  baseUrl?: string;
+  timeoutSeconds?: number | null;
+  usePreviousScreenshot?: boolean;
+  apiKeyMasked?: string | null;
+  apiKeyState?: string | null;
+  hasApiKey?: boolean;
+  confidenceThreshold?: number | null;
+  riskThreshold?: number | null;
 };
 
 export type PolicyRecord = {
@@ -277,6 +323,19 @@ export type PolicyRecord = {
   ocrEnabled: boolean;
   retentionDays: number;
   originalRetention: string;
+  aiAnalysis?: PolicyAiAnalysisSettings;
+};
+
+export type PolicyAiAnalysisMutationInput = {
+  enabled: boolean;
+  provider?: string;
+  model?: string;
+  baseUrl?: string;
+  timeoutSeconds?: number | null;
+  usePreviousScreenshot?: boolean;
+  apiKey?: string;
+  confidenceThreshold?: number | null;
+  riskThreshold?: number | null;
 };
 
 export type PolicyMutationInput = {
@@ -288,6 +347,30 @@ export type PolicyMutationInput = {
   roles: string[];
   departments: string[];
   positions: string[];
+  aiAnalysis: PolicyAiAnalysisMutationInput;
+};
+
+export type ScreenshotAiAnalysisThreshold = {
+  label: string;
+  value: string;
+};
+
+export type ScreenshotAiAnalysis = {
+  status: string;
+  uploadStatus?: string | null;
+  ocrStatus?: string | null;
+  provider?: string | null;
+  model?: string | null;
+  taskLabel?: string | null;
+  riskLevel?: string | null;
+  nonWorkLikelihood?: number | null;
+  confidence?: number | null;
+  summary?: string | null;
+  error?: string | null;
+  recommendedAction?: string | null;
+  responseId?: string | null;
+  findings: string[];
+  thresholds: ScreenshotAiAnalysisThreshold[];
 };
 
 export type AuditLogRecord = {
@@ -370,5 +453,6 @@ export type ScreenshotComparison = {
   noChangeStreakTriggered?: boolean;
   currentActivity?: ScreenshotListItem;
   previousActivity?: ScreenshotListItem;
+  aiAnalysis?: ScreenshotAiAnalysis;
   apiStatus?: ApiStatus;
 };

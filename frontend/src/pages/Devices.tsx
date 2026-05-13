@@ -17,6 +17,7 @@ import { useAuth } from '../auth/AuthContext';
 import { ApiStatusNotice } from '../components/ApiStatusNotice';
 import { PageSection } from '../components/PageSection';
 import { StatusTag } from '../components/StatusTag';
+import { useI18n } from '../i18n/I18nContext';
 import { adminApi } from '../services/adminApi';
 import type { ApiStatus, DeviceRecord } from '../types/models';
 
@@ -39,6 +40,7 @@ type PendingAction =
   | null;
 
 export function DevicesPage() {
+  const { t, text } = useI18n();
   const { canAccess, permissionsResolved } = useAuth();
   const [rows, setRows] = useState<DeviceRecord[]>([]);
   const [apiStatus, setApiStatus] = useState<ApiStatus | null>(null);
@@ -102,7 +104,7 @@ export function DevicesPage() {
         setCredentialStatus(result.apiStatus);
 
         if (!result.token) {
-          messageApi.error(getIssueFailureMessage(result.errorCode, result.apiStatus.detail));
+          messageApi.error(getIssueFailureMessage(result.errorCode, result.apiStatus.detail, t, text));
           return;
         }
 
@@ -126,11 +128,11 @@ export function DevicesPage() {
         );
         messageApi.success(
           record.hasAgentToken
-            ? `Rotated the agent token for ${record.deviceName}.`
-            : `Issued an agent token for ${record.deviceName}.`
+            ? t('devices.tokenRotated', 'Rotated the agent token for {{device}}.', { device: record.deviceName })
+            : t('devices.tokenIssued', 'Issued an agent token for {{device}}.', { device: record.deviceName })
         );
       } catch (error) {
-        const failureMessage = error instanceof Error ? error.message : 'The agent token could not be issued.';
+        const failureMessage = error instanceof Error ? error.message : t('devices.issueFailed', 'The agent token could not be issued.');
         messageApi.error(failureMessage);
       } finally {
         setPendingAction(null);
@@ -152,17 +154,17 @@ export function DevicesPage() {
         setCredentialStatus(result.apiStatus);
 
         if (!result.revokedAt) {
-          const failureMessage = getRevokeFailureMessage(result.errorCode, result.apiStatus.detail);
+          const failureMessage = getRevokeFailureMessage(result.errorCode, result.apiStatus.detail, t, text);
           setRevokeError(failureMessage);
           messageApi.error(failureMessage);
           return;
         }
 
         await loadDevices();
-        messageApi.success(`Revoked the agent token for ${revokeTokenModal.deviceName}.`);
+        messageApi.success(t('devices.tokenRevoked', 'Revoked the agent token for {{device}}.', { device: revokeTokenModal.deviceName }));
         setRevokeTokenModal(null);
       } catch (error) {
-        const failureMessage = error instanceof Error ? error.message : 'The agent token could not be revoked.';
+        const failureMessage = error instanceof Error ? error.message : t('devices.revokeFailed', 'The agent token could not be revoked.');
         setRevokeError(failureMessage);
         messageApi.error(failureMessage);
       } finally {
@@ -173,65 +175,72 @@ export function DevicesPage() {
   );
 
   const columns: TableColumnsType<DeviceRecord> = [
-    { title: 'Device', dataIndex: 'deviceName', width: 180 },
+    { title: t('common.device', 'Device'), dataIndex: 'deviceName', width: 180 },
     {
-      title: 'Employee',
+      title: t('common.employee', 'Employee'),
       width: 220,
       render: (_value: unknown, record: DeviceRecord) => (
         <Space direction="vertical" size={2}>
           <Typography.Text strong>{record.employee}</Typography.Text>
-          <Typography.Text type="secondary">{record.employeeNo ?? 'No employee no.'}</Typography.Text>
+          <Typography.Text type="secondary">{record.employeeNo ?? t('common.noEmployeeNo', 'No employee no.')}</Typography.Text>
         </Space>
       )
     },
     {
-      title: 'Role / Position',
+      title: t('devices.rolePosition', 'Role / Position'),
       width: 220,
       render: (_value: unknown, record: DeviceRecord) => (
         <Space direction="vertical" size={2}>
-          <Typography.Text>{record.department ?? 'Unknown department'}</Typography.Text>
+          <Typography.Text>
+            {record.department ? text(record.department) : t('common.unknownDepartment', 'Unknown department')}
+          </Typography.Text>
           <Typography.Text type="secondary">
-            {[record.role, record.position].filter(Boolean).join(' / ') || 'No role metadata'}
+            {[record.role, record.position].filter(Boolean).map((value) => text(value)).join(' / ') ||
+              t('common.noRoleMetadata', 'No role metadata')}
           </Typography.Text>
         </Space>
       )
     },
     {
-      title: 'Agent / OS',
+      title: t('devices.agentOs', 'Agent / OS'),
       width: 180,
       render: (_value: unknown, record: DeviceRecord) => (
         <Space direction="vertical" size={2}>
-          <Typography.Text>Agent {record.agentVersion}</Typography.Text>
+          <Typography.Text>{t('devices.agentVersion', '客户端 {{version}}', { version: record.agentVersion })}</Typography.Text>
           <Typography.Text type="secondary">{record.os}</Typography.Text>
         </Space>
       )
     },
-    { title: 'Last Heartbeat', dataIndex: 'lastHeartbeat', width: 180 },
+    { title: t('devices.lastHeartbeat', 'Last Heartbeat'), dataIndex: 'lastHeartbeat', width: 180 },
     {
-      title: 'Status',
+      title: t('common.status', 'Status'),
       dataIndex: 'status',
       width: 120,
       render: (value: string) => <StatusTag value={value} />
     },
     {
-      title: 'Agent Token',
+      title: t('devices.agentToken', 'Agent Token'),
       width: 260,
       render: (_value: unknown, record: DeviceRecord) => (
         <Space direction="vertical" size={4}>
-          <Tag color={deviceTokenStatusColor(record)}>{deviceTokenStatusLabel(record)}</Tag>
-          <Typography.Text type="secondary">{buildDeviceTokenSummary(record)}</Typography.Text>
-          <Typography.Text type="secondary">Expires: {record.agentTokenExpiresAt ?? '--'}</Typography.Text>
-          <Typography.Text type="secondary">Last used: {record.agentTokenLastUsedAt ?? '--'}</Typography.Text>
+          <Tag color={deviceTokenStatusColor(record)}>{deviceTokenStatusLabel(record, t)}</Tag>
+          <Typography.Text type="secondary">{buildDeviceTokenSummary(record, t)}</Typography.Text>
+          <Typography.Text type="secondary">
+            {t('devices.expires', 'Expires: {{value}}', { value: record.agentTokenExpiresAt ?? '--' })}
+          </Typography.Text>
+          <Typography.Text type="secondary">
+            {t('devices.lastUsed', 'Last used: {{value}}', { value: record.agentTokenLastUsedAt ?? '--' })}
+          </Typography.Text>
         </Space>
       )
     },
     {
-      title: 'Agent Metadata',
+      title: t('devices.agentMetadata', 'Agent Metadata'),
       width: 360,
       render: (_value: unknown, record: DeviceRecord) => (
         <Space size={[6, 6]} wrap>
-          {(record.metadataLabels?.length ? record.metadataLabels : ['No extra metadata']).map((label) => (
-            <Tag key={label}>{label}</Tag>
+          {(record.metadataLabels?.length ? record.metadataLabels : [t('devices.noMetadata', 'No extra metadata')]).map((label) => (
+            <Tag key={label}>{text(label)}</Tag>
           ))}
         </Space>
       )
@@ -240,7 +249,7 @@ export function DevicesPage() {
 
   if (canManageDeviceTokens) {
     columns.push({
-      title: 'Actions',
+      title: t('common.actions', 'Actions'),
       width: 190,
       fixed: 'right',
       render: (_value: unknown, record: DeviceRecord) => {
@@ -258,7 +267,7 @@ export function DevicesPage() {
               disabled={issueDisabled}
               onClick={() => void handleIssueToken(record)}
             >
-              {isDeviceTokenActive(record) ? 'Rotate token' : 'Issue token'}
+              {isDeviceTokenActive(record) ? t('devices.rotateToken', 'Rotate token') : t('devices.issueToken', 'Issue token')}
             </Button>
             <Button
               size="small"
@@ -274,7 +283,7 @@ export function DevicesPage() {
                 });
               }}
             >
-              Revoke
+              {t('devices.revoke', 'Revoke')}
             </Button>
           </Space>
         );
@@ -286,29 +295,35 @@ export function DevicesPage() {
     <Space direction="vertical" size={20} className="page-stack">
       {contextHolder}
       <PageSection
-        title="Devices"
-        description="Live device heartbeat data is preferred. Device-scoped agent tokens can be issued and revoked here without exposing raw input or private content."
+        title={t('devices.title', 'Devices')}
+        description={t(
+          'devices.description',
+          'Live device heartbeat data is preferred. Device-scoped agent tokens can be issued and revoked here without exposing raw input or private content.'
+        )}
         extra={
           <Space size={[8, 8]} wrap>
-            <Tag color="blue">{rows.length} devices</Tag>
-            <Tag color="cyan">{summary.remoteCount} remote sessions</Tag>
-            <Tag color="gold">{summary.lockedCount} locked</Tag>
-            <Tag color="green">{summary.tokenCount} with token</Tag>
-            <Tag color="red">{summary.revokedCount} revoked</Tag>
+            <Tag color="blue">{t('devices.devices', '{{count}} devices', { count: rows.length })}</Tag>
+            <Tag color="cyan">{t('devices.remoteSessions', '{{count}} remote sessions', { count: summary.remoteCount })}</Tag>
+            <Tag color="gold">{t('devices.locked', '{{count}} locked', { count: summary.lockedCount })}</Tag>
+            <Tag color="green">{t('devices.withToken', '{{count}} with token', { count: summary.tokenCount })}</Tag>
+            <Tag color="red">{t('devices.revoked', '{{count}} revoked', { count: summary.revokedCount })}</Tag>
             <Button size="small" loading={loadingDevices} onClick={() => void loadDevices()}>
-              Reload
+              {t('common.reload', 'Reload')}
             </Button>
           </Space>
         }
       />
-      {apiStatus ? <ApiStatusNotice status={apiStatus} title="Device API" /> : null}
-      {credentialStatus ? <ApiStatusNotice status={credentialStatus} title="Device token API" /> : null}
+      {apiStatus ? <ApiStatusNotice status={apiStatus} title={t('devices.api', 'Device API')} /> : null}
+      {credentialStatus ? <ApiStatusNotice status={credentialStatus} title={t('devices.tokenApi', 'Device token API')} /> : null}
       {!canManageDeviceTokens ? (
         <Alert
           type="warning"
           showIcon
-          message="Agent token management is restricted for the current role."
-          description="Issue and revoke actions require the device_tokens.manage permission when RBAC permissions are resolved."
+          message={t('devices.tokenRestricted', 'Agent token management is restricted for the current role.')}
+          description={t(
+            'devices.tokenRestrictedDesc',
+            'Issue and revoke actions require the device_tokens.manage permission when RBAC permissions are resolved.'
+          )}
         />
       ) : null}
       <Card bordered={false} className="panel-card">
@@ -333,28 +348,35 @@ export function DevicesPage() {
           <Alert
             type="warning"
             showIcon
-            message="This token is shown only once."
-            description="Store it now. After this dialog closes, the frontend will not keep showing the plaintext token."
+            message={t('devices.tokenShownOnce', 'This token is shown only once.')}
+            description={t(
+              'devices.tokenShownOnceDesc',
+              'Store it now. After this dialog closes, the frontend will not keep showing the plaintext token.'
+            )}
           />
           <Space direction="vertical" size={4} className="full-width">
-            <Typography.Text strong>Device ID</Typography.Text>
+            <Typography.Text strong>{t('devices.deviceId', 'Device ID')}</Typography.Text>
             <Typography.Text code>{issuedTokenModal?.deviceId}</Typography.Text>
           </Space>
           <Space direction="vertical" size={4} className="full-width">
-            <Typography.Text strong>Issued token</Typography.Text>
+            <Typography.Text strong>{t('devices.issuedToken', 'Issued token')}</Typography.Text>
             <Input.TextArea readOnly autoSize={{ minRows: 3, maxRows: 5 }} value={issuedTokenModal?.token ?? ''} />
           </Space>
           <Space size={8} wrap>
             <Button type="primary" onClick={clearIssuedTokenModal}>
-              I stored this token
+              {t('devices.storedToken', 'I stored this token')}
             </Button>
           </Space>
         </Space>
       </Modal>
       <Modal
         open={Boolean(revokeTokenModal)}
-        title={revokeTokenModal ? `Revoke agent token - ${revokeTokenModal.deviceName}` : 'Revoke agent token'}
-        okText="Revoke token"
+        title={
+          revokeTokenModal
+            ? t('devices.revokeTitle', 'Revoke agent token - {{device}}', { device: revokeTokenModal.deviceName })
+            : t('devices.revokeTitleDefault', 'Revoke agent token')
+        }
+        okText={t('devices.revokeToken', 'Revoke token')}
         okButtonProps={{
           danger: true,
           loading: pendingAction?.deviceId === revokeTokenModal?.deviceId && pendingAction?.type === 'revoke'
@@ -375,13 +397,15 @@ export function DevicesPage() {
             <Alert
               type="error"
               showIcon
-              message="Unable to revoke the device token"
+              message={t('devices.unableRevoke', 'Unable to revoke the device token')}
               description={revokeError}
             />
           ) : null}
           <Typography.Text>
-            Revoking this agent token immediately invalidates the current device credential. The token value is never
-            shown again during revoke.
+            {t(
+              'devices.revokeDesc',
+              'Revoking this agent token immediately invalidates the current device credential. The token value is never shown again during revoke.'
+            )}
           </Typography.Text>
         </Space>
       </Modal>
@@ -389,32 +413,36 @@ export function DevicesPage() {
   );
 }
 
-function buildDeviceTokenSummary(record: DeviceRecord) {
+type TranslateFn = ReturnType<typeof useI18n>['t'];
+
+function buildDeviceTokenSummary(record: DeviceRecord, t: TranslateFn) {
   if (!record.hasAgentToken) {
-    return 'No device-scoped token has been issued yet.';
+    return t('devices.noTokenYet', 'No device-scoped token has been issued yet.');
   }
 
   if (record.agentTokenRevokedAt) {
-    return `The most recent device token was revoked at ${record.agentTokenRevokedAt}.`;
+    return t('devices.tokenRevokedAt', 'The most recent device token was revoked at {{time}}.', {
+      time: record.agentTokenRevokedAt
+    });
   }
 
-  return 'A device-scoped token is currently active for this device.';
+  return t('devices.tokenActive', 'A device-scoped token is currently active for this device.');
 }
 
 function isDeviceTokenActive(record: DeviceRecord) {
   return Boolean(record.hasAgentToken && !record.agentTokenRevokedAt);
 }
 
-function deviceTokenStatusLabel(record: DeviceRecord) {
+function deviceTokenStatusLabel(record: DeviceRecord, t: TranslateFn) {
   if (record.agentTokenRevokedAt) {
-    return 'Revoked';
+    return t('devices.tokenStatusRevoked', 'Revoked');
   }
 
   if (record.hasAgentToken) {
-    return 'Issued';
+    return t('devices.tokenStatusIssued', 'Issued');
   }
 
-  return 'Not issued';
+  return t('devices.tokenStatusNotIssued', 'Not issued');
 }
 
 function deviceTokenStatusColor(record: DeviceRecord) {
@@ -429,26 +457,38 @@ function deviceTokenStatusColor(record: DeviceRecord) {
   return 'default';
 }
 
-function getIssueFailureMessage(errorCode: string | undefined, detail: string) {
+type TranslateTextFn = ReturnType<typeof useI18n>['text'];
+
+function getIssueFailureMessage(
+  errorCode: string | undefined,
+  detail: string,
+  t: TranslateFn,
+  text: TranslateTextFn
+) {
   if (errorCode === 'forbidden') {
-    return 'You do not have permission to issue an agent token for this device.';
+    return t('devices.noIssuePermission', 'You do not have permission to issue an agent token for this device.');
   }
 
   if (errorCode === 'not_found') {
-    return 'This device no longer exists or is not visible to the current admin account.';
+    return t('devices.notFound', 'This device no longer exists or is not visible to the current admin account.');
   }
 
-  return detail || 'The agent token could not be issued.';
+  return text(detail) || t('devices.issueFailed', 'The agent token could not be issued.');
 }
 
-function getRevokeFailureMessage(errorCode: string | undefined, detail: string) {
+function getRevokeFailureMessage(
+  errorCode: string | undefined,
+  detail: string,
+  t: TranslateFn,
+  text: TranslateTextFn
+) {
   if (errorCode === 'forbidden') {
-    return 'You do not have permission to revoke the agent token for this device.';
+    return t('devices.noRevokePermission', 'You do not have permission to revoke the agent token for this device.');
   }
 
   if (errorCode === 'not_found') {
-    return 'This device no longer exists or is not visible to the current admin account.';
+    return t('devices.notFound', 'This device no longer exists or is not visible to the current admin account.');
   }
 
-  return detail || 'The agent token could not be revoked.';
+  return text(detail) || t('devices.revokeFailed', 'The agent token could not be revoked.');
 }

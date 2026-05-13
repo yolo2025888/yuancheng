@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date as date_type, datetime
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -54,14 +54,41 @@ class TimelineActivity(BaseModel):
 class TimelineItem(BaseModel):
     time: str
     screenshot_id: UUID
+    employee_id: UUID
+    employee_name: str | None = None
+    employee_no: str | None = None
+    department: str | None = None
+    captured_at: datetime | None = None
+    capture_batch_key: str | None = None
+    screen_index: int = 0
     thumbnail_url: str | None = None
     thumb_uri: str | None = None
     image_uri: str | None = None
+    file_retention_status: str = "full"
+    retention_decision: str = "pending"
+    retention_reason: str | None = None
+    is_abnormal: bool = False
+    retain_until: datetime | None = None
+    image_deleted_at: datetime | None = None
+    thumb_deleted_at: datetime | None = None
     activity_type: str
     active_app: str | None = None
     activity_confidence: float | None = None
     activity_summary: str | None = None
     activity_evidence: dict[str, object] = Field(default_factory=dict)
+    ai_analysis_status: str = "skipped"
+    ai_summary: str | None = None
+    ai_task_label: str | None = None
+    ai_risk_level: str | None = None
+    ai_non_work_likelihood: float | None = None
+    ai_confidence: float | None = None
+    ai_provider: str | None = None
+    ai_model: str | None = None
+    ai_recommended_action: str | None = None
+    ai_response_id: str | None = None
+    ai_details: dict[str, object] = Field(default_factory=dict)
+    ai_error: str | None = None
+    ai_analyzed_at: datetime | None = None
     activity: TimelineActivity
     change_level: str
     change: TimelineChange
@@ -71,16 +98,25 @@ class TimelineItem(BaseModel):
 
 
 class TimelineResponse(BaseModel):
-    employee_id: UUID
-    date: date
+    employee_id: UUID | None = None
+    department: str | None = None
+    date: date_type | None = None
+    total: int = 0
+    page: int = 1
+    page_size: int = 50
+    applied_filters: dict[str, object] = Field(default_factory=dict)
     items: list[TimelineItem]
 
 
 class ScreenshotItem(BaseModel):
     id: UUID
     employee_id: UUID
+    employee_name: str | None = None
+    employee_no: str | None = None
+    department: str | None = None
     device_id: UUID
     captured_at: datetime
+    capture_batch_key: str | None = None
     screen_index: int
     image_uri: str | None = None
     thumb_uri: str | None = None
@@ -108,6 +144,26 @@ class ScreenshotItem(BaseModel):
     activity_confidence: float | None = None
     activity_summary: str | None = None
     activity_evidence: dict[str, object] = Field(default_factory=dict)
+    ai_analysis_status: str = "skipped"
+    ai_summary: str | None = None
+    ai_task_label: str | None = None
+    ai_risk_level: str | None = None
+    ai_non_work_likelihood: float | None = None
+    ai_confidence: float | None = None
+    ai_provider: str | None = None
+    ai_model: str | None = None
+    ai_recommended_action: str | None = None
+    ai_response_id: str | None = None
+    ai_details: dict[str, object] = Field(default_factory=dict)
+    ai_error: str | None = None
+    ai_analyzed_at: datetime | None = None
+    file_retention_status: str = "full"
+    retention_decision: str = "pending"
+    retention_reason: str | None = None
+    is_abnormal: bool = False
+    retain_until: datetime | None = None
+    image_deleted_at: datetime | None = None
+    thumb_deleted_at: datetime | None = None
     diff: ScreenDiffSummary | None = None
     risk_events: list[TimelineRiskEvent] = Field(default_factory=list)
     created_at: datetime
@@ -119,6 +175,9 @@ class ScreenshotItem(BaseModel):
 class ScreenshotListResponse(BaseModel):
     items: list[ScreenshotItem]
     total: int
+    page: int = 1
+    page_size: int = 20
+    applied_filters: dict[str, object] = Field(default_factory=dict)
 
 
 class BehaviorEventDetail(BaseModel):

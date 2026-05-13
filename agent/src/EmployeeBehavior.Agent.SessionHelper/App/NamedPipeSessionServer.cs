@@ -73,7 +73,14 @@ public sealed class NamedPipeSessionServer : BackgroundService
         var pipeSecurity = new PipeSecurity();
         AddPipeAccessRule(pipeSecurity, new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null));
         AddPipeAccessRule(pipeSecurity, new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null));
+        AddPipeAccessRule(pipeSecurity, GetCurrentIdentitySid());
         return pipeSecurity;
+    }
+
+    private static SecurityIdentifier GetCurrentIdentitySid()
+    {
+        return WindowsIdentity.GetCurrent().User
+            ?? throw new InvalidOperationException("Current Windows identity does not expose a user SID.");
     }
 
     private static void AddPipeAccessRule(PipeSecurity pipeSecurity, SecurityIdentifier identity)

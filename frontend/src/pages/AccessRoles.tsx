@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { ApiStatusNotice } from '../components/ApiStatusNotice';
 import { PageSection } from '../components/PageSection';
+import { useI18n } from '../i18n/I18nContext';
 import { adminApi } from '../services/adminApi';
 import type { AccessMatrixRecord, ApiStatus, EmployeeRecord, PolicyRecord } from '../types/models';
 
@@ -22,6 +23,7 @@ type EmployeeAccessRow = {
 };
 
 export function AccessRolesPage() {
+  const { t, text } = useI18n();
   const [rows, setRows] = useState<AccessMatrixRecord[]>([]);
   const [employees, setEmployees] = useState<EmployeeRecord[]>([]);
   const [policies, setPolicies] = useState<PolicyRecord[]>([]);
@@ -107,27 +109,32 @@ export function AccessRolesPage() {
   return (
     <Space direction="vertical" size={20} className="page-stack">
       <PageSection
-        title="Access Roles"
-        description="Review role permissions, module coverage, and employee-to-job-role alignment on one admin surface."
+        title={t('access.title', 'Access Roles')}
+        description={t(
+          'access.description',
+          'Review role permissions, module coverage, and employee-to-job-role alignment on one admin surface.'
+        )}
         extra={
           <Space size={[8, 8]} wrap>
-            <Tag color="blue">{summary.roles} roles</Tag>
-            <Tag color="geekblue">{summary.modules} modules</Tag>
-            <Tag color="purple">{summary.actions} actions</Tag>
-            <Tag color="green">{summary.coveredEmployees} employees mapped</Tag>
+            <Tag color="blue">{t('access.roles', '{{count}} roles', { count: summary.roles })}</Tag>
+            <Tag color="geekblue">{t('access.modules', '{{count}} modules', { count: summary.modules })}</Tag>
+            <Tag color="purple">{t('access.actions', '{{count}} actions', { count: summary.actions })}</Tag>
+            <Tag color="green">
+              {t('access.employeesMapped', '{{count}} employees mapped', { count: summary.coveredEmployees })}
+            </Tag>
             <Tag color={summary.unmappedEmployees > 0 ? 'orange' : 'green'}>
-              {summary.unmappedEmployees} unmapped
+              {t('access.unmapped', '{{count}} unmapped', { count: summary.unmappedEmployees })}
             </Tag>
             <Button size="small" onClick={() => void loadData()} loading={loading}>
-              Reload
+              {t('common.reload', 'Reload')}
             </Button>
           </Space>
         }
       />
-      {accessApiStatus ? <ApiStatusNotice status={accessApiStatus} title="Access matrix API" /> : null}
+      {accessApiStatus ? <ApiStatusNotice status={accessApiStatus} title={t('access.matrixApi', 'Access matrix API')} /> : null}
       <Row gutter={[16, 16]} align="stretch">
         <Col xs={24} xl={16}>
-          <Card bordered={false} className="panel-card" title="Role access matrix">
+          <Card bordered={false} className="panel-card" title={t('access.matrix', 'Role access matrix')}>
             <Table
               rowKey="key"
               size="small"
@@ -137,73 +144,79 @@ export function AccessRolesPage() {
               scroll={{ x: 1220 }}
               columns={[
                 {
-                  title: 'Role',
+                  title: t('common.role', 'Role'),
                   width: 180,
                   render: (_value: unknown, record: AccessMatrixRecord) => (
                     <Space direction="vertical" size={2}>
-                      <Typography.Text strong>{record.role}</Typography.Text>
-                      <Typography.Text type="secondary">{record.employeeCount} employees</Typography.Text>
+                      <Typography.Text strong>{text(record.role)}</Typography.Text>
+                      <Typography.Text type="secondary">
+                        {t('employees.count', '{{count}} employees', { count: record.employeeCount })}
+                      </Typography.Text>
                     </Space>
                   )
                 },
                 {
-                  title: 'Allowed modules',
+                  title: t('access.allowedModules', 'Allowed modules'),
                   width: 320,
                   render: (_value: unknown, record: AccessMatrixRecord) => (
                     <Space size={[4, 4]} wrap>
                       {record.modules.length > 0 ? (
                         record.modules.map((module) => (
                           <Tag key={module} color="geekblue">
-                            {module}
+                            {text(module)}
                           </Tag>
                         ))
                       ) : (
-                        <Typography.Text type="secondary">No modules declared</Typography.Text>
+                        <Typography.Text type="secondary">{t('access.noModules', 'No modules declared')}</Typography.Text>
                       )}
                     </Space>
                   )
                 },
                 {
-                  title: 'Allowed actions',
+                  title: t('access.allowedActions', 'Allowed actions'),
                   width: 260,
                   render: (_value: unknown, record: AccessMatrixRecord) => (
                     <Space size={[4, 4]} wrap>
                       {record.actions.length > 0 ? (
                         record.actions.map((action) => (
                           <Tag key={action} color="cyan">
-                            {action}
+                            {text(action)}
                           </Tag>
                         ))
                       ) : (
-                        <Typography.Text type="secondary">No actions declared</Typography.Text>
+                        <Typography.Text type="secondary">{t('access.noActions', 'No actions declared')}</Typography.Text>
                       )}
                     </Space>
                   )
                 },
                 {
-                  title: 'Scope',
+                  title: t('dashboard.scope', 'Scope'),
                   width: 260,
                   render: (_value: unknown, record: AccessMatrixRecord) => (
                     <Space direction="vertical" size={4}>
                       <Typography.Text type="secondary">
-                        Departments: {record.departments.join(', ') || 'None'}
+                        {t('access.departments', 'Departments: {{value}}', {
+                          value: record.departments.map(text).join(', ') || t('common.none', 'None')
+                        })}
                       </Typography.Text>
                       <Typography.Text type="secondary">
-                        Positions: {record.positions.join(', ') || 'None'}
+                        {t('access.positions', 'Positions: {{value}}', {
+                          value: record.positions.map(text).join(', ') || t('common.none', 'None')
+                        })}
                       </Typography.Text>
                     </Space>
                   )
                 },
                 {
-                  title: 'Employees / Policies',
+                  title: t('access.employeesPolicies', 'Employees / Policies'),
                   width: 220,
                   render: (_value: unknown, record: AccessMatrixRecord) => (
                     <Space direction="vertical" size={4}>
                       <Typography.Text type="secondary">
-                        {record.employees.slice(0, 3).join(', ') || 'No named employees'}
+                        {record.employees.slice(0, 3).join(', ') || t('access.noNamedEmployees', 'No named employees')}
                       </Typography.Text>
                       <Typography.Text type="secondary">
-                        {record.policyNames.join(', ') || 'No policy binding'}
+                        {record.policyNames.map(text).join(', ') || t('dashboard.noPolicyBinding', 'No policy binding')}
                       </Typography.Text>
                     </Space>
                   )
@@ -216,30 +229,32 @@ export function AccessRolesPage() {
           <Card
             bordered={false}
             className="panel-card"
-            title="Alignment snapshot"
-            extra={<Typography.Text type="secondary">Source mix</Typography.Text>}
+            title={t('access.alignmentSnapshot', 'Alignment snapshot')}
+            extra={<Typography.Text type="secondary">{t('access.sourceMix', 'Source mix')}</Typography.Text>}
           >
             <Space direction="vertical" size={12} className="full-width">
               <Space size={[8, 8]} wrap>
                 {employeeApiStatus ? (
                   <Tag color={employeeApiStatus.source === 'live' ? 'green' : 'gold'}>
-                    Employees {employeeApiStatus.label}
+                    {t('access.employeesTag', 'Employees {{label}}', { label: text(employeeApiStatus.label) })}
                   </Tag>
                 ) : null}
                 {policyApiStatus ? (
                   <Tag color={policyApiStatus.source === 'live' ? 'green' : 'gold'}>
-                    Policies {policyApiStatus.label}
+                    {t('access.policiesTag', 'Policies {{label}}', { label: text(policyApiStatus.label) })}
                   </Tag>
                 ) : null}
               </Space>
               {rows.slice(0, 6).map((record) => (
                 <Space key={record.key} direction="vertical" size={2} className="full-width">
-                  <Typography.Text strong>{record.role}</Typography.Text>
+                  <Typography.Text strong>{text(record.role)}</Typography.Text>
                   <Typography.Text type="secondary">
-                    {record.policyNames.join(', ') || 'No policy binding'}
+                    {record.policyNames.map(text).join(', ') || t('dashboard.noPolicyBinding', 'No policy binding')}
                   </Typography.Text>
                   <Typography.Text type="secondary">
-                    {record.employeeCount} employees / {record.modules.length} modules / {record.actions.length} actions
+                    {t('employees.count', '{{count}} employees', { count: record.employeeCount })} /{' '}
+                    {t('access.modules', '{{count}} modules', { count: record.modules.length })} /{' '}
+                    {t('access.actions', '{{count}} actions', { count: record.actions.length })}
                   </Typography.Text>
                 </Space>
               ))}
@@ -247,7 +262,7 @@ export function AccessRolesPage() {
           </Card>
         </Col>
       </Row>
-      <Card bordered={false} className="panel-card" title="Employee relevance">
+      <Card bordered={false} className="panel-card" title={t('access.employeeRelevance', 'Employee relevance')}>
         <Table
           rowKey="key"
           size="small"
@@ -257,63 +272,68 @@ export function AccessRolesPage() {
           scroll={{ x: 1180 }}
           columns={[
             {
-              title: 'Employee',
+              title: t('common.employee', 'Employee'),
               width: 220,
               render: (_value: unknown, record: EmployeeAccessRow) => (
                 <Space direction="vertical" size={2}>
                   <Typography.Text strong>{record.employee}</Typography.Text>
-                  <Typography.Text type="secondary">{record.employeeNo ?? 'No employee no.'}</Typography.Text>
+                  <Typography.Text type="secondary">{record.employeeNo ?? t('common.noEmployeeNo', 'No employee no.')}</Typography.Text>
                 </Space>
               )
             },
-            { title: 'Department', dataIndex: 'department', width: 180 },
+            { title: t('common.department', 'Department'), dataIndex: 'department', width: 180, render: (value: string) => text(value) },
             {
-              title: 'Role / Position',
+              title: t('access.rolePosition', 'Role / Position'),
               width: 220,
               render: (_value: unknown, record: EmployeeAccessRow) => (
                 <Space direction="vertical" size={2}>
-                  <Typography.Text>{record.role}</Typography.Text>
-                  <Typography.Text type="secondary">{record.position ?? 'No position metadata'}</Typography.Text>
-                </Space>
-              )
-            },
-            {
-              title: 'Access profile',
-              width: 220,
-              render: (_value: unknown, record: EmployeeAccessRow) => (
-                <Space direction="vertical" size={4}>
-                  <Tag color={record.coverageState === 'mapped' ? 'green' : 'orange'}>
-                    {record.profile ?? 'Unmapped'}
-                  </Tag>
+                  <Typography.Text>{text(record.role)}</Typography.Text>
                   <Typography.Text type="secondary">
-                    {record.actions.length} actions / {record.modules.length} modules
+                    {record.position ? text(record.position) : t('access.noPosition', 'No position metadata')}
                   </Typography.Text>
                 </Space>
               )
             },
             {
-              title: 'Modules',
+              title: t('access.profile', 'Access profile'),
+              width: 220,
+              render: (_value: unknown, record: EmployeeAccessRow) => (
+                <Space direction="vertical" size={4}>
+                  <Tag color={record.coverageState === 'mapped' ? 'green' : 'orange'}>
+                    {record.profile ? text(record.profile) : t('access.unmappedLabel', 'Unmapped')}
+                  </Tag>
+                  <Typography.Text type="secondary">
+                    {t('access.actionModuleCount', '{{actions}} actions / {{modules}} modules', {
+                      actions: record.actions.length,
+                      modules: record.modules.length
+                    })}
+                  </Typography.Text>
+                </Space>
+              )
+            },
+            {
+              title: t('common.modules', 'Modules'),
               width: 280,
               render: (_value: unknown, record: EmployeeAccessRow) => (
                 <Space size={[4, 4]} wrap>
                   {record.modules.length > 0 ? (
                     record.modules.slice(0, 4).map((module) => (
-                      <Tag key={`${record.key}-${module}`}>{module}</Tag>
+                      <Tag key={`${record.key}-${module}`}>{text(module)}</Tag>
                     ))
                   ) : (
-                    <Typography.Text type="secondary">No module mapping</Typography.Text>
+                    <Typography.Text type="secondary">{t('access.noModuleMapping', 'No module mapping')}</Typography.Text>
                   )}
                 </Space>
               )
             },
             {
-              title: 'Policy / Risk',
+              title: t('access.policyRisk', 'Policy / Risk'),
               width: 180,
               render: (_value: unknown, record: EmployeeAccessRow) => (
                 <Space direction="vertical" size={2}>
-                  <Typography.Text>{record.policyName ?? 'No policy assigned'}</Typography.Text>
+                  <Typography.Text>{record.policyName ? text(record.policyName) : t('access.noPolicyAssigned', 'No policy assigned')}</Typography.Text>
                   <Typography.Text type={record.todayRisk > 0 ? 'warning' : 'secondary'}>
-                    {record.todayRisk} risk events
+                    {t('access.riskEvents', '{{count}} risk events', { count: record.todayRisk })}
                   </Typography.Text>
                 </Space>
               )

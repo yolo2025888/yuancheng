@@ -2,16 +2,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from uuid import UUID, uuid4
 
-from sqlalchemy import or_
+from sqlalchemy import and_, or_
 from sqlmodel import Session, select
 
 from app.core.config import Settings
 from app.models import Policy, Screenshot
 from app.services.audit import AuditContext, AuditService
-from app.services.storage import LocalScreenshotStorage
+from app.services.storage import LocalScreenshotStorage, StoredUriDeleteResult
 
 
 @dataclass(frozen=True)
@@ -47,8 +46,14 @@ class ScreenshotRetentionService:
 
         screenshots = self.session.exec(
             select(Screenshot)
-            .where(Screenshot.captured_at < cutoff_at)
+            .where(
+                or_(
+                    Screenshot.retain_until < effective_now,
+                    and_(Screenshot.retain_until.is_(None), Screenshot.captured_at < cutoff_at),
+                )
+            )
             .where(or_(Screenshot.image_uri.is_not(None), Screenshot.thumb_uri.is_not(None)))
+            .where(Screenshot.file_retention_status == "full")
             .order_by(Screenshot.captured_at.asc())
         ).all()
 
@@ -58,8 +63,10 @@ class ScreenshotRetentionService:
         records_updated = 0
         records_failed = 0
         for screenshot in screenshots:
-            image_result = self._delete_stored_uri(screenshot.image_uri)
-            thumb_result = self._delete_stored_uri(screenshot.thumb_uri)
+            original_image_uri = screenshot.image_uri
+            original_thumb_uri = screenshot.thumb_uri
+            image_result = self.storage.delete(screenshot.image_uri)
+            thumb_result = self.storage.delete(screenshot.thumb_uri)
             results = (image_result, thumb_result)
 
             files_deleted += sum(1 for result in results if result.deleted)
@@ -69,15 +76,23 @@ class ScreenshotRetentionService:
 
             if image_result.handled:
                 screenshot.image_uri = None
+                if original_image_uri is not None:
+                    screenshot.image_deleted_at = effective_now
             if thumb_result.handled:
                 screenshot.thumb_uri = None
+                if original_thumb_uri is not None:
+                    screenshot.thumb_deleted_at = effective_now
 
             if image_result.handled or thumb_result.handled:
+                screenshot.file_retention_status = "metadata_only"
                 screenshot.updated_at = effective_now
                 self.session.add(screenshot)
                 records_updated += 1
 
             if file_failure_count > 0:
+                screenshot.file_retention_status = "delete_failed"
+                screenshot.updated_at = effective_now
+                self.session.add(screenshot)
                 records_failed += 1
 
             action = "screenshot.retention.failed" if file_failure_count > 0 else "screenshot.retention.deleted"
@@ -124,21 +139,6 @@ class ScreenshotRetentionService:
 
         return result
 
-    def _delete_stored_uri(self, uri: str | None) -> "_DeleteStoredUriResult":
-        if not uri:
-            return _DeleteStoredUriResult(handled=False)
-
-        path = self.storage.resolve_stored_uri(uri)
-        if path is None:
-            return _DeleteStoredUriResult(handled=True, missing=True)
-
-        try:
-            path.unlink()
-        except OSError as exc:
-            return _DeleteStoredUriResult(handled=False, error=f"{type(exc).__name__}: {exc}")
-
-        return _DeleteStoredUriResult(handled=True, deleted=True, path=path)
-
     def _effective_retention_days(self) -> int:
         active_retention_days = self.session.exec(
             select(Policy.retention_days).where(Policy.is_active.is_(True))
@@ -146,12 +146,3 @@ class ScreenshotRetentionService:
         if not active_retention_days:
             return self.settings.default_retention_days
         return min(int(days) for days in active_retention_days)
-
-
-@dataclass(frozen=True)
-class _DeleteStoredUriResult:
-    handled: bool
-    deleted: bool = False
-    missing: bool = False
-    path: Path | None = None
-    error: str | None = None

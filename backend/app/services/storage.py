@@ -20,6 +20,15 @@ class StoredScreenshot:
     thumb_uri: str
 
 
+@dataclass(frozen=True)
+class StoredUriDeleteResult:
+    handled: bool
+    deleted: bool = False
+    missing: bool = False
+    path: Path | None = None
+    error: str | None = None
+
+
 class LocalScreenshotStorage:
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -83,6 +92,21 @@ class LocalScreenshotStorage:
             return None
 
         return candidate
+
+    def delete(self, uri: str | None) -> StoredUriDeleteResult:
+        if not uri:
+            return StoredUriDeleteResult(handled=False)
+
+        path = self.resolve_stored_uri(uri)
+        if path is None:
+            return StoredUriDeleteResult(handled=True, missing=True)
+
+        try:
+            path.unlink()
+        except OSError as exc:
+            return StoredUriDeleteResult(handled=False, error=f"{type(exc).__name__}: {exc}")
+
+        return StoredUriDeleteResult(handled=True, deleted=True, path=path)
 
     def _resolve_extension(self, *, filename: str | None, content_type: str | None) -> str:
         file_extension = Path(filename or "").suffix.lower()

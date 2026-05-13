@@ -1,5 +1,6 @@
 import { Alert, Space, Tag, Typography } from 'antd';
 
+import { useI18n } from '../i18n/I18nContext';
 import type { ApiStatus, BackendHealth } from '../types/models';
 
 type ApiStatusNoticeProps = {
@@ -11,12 +12,14 @@ export function ApiStatusNotice({
   status,
   title = 'API status'
 }: ApiStatusNoticeProps) {
+  const { t, text } = useI18n();
   const tone =
     status.state === 'connected'
       ? 'success'
       : status.state === 'fallback'
         ? 'warning'
         : 'error';
+  const titleLabel = title === 'API status' ? t('api.status', 'API status') : title;
 
   return (
     <Alert
@@ -25,12 +28,12 @@ export function ApiStatusNotice({
       className="api-status-alert"
       message={
         <Space size={8} wrap>
-          <Typography.Text strong>{title}</Typography.Text>
-          <Tag color={status.source === 'live' ? 'green' : 'gold'}>{status.label}</Tag>
+          <Typography.Text strong>{titleLabel}</Typography.Text>
+          <Tag color={status.source === 'live' ? 'green' : 'gold'}>{text(status.label)}</Tag>
           {status.endpoint ? <Typography.Text type="secondary">{status.endpoint}</Typography.Text> : null}
         </Space>
       }
-      description={status.detail}
+      description={text(status.detail)}
     />
   );
 }
@@ -40,16 +43,19 @@ type BackendHealthNoticeProps = {
 };
 
 export function BackendHealthNotice({ health }: BackendHealthNoticeProps) {
+  const { t, text } = useI18n();
   const description = health.ok
-    ? `${health.appName ?? 'backend'} / ${health.environment ?? 'unknown'}`
-    : health.apiStatus.detail;
+    ? `${health.appName ?? 'backend'} / ${health.environment ?? t('api.unknown', 'unknown')}`
+    : text(health.apiStatus.detail);
 
   return (
     <Alert
       type={health.ok ? 'success' : 'warning'}
       showIcon
       className="api-status-alert"
-      message={`Backend health: ${health.ok ? 'ok' : 'unavailable'}`}
+      message={t('api.backendHealth', 'Backend health: {{status}}', {
+        status: health.ok ? t('api.backendOk', 'ok') : t('api.backendUnavailable', 'unavailable')
+      })}
       description={description}
     />
   );

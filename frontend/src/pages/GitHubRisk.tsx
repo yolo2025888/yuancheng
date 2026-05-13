@@ -5,10 +5,12 @@ import { ApiStatusNotice } from '../components/ApiStatusNotice';
 import { PageSection } from '../components/PageSection';
 import { StatusTag } from '../components/StatusTag';
 import { GitHubTrendChart } from '../components/charts/GitHubTrendChart';
+import { useI18n } from '../i18n/I18nContext';
 import { adminApi } from '../services/adminApi';
 import type { ApiStatus, GitHubRiskRecord } from '../types/models';
 
 export function GitHubRiskPage() {
+  const { t, text } = useI18n();
   const [rows, setRows] = useState<GitHubRiskRecord[]>([]);
   const [trend, setTrend] = useState<readonly (readonly [string, number])[]>([]);
   const [apiStatus, setApiStatus] = useState<ApiStatus | null>(null);
@@ -42,20 +44,23 @@ export function GitHubRiskPage() {
   return (
     <Space direction="vertical" size={20} className="page-stack">
       <PageSection
-        title="GitHub Risk"
-        description="The page prefers the live GitHub risk API and keeps the existing mock fallback so the review lane remains usable while backend endpoints settle."
+        title={t('github.title', 'GitHub Risk')}
+        description={t(
+          'github.description',
+          'The page reads live GitHub risk events from the backend.'
+        )}
         extra={
           <Space size={8} wrap>
-            <Tag color="red">{summary.criticalCount} critical</Tag>
-            <Tag color="orange">{summary.highCount} high</Tag>
-            <Tag color="blue">{summary.repositoryCount} repositories</Tag>
+            <Tag color="red">{t('github.critical', '{{count}} critical', { count: summary.criticalCount })}</Tag>
+            <Tag color="orange">{t('github.high', '{{count}} high', { count: summary.highCount })}</Tag>
+            <Tag color="blue">{t('github.repositories', '{{count}} repositories', { count: summary.repositoryCount })}</Tag>
             <Button size="small" onClick={() => void loadGitHubRisks()} loading={loading}>
-              Reload
+              {t('common.reload', 'Reload')}
             </Button>
           </Space>
         }
       />
-      {apiStatus ? <ApiStatusNotice status={apiStatus} title="GitHub Risk API" /> : null}
+      {apiStatus ? <ApiStatusNotice status={apiStatus} title={t('github.api', 'GitHub Risk API')} /> : null}
       <Card bordered={false} className="panel-card">
         <GitHubTrendChart data={trend} />
       </Card>
@@ -71,52 +76,53 @@ export function GitHubRiskPage() {
             emptyText: (
               <Empty
                 image={Empty.PRESENTED_IMAGE_SIMPLE}
-                description="No GitHub risk events returned from the current source."
+                description={t('github.empty', 'No GitHub risk events returned from the current source.')}
               />
             )
           }}
           columns={[
             {
-              title: 'Employee',
+              title: t('common.employee', 'Employee'),
               dataIndex: 'employee',
               width: 160
             },
             {
-              title: 'Repository',
+              title: t('github.repository', 'Repository'),
               dataIndex: 'repository',
               width: 220
             },
             {
-              title: 'Action',
+              title: t('github.action', 'Action'),
               dataIndex: 'action',
               width: 140,
-              render: (value: string) => <Typography.Text strong>{value}</Typography.Text>
+              render: (value: string) => <Typography.Text strong>{text(value)}</Typography.Text>
             },
             {
-              title: 'Risk rule',
+              title: t('github.riskRule', 'Risk rule'),
               dataIndex: 'riskRule',
-              width: 260
+              width: 260,
+              render: (value: string) => text(value)
             },
             {
-              title: 'Severity',
+              title: t('events.severity', 'Severity'),
               dataIndex: 'severity',
               width: 120,
               render: (value: string) => <StatusTag value={value} />
             },
             {
-              title: 'Timestamp',
+              title: t('github.timestamp', 'Timestamp'),
               dataIndex: 'timestamp',
               width: 200
             },
             {
-              title: 'Correlation',
+              title: t('github.correlation', 'Correlation'),
               width: 320,
               render: (_value: unknown, record: GitHubRiskRecord) => {
                 const detailsText = summarizeRiskDetails(record.detailsJson);
 
                 return (
                   <Space direction="vertical" size={2}>
-                    <Typography.Text>{record.correlation}</Typography.Text>
+                    <Typography.Text>{text(record.correlation)}</Typography.Text>
                     {detailsText ? <Typography.Text type="secondary">{detailsText}</Typography.Text> : null}
                   </Space>
                 );

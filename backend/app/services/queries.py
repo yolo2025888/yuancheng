@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Mapping
 from datetime import date, datetime, time, timezone
+from zoneinfo import ZoneInfo
 from uuid import UUID
 
-from sqlalchemy import and_, or_
+from sqlalchemy import and_, func, or_
 from sqlmodel import Session, select
 
 from app.models import AttendanceRecord, AuditLog, BehaviorEvent, Device, Employee, Policy, Role, ScreenDiff, Screenshot, User
@@ -29,7 +31,6 @@ from app.schemas.admin import (
     GitHubRiskEventItem,
     GitHubRiskEventListResponse,
     GitHubRiskTrendPoint,
-    PolicyItem,
     PolicyListResponse,
     PolicySummary,
     ReviewQueueItem,
@@ -91,16 +92,23 @@ SEVERITY_ORDER = {
 }
 
 
+DISPLAY_TIMEZONE = ZoneInfo("Asia/Shanghai")
+
+
 def day_bounds(date_value: date) -> tuple[datetime, datetime]:
-    start = datetime.combine(date_value, time.min, tzinfo=timezone.utc)
-    end = datetime.combine(date_value, time.max, tzinfo=timezone.utc)
-    return start, end
+    start_local = datetime.combine(date_value, time.min, tzinfo=DISPLAY_TIMEZONE)
+    end_local = datetime.combine(date_value, time.max, tzinfo=DISPLAY_TIMEZONE)
+    return start_local.astimezone(timezone.utc), end_local.astimezone(timezone.utc)
 
 
 def ensure_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
+
+
+def format_local_time(value: datetime) -> str:
+    return ensure_utc(value).astimezone(DISPLAY_TIMEZONE).strftime("%H:%M:%S")
 
 
 class QueryService:
@@ -193,6 +201,25 @@ class QueryService:
             "evidence": activity.evidence,
         }
 
+    def _ai_analysis_payload(self, screenshot: Screenshot) -> dict[str, object]:
+        details = getattr(screenshot, "ai_details_json", None)
+        if not isinstance(details, Mapping):
+            details = getattr(screenshot, "ai_evidence_json", None)
+        if isinstance(details, Mapping):
+            normalized_details = dict(details)
+        else:
+            normalized_details = {}
+        return {
+            "analysis_status": getattr(screenshot, "ai_analysis_status", "skipped"),
+            "summary": getattr(screenshot, "ai_summary", None),
+            "confidence": getattr(screenshot, "ai_confidence", None),
+            "provider": getattr(screenshot, "ai_provider", None),
+            "model": getattr(screenshot, "ai_model", None),
+            "details": normalized_details,
+            "error": getattr(screenshot, "ai_error", None),
+            "analyzed_at": getattr(screenshot, "ai_analyzed_at", None),
+        }
+
     def _build_screenshot_item(
         self,
         *,
@@ -201,11 +228,17 @@ class QueryService:
         events: list[BehaviorEvent],
     ) -> ScreenshotItem:
         activity = self._activity_payload(screenshot, diff)
+        ai_analysis = self._ai_analysis_payload(screenshot)
+        employee = self.session.get(Employee, screenshot.employee_id)
         return ScreenshotItem(
             id=screenshot.id,
             employee_id=screenshot.employee_id,
+            employee_name=employee.name if employee is not None else None,
+            employee_no=employee.employee_no if employee is not None else None,
+            department=employee.department if employee is not None else None,
             device_id=screenshot.device_id,
             captured_at=screenshot.captured_at,
+            capture_batch_key=screenshot.capture_batch_key,
             screen_index=screenshot.screen_index,
             image_uri=self._secured_screenshot_uri(screenshot.id, "image", screenshot.image_uri),
             thumb_uri=self._secured_screenshot_uri(screenshot.id, "thumbnail", screenshot.thumb_uri),
@@ -239,6 +272,36 @@ class QueryService:
             activity_evidence=(
                 activity["evidence"] if isinstance(activity["evidence"], dict) else {}
             ),
+            ai_analysis_status=(
+                ai_analysis["analysis_status"]
+                if isinstance(ai_analysis["analysis_status"], str)
+                else "skipped"
+            ),
+            ai_summary=ai_analysis["summary"] if isinstance(ai_analysis["summary"], str) else None,
+            ai_task_label=screenshot.ai_task_label,
+            ai_risk_level=screenshot.ai_risk_level,
+            ai_non_work_likelihood=screenshot.ai_non_work_likelihood,
+            ai_confidence=(
+                float(ai_analysis["confidence"])
+                if isinstance(ai_analysis["confidence"], (int, float))
+                else None
+            ),
+            ai_provider=ai_analysis["provider"] if isinstance(ai_analysis["provider"], str) else None,
+            ai_model=ai_analysis["model"] if isinstance(ai_analysis["model"], str) else None,
+            ai_recommended_action=screenshot.ai_recommended_action,
+            ai_response_id=screenshot.ai_response_id,
+            ai_details=ai_analysis["details"] if isinstance(ai_analysis["details"], dict) else {},
+            ai_error=ai_analysis["error"] if isinstance(ai_analysis["error"], str) else None,
+            ai_analyzed_at=(
+                ai_analysis["analyzed_at"] if isinstance(ai_analysis["analyzed_at"], datetime) else None
+            ),
+            file_retention_status=screenshot.file_retention_status,
+            retention_decision=screenshot.retention_decision,
+            retention_reason=screenshot.retention_reason,
+            is_abnormal=screenshot.is_abnormal,
+            retain_until=screenshot.retain_until,
+            image_deleted_at=screenshot.image_deleted_at,
+            thumb_deleted_at=screenshot.thumb_deleted_at,
             diff=self._build_diff_summary(diff),
             risk_events=self._risk_events_for_screenshot(screenshot=screenshot, events=events),
             created_at=screenshot.created_at,
@@ -301,36 +364,159 @@ class QueryService:
             updated_at=event.updated_at,
         )
 
-    def get_employee_timeline(self, employee_id: UUID, date_value: date) -> TimelineResponse:
-        start_at, end_at = day_bounds(date_value)
-        screenshots = self.session.exec(
-            select(Screenshot)
-            .where(Screenshot.employee_id == employee_id)
-            .where(Screenshot.captured_at >= start_at)
-            .where(Screenshot.captured_at <= end_at)
-            .order_by(Screenshot.captured_at.asc())
-        ).all()
+    def _department_employee_ids(self, department: str | None) -> list[UUID] | None:
+        normalized = (department or "").strip()
+        if not normalized:
+            return None
+        return list(
+            self.session.exec(select(Employee.id).where(Employee.department == normalized)).all()
+        )
+
+    def _build_screenshot_statement(
+        self,
+        *,
+        device_id: UUID | None = None,
+        employee_id: UUID | None = None,
+        department: str | None = None,
+        date_value: date | None = None,
+        date_from: date | None = None,
+        date_to: date | None = None,
+        risk_level: str | None = None,
+        abnormal_only: bool = False,
+        scope: EmployeeAccessScope | None = None,
+    ):
+        statement = select(Screenshot)
+        applied_filters: dict[str, object] = {}
+
+        if device_id is not None:
+            statement = statement.where(Screenshot.device_id == device_id)
+            applied_filters["device_id"] = str(device_id)
+        if employee_id is not None:
+            statement = statement.where(Screenshot.employee_id == employee_id)
+            applied_filters["employee_id"] = str(employee_id)
+        if scope is not None and not scope.all_employees:
+            if not scope.employee_ids:
+                return None, applied_filters
+            statement = statement.where(Screenshot.employee_id.in_(list(scope.employee_ids)))
+        if department:
+            department_employee_ids = self._department_employee_ids(department)
+            applied_filters["department"] = department
+            if not department_employee_ids:
+                return None, applied_filters
+            statement = statement.where(Screenshot.employee_id.in_(department_employee_ids))
+        if date_value is not None:
+            start_at, end_at = day_bounds(date_value)
+            statement = statement.where(Screenshot.captured_at >= start_at).where(Screenshot.captured_at <= end_at)
+            applied_filters["date"] = str(date_value)
+        else:
+            if date_from is not None:
+                start_at, _ = day_bounds(date_from)
+                statement = statement.where(Screenshot.captured_at >= start_at)
+                applied_filters["date_from"] = str(date_from)
+            if date_to is not None:
+                _, end_at = day_bounds(date_to)
+                statement = statement.where(Screenshot.captured_at <= end_at)
+                applied_filters["date_to"] = str(date_to)
+        if abnormal_only:
+            statement = statement.where(Screenshot.is_abnormal.is_(True))
+            applied_filters["abnormal_only"] = True
+        normalized_risk = (risk_level or "").strip().casefold()
+        if normalized_risk:
+            applied_filters["risk_level"] = normalized_risk
+            if normalized_risk == "high":
+                statement = statement.where(
+                    or_(Screenshot.ai_risk_level == "high", Screenshot.retention_decision == "high_risk")
+                )
+            elif normalized_risk == "medium":
+                statement = statement.where(
+                    or_(Screenshot.ai_risk_level == "medium", Screenshot.retention_decision == "needs_review")
+                )
+            elif normalized_risk == "low":
+                statement = statement.where(Screenshot.ai_risk_level == "low")
+            elif normalized_risk == "normal":
+                statement = statement.where(Screenshot.retention_decision == "normal")
+            elif normalized_risk == "review":
+                statement = statement.where(Screenshot.retention_decision.in_(["ai_failed", "skipped"]))
+            else:
+                statement = statement.where(Screenshot.retention_decision == normalized_risk)
+
+        return statement, applied_filters
+
+    def list_timeline(
+        self,
+        *,
+        employee_id: UUID | None,
+        department: str | None,
+        date_value: date | None,
+        date_from: date | None,
+        date_to: date | None,
+        risk_level: str | None,
+        abnormal_only: bool,
+        descending: bool,
+        page: int,
+        page_size: int,
+        scope: EmployeeAccessScope | None = None,
+    ) -> TimelineResponse:
+        statement, applied_filters = self._build_screenshot_statement(
+            employee_id=employee_id,
+            department=department,
+            date_value=date_value,
+            date_from=date_from,
+            date_to=date_to,
+            risk_level=risk_level,
+            abnormal_only=abnormal_only,
+            scope=scope,
+        )
+        if statement is None:
+            return TimelineResponse(
+                employee_id=employee_id,
+                department=department,
+                date=date_value,
+                total=0,
+                page=page,
+                page_size=page_size,
+                applied_filters=applied_filters,
+                items=[],
+            )
+
+        if descending:
+            ordered = statement.order_by(Screenshot.captured_at.desc(), Screenshot.created_at.desc())
+        else:
+            ordered = statement.order_by(Screenshot.captured_at.asc(), Screenshot.created_at.asc())
+        total = int(self.session.exec(select(func.count()).select_from(ordered.subquery())).one())
+        offset = max(page - 1, 0) * page_size
+        screenshots = self.session.exec(ordered.offset(offset).limit(page_size)).all()
         diff_map = self._screen_diff_map([screenshot.id for screenshot in screenshots])
-        events = self.session.exec(
-            select(BehaviorEvent)
-            .where(BehaviorEvent.employee_id == employee_id)
-            .where(BehaviorEvent.start_at <= end_at)
-            .where((BehaviorEvent.end_at.is_(None)) | (BehaviorEvent.end_at >= start_at))
-            .order_by(BehaviorEvent.start_at.asc())
-        ).all()
+        events = self._relevant_events(screenshots)
 
         items: list[TimelineItem] = []
         for screenshot in screenshots:
             risk_events = self._risk_events_for_screenshot(screenshot=screenshot, events=events)
             diff = diff_map.get(screenshot.id)
             activity = self._activity_payload(screenshot, diff)
+            ai_analysis = self._ai_analysis_payload(screenshot)
+            employee = self.session.get(Employee, screenshot.employee_id)
             items.append(
                 TimelineItem(
-                    time=ensure_utc(screenshot.captured_at).strftime("%H:%M:%S"),
+                    time=format_local_time(screenshot.captured_at),
                     screenshot_id=screenshot.id,
+                    employee_id=screenshot.employee_id,
+                    employee_name=employee.name if employee is not None else None,
+                    employee_no=employee.employee_no if employee is not None else None,
+                    department=employee.department if employee is not None else None,
+                    captured_at=screenshot.captured_at,
+                    capture_batch_key=screenshot.capture_batch_key,
+                    screen_index=screenshot.screen_index,
                     thumbnail_url=self._secured_screenshot_uri(screenshot.id, "thumbnail", screenshot.thumb_uri),
                     thumb_uri=self._secured_screenshot_uri(screenshot.id, "thumbnail", screenshot.thumb_uri),
                     image_uri=self._secured_screenshot_uri(screenshot.id, "image", screenshot.image_uri),
+                    file_retention_status=screenshot.file_retention_status,
+                    retention_decision=screenshot.retention_decision,
+                    retention_reason=screenshot.retention_reason,
+                    is_abnormal=screenshot.is_abnormal,
+                    retain_until=screenshot.retain_until,
+                    image_deleted_at=screenshot.image_deleted_at,
+                    thumb_deleted_at=screenshot.thumb_deleted_at,
                     activity_type=str(activity["type"]),
                     active_app=activity["active_app"] if isinstance(activity["active_app"], str) else None,
                     activity_confidence=(
@@ -339,8 +525,29 @@ class QueryService:
                         else None
                     ),
                     activity_summary=activity["summary"] if isinstance(activity["summary"], str) else None,
-                    activity_evidence=(
-                        activity["evidence"] if isinstance(activity["evidence"], dict) else {}
+                    activity_evidence=activity["evidence"] if isinstance(activity["evidence"], dict) else {},
+                    ai_analysis_status=(
+                        ai_analysis["analysis_status"]
+                        if isinstance(ai_analysis["analysis_status"], str)
+                        else "skipped"
+                    ),
+                    ai_summary=ai_analysis["summary"] if isinstance(ai_analysis["summary"], str) else None,
+                    ai_task_label=screenshot.ai_task_label,
+                    ai_risk_level=screenshot.ai_risk_level,
+                    ai_non_work_likelihood=screenshot.ai_non_work_likelihood,
+                    ai_confidence=(
+                        float(ai_analysis["confidence"])
+                        if isinstance(ai_analysis["confidence"], (int, float))
+                        else None
+                    ),
+                    ai_provider=ai_analysis["provider"] if isinstance(ai_analysis["provider"], str) else None,
+                    ai_model=ai_analysis["model"] if isinstance(ai_analysis["model"], str) else None,
+                    ai_recommended_action=screenshot.ai_recommended_action,
+                    ai_response_id=screenshot.ai_response_id,
+                    ai_details=ai_analysis["details"] if isinstance(ai_analysis["details"], dict) else {},
+                    ai_error=ai_analysis["error"] if isinstance(ai_analysis["error"], str) else None,
+                    ai_analyzed_at=(
+                        ai_analysis["analyzed_at"] if isinstance(ai_analysis["analyzed_at"], datetime) else None
                     ),
                     activity=TimelineActivity(
                         type=str(activity["type"]),
@@ -353,7 +560,7 @@ class QueryService:
                         summary=activity["summary"] if isinstance(activity["summary"], str) else None,
                         evidence=activity["evidence"] if isinstance(activity["evidence"], dict) else {},
                         keyboard_count=screenshot.keyboard_count,
-                        mouse_count=screenshot.mouse_click_count + screenshot.mouse_move_count,
+                        mouse_count=screenshot.mouse_click_count,
                     ),
                     change_level=diff.change_level if diff is not None else "unknown",
                     change=TimelineChange(
@@ -366,12 +573,36 @@ class QueryService:
                         reason=diff.reason if diff is not None else None,
                     ),
                     keyboard_count=screenshot.keyboard_count,
-                    mouse_count=screenshot.mouse_click_count + screenshot.mouse_move_count,
+                    mouse_count=screenshot.mouse_click_count,
                     risk_events=risk_events,
                 )
             )
 
-        return TimelineResponse(employee_id=employee_id, date=date_value, items=items)
+        return TimelineResponse(
+            employee_id=employee_id,
+            department=department,
+            date=date_value,
+            total=total,
+            page=page,
+            page_size=page_size,
+            applied_filters=applied_filters,
+            items=items,
+        )
+
+    def get_employee_timeline(self, employee_id: UUID, date_value: date) -> TimelineResponse:
+        return self.list_timeline(
+            employee_id=employee_id,
+            department=None,
+            date_value=date_value,
+            date_from=None,
+            date_to=None,
+            risk_level=None,
+            abnormal_only=False,
+            descending=True,
+            page=1,
+            page_size=200,
+            scope=None,
+        )
 
     def _secured_screenshot_uri(self, screenshot_id: UUID, kind: str, stored_uri: str | None) -> str | None:
         if not stored_uri:
@@ -486,19 +717,45 @@ class QueryService:
         device_id: UUID | None,
         employee_id: UUID | None,
         limit: int,
+        department: str | None = None,
+        risk_level: str | None = None,
+        abnormal_only: bool = False,
+        date_value: date | None = None,
+        date_from: date | None = None,
+        date_to: date | None = None,
+        descending: bool = True,
+        page: int = 1,
+        page_size: int | None = None,
         scope: EmployeeAccessScope | None = None,
     ) -> ScreenshotListResponse:
-        statement = select(Screenshot).order_by(Screenshot.captured_at.desc())
-        if device_id is not None:
-            statement = statement.where(Screenshot.device_id == device_id)
-        if employee_id is not None:
-            statement = statement.where(Screenshot.employee_id == employee_id)
-        if scope is not None and not scope.all_employees:
-            if not scope.employee_ids:
-                return ScreenshotListResponse(items=[], total=0)
-            statement = statement.where(Screenshot.employee_id.in_(list(scope.employee_ids)))
+        resolved_page_size = page_size or limit
+        statement, applied_filters = self._build_screenshot_statement(
+            device_id=device_id,
+            employee_id=employee_id,
+            department=department,
+            date_value=date_value,
+            date_from=date_from,
+            date_to=date_to,
+            risk_level=risk_level,
+            abnormal_only=abnormal_only,
+            scope=scope,
+        )
+        if statement is None:
+            return ScreenshotListResponse(
+                items=[],
+                total=0,
+                page=page,
+                page_size=resolved_page_size,
+                applied_filters=applied_filters,
+            )
 
-        screenshots = self.session.exec(statement.limit(limit)).all()
+        if descending:
+            ordered = statement.order_by(Screenshot.captured_at.desc(), Screenshot.created_at.desc())
+        else:
+            ordered = statement.order_by(Screenshot.captured_at.asc(), Screenshot.created_at.asc())
+        total = int(self.session.exec(select(func.count()).select_from(ordered.subquery())).one())
+        offset = max(page - 1, 0) * resolved_page_size
+        screenshots = self.session.exec(ordered.offset(offset).limit(resolved_page_size)).all()
         diff_map = self._screen_diff_map([screenshot.id for screenshot in screenshots])
         events = self._relevant_events(screenshots)
         return ScreenshotListResponse(
@@ -510,7 +767,10 @@ class QueryService:
                 )
                 for screenshot in screenshots
             ],
-            total=len(screenshots),
+            total=total,
+            page=page,
+            page_size=resolved_page_size,
+            applied_filters=applied_filters,
         )
 
     def get_screenshot(self, screenshot_id: UUID, scope: EmployeeAccessScope | None = None) -> ScreenshotItem | None:
@@ -644,7 +904,11 @@ class QueryService:
         ]
 
     def list_employees(self, scope: EmployeeAccessScope | None = None) -> EmployeeListResponse:
-        statement = select(Employee).order_by(Employee.employee_no.asc(), Employee.name.asc())
+        statement = (
+            select(Employee)
+            .where(Employee.status != "deleted")
+            .order_by(Employee.employee_no.asc(), Employee.name.asc())
+        )
         if scope is not None and not scope.all_employees:
             if not scope.employee_ids:
                 return EmployeeListResponse(items=[], total=0)
@@ -661,8 +925,9 @@ class QueryService:
                 devices = self.session.exec(device_statement).all()
         else:
             devices = self.session.exec(device_statement).all()
-        active_policy = PolicyService(self.session).ensure_default_policy()
-        policy_summary = PolicySummary.model_validate(active_policy) if active_policy is not None else None
+        policy_service = PolicyService(self.session)
+        active_policy = policy_service.ensure_default_policy()
+        policy_summary = policy_service.serialize_policy_summary(active_policy) if active_policy is not None else None
 
         active_device_counts: dict[UUID, int] = {}
         for device in devices:
@@ -672,23 +937,48 @@ class QueryService:
 
         return EmployeeListResponse(
             items=[
-                EmployeeItem(
-                    id=employee.id,
-                    name=employee.name,
-                    employee_no=employee.employee_no,
-                    department=employee.department,
-                    manager_name=employee.manager_name,
-                    job_role=employee.job_role,
-                    github_username=employee.github_username,
-                    status=employee.status,
-                    active_device_count=active_device_counts.get(employee.id, 0),
-                    policy_summary=policy_summary,
-                    created_at=employee.created_at,
-                    updated_at=employee.updated_at,
-                )
+                self._build_employee_item(employee, active_device_counts.get(employee.id, 0), policy_summary)
                 for employee in employees
             ],
             total=len(employees),
+        )
+
+    def get_employee_item(self, employee_id: UUID) -> EmployeeItem | None:
+        employee = self.session.get(Employee, employee_id)
+        if employee is None or employee.status == "deleted":
+            return None
+
+        active_device_count = len(
+            self.session.exec(
+                select(Device)
+                .where(Device.employee_id == employee.id)
+                .where(Device.status != "offline")
+            ).all()
+        )
+        policy_service = PolicyService(self.session)
+        active_policy = policy_service.ensure_default_policy()
+        policy_summary = policy_service.serialize_policy_summary(active_policy) if active_policy is not None else None
+        return self._build_employee_item(employee, active_device_count, policy_summary)
+
+    def _build_employee_item(
+        self,
+        employee: Employee,
+        active_device_count: int,
+        policy_summary: PolicySummary | None,
+    ) -> EmployeeItem:
+        return EmployeeItem(
+            id=employee.id,
+            name=employee.name,
+            employee_no=employee.employee_no,
+            department=employee.department,
+            manager_name=employee.manager_name,
+            job_role=employee.job_role,
+            github_username=employee.github_username,
+            status=employee.status,
+            active_device_count=active_device_count,
+            policy_summary=policy_summary,
+            created_at=employee.created_at,
+            updated_at=employee.updated_at,
         )
 
     def list_devices(self, scope: EmployeeAccessScope | None = None) -> DeviceListResponse:
@@ -1449,8 +1739,9 @@ class QueryService:
 
     def list_policies(self) -> PolicyListResponse:
         policies = self.session.exec(select(Policy).order_by(Policy.is_active.desc(), Policy.created_at.desc())).all()
+        policy_service = PolicyService(self.session)
         return PolicyListResponse(
-            items=[PolicyItem.model_validate(policy) for policy in policies],
+            items=[policy_service.serialize_policy(policy) for policy in policies],
             total=len(policies),
         )
 

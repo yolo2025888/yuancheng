@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -23,6 +24,15 @@ router = APIRouter(prefix="/api/screenshots", tags=["screenshots"])
 def list_screenshots(
     device_id: UUID | None = Query(default=None),
     employee_id: UUID | None = Query(default=None),
+    department: str | None = Query(default=None, max_length=120),
+    risk_level: str | None = Query(default=None, max_length=64),
+    abnormal_only: bool = Query(default=False),
+    date_value: date | None = Query(default=None, alias="date"),
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
+    descending: bool = Query(default=True),
+    page: int = Query(default=1, ge=1),
+    page_size: int | None = Query(default=None, ge=1, le=200),
     limit: int = Query(default=20, ge=1, le=200),
     session: Session = Depends(get_session),
     principal: AuthenticatedPrincipal = Depends(require_permissions("screenshots.metadata.view")),
@@ -31,6 +41,15 @@ def list_screenshots(
     return QueryService(session).list_screenshots(
         device_id=device_id,
         employee_id=employee_id,
+        department=department,
+        risk_level=risk_level,
+        abnormal_only=abnormal_only,
+        date_value=date_value,
+        date_from=date_from,
+        date_to=date_to,
+        descending=descending,
+        page=page,
+        page_size=page_size,
         limit=limit,
         scope=scope,
     )

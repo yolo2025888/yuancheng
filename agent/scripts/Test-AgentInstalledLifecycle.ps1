@@ -22,28 +22,32 @@ $attendanceLogPath = Join-Path $DataDirectory 'attendance-log.jsonl'
 $attendancePendingPath = Join-Path $DataDirectory 'attendance-pending.jsonl'
 $workSessionStatePath = Join-Path $DataDirectory 'work-session-state.json'
 
-function Test-RegistrationPresent {
+function Test-IsAdministrator {
+    $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = New-Object System.Security.Principal.WindowsPrincipal($identity)
+    return $principal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+function Test-ServiceRegistrationPresent {
     param(
         [Parameter(Mandatory)]
-        [string]$FileName,
-        [Parameter(Mandatory)]
-        [string]$Arguments
+        [string]$ServiceName
     )
 
-    try {
-        $process = Start-Process `
-            -FilePath $FileName `
-            -ArgumentList $Arguments `
-            -WindowStyle Hidden `
-            -PassThru `
-            -Wait `
-            -NoNewWindow `
-            -ErrorAction Stop
-        return $process.ExitCode -eq 0
-    }
-    catch {
+    return $null -ne (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue)
+}
+
+function Test-ScheduledTaskRegistrationPresent {
+    param(
+        [Parameter(Mandatory)]
+        [string]$TaskName
+    )
+
+    if ($null -eq (Get-Command Get-ScheduledTask -ErrorAction SilentlyContinue)) {
         return $false
     }
+
+    return $null -ne (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue)
 }
 
 function Get-ProcessIdsByName {
@@ -130,8 +134,12 @@ if (-not (Test-Path -LiteralPath $resolvedLauncherPath -PathType Leaf)) {
     throw "Launcher executable not found: $resolvedLauncherPath"
 }
 
-$serviceRegistered = Test-RegistrationPresent -FileName 'sc.exe' -Arguments 'query "EmployeeBehavior.Agent.Service"'
-$helperTaskRegistered = Test-RegistrationPresent -FileName 'schtasks.exe' -Arguments '/Query /TN "EmployeeBehavior.Agent.SessionHelper"'
+if (-not (Test-IsAdministrator)) {
+    throw 'Test-AgentInstalledLifecycle.ps1 must be run from an elevated PowerShell session. The installed acceptance flow reads protected files under C:\ProgramData\EmployeeBehaviorAgent\ and requires Administrator rights.'
+}
+
+$serviceRegistered = Test-ServiceRegistrationPresent -ServiceName 'EmployeeBehavior.Agent.Service'
+$helperTaskRegistered = Test-ScheduledTaskRegistrationPresent -TaskName 'EmployeeBehavior.Agent.SessionHelper'
 if ($RequireInstalledService -and -not $serviceRegistered) {
     throw 'Installed lifecycle smoke requires EmployeeBehavior.Agent.Service registration, but it was not found.'
 }

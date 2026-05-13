@@ -29,9 +29,27 @@ class Settings(BaseSettings):
     session_token_ttl_seconds: int = 43200
     password_hash_iterations: int = 120000
     bootstrap_admin_username: str = "admin"
-    bootstrap_admin_password: str = "admin123!"
+    bootstrap_admin_password: str = "replace-with-dev-bootstrap-password"
     bootstrap_admin_display_name: str = "Development Admin"
     bootstrap_admin_email: str = "admin@example.test"
+    ai_analysis_default_provider: str = "openai_compatible"
+    ai_analysis_default_base_url: str = "https://api.openai.com/v1"
+    ai_analysis_default_model: str = "gpt-4.1-mini"
+    ai_analysis_default_api_key: str | None = None
+    ai_analysis_default_timeout_seconds: int = Field(default=20, ge=1)
+    ai_analysis_default_enabled: bool = False
+    ai_analysis_default_use_previous_screenshot: bool = True
+    ai_analysis_default_confidence_threshold: float = Field(default=0.7, ge=0.0, le=1.0)
+    ai_analysis_default_risk_threshold: float = Field(default=0.7, ge=0.0, le=1.0)
+    ai_analysis_enabled: bool = False
+    ai_analysis_base_url: str | None = None
+    ai_analysis_api_key: str | None = None
+    ai_analysis_model: str | None = None
+    ai_analysis_timeout_seconds: float = Field(default=8.0, gt=0, le=60)
+    ai_analysis_max_completion_tokens: int = Field(default=350, ge=64, le=2048)
+    ai_analysis_image_detail: str = "low"
+    ai_analysis_organization: str | None = None
+    ai_analysis_project: str | None = None
 
     model_config = SettingsConfigDict(env_prefix="EBM_", env_file=".env", extra="ignore")
 
@@ -70,6 +88,14 @@ class Settings(BaseSettings):
             or _looks_like_placeholder(normalized_agent_token)
         ):
             raise ValueError("EBM_AGENT_API_TOKEN must be set to a non-default value of at least 24 characters in production")
+
+        if self.ai_analysis_enabled:
+            if not self.ai_analysis_base_url:
+                raise ValueError("EBM_AI_ANALYSIS_BASE_URL must be set when AI analysis is enabled")
+            if not self.ai_analysis_api_key or _looks_like_placeholder(self.ai_analysis_api_key):
+                raise ValueError("EBM_AI_ANALYSIS_API_KEY must be set to a non-placeholder value when AI analysis is enabled")
+            if not self.ai_analysis_model or _looks_like_placeholder(self.ai_analysis_model):
+                raise ValueError("EBM_AI_ANALYSIS_MODEL must be set to a non-placeholder value when AI analysis is enabled")
 
         return self
 

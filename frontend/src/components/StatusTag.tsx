@@ -1,5 +1,7 @@
 import { Tag } from 'antd';
 
+import { useI18n } from '../i18n/I18nContext';
+
 type StatusTagProps = {
   value: string;
 };
@@ -52,12 +54,14 @@ const fallbackLabels: Record<string, string> = {
 };
 
 export function StatusTag({ value }: StatusTagProps) {
+  const { t, text } = useI18n();
   const normalized = value === 'high' ? 'high' : value.trim().toLowerCase();
   const colorKey = value === 'high' ? 'highrisk' : normalized;
+  const labelKey = `status.${normalized}` as Parameters<typeof t>[0];
 
   return (
     <Tag color={statusColorMap[colorKey] ?? 'default'}>
-      {fallbackLabels[normalized] ?? formatStatusLabel(value)}
+      {fallbackLabels[normalized] ? t(labelKey, fallbackLabels[normalized]) : text(formatStatusLabel(value))}
     </Tag>
   );
 }

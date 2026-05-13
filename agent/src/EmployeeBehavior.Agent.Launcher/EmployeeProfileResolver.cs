@@ -19,7 +19,7 @@ internal sealed class EmployeeProfileResolver
         var config = LauncherBackendConfigLoader.TryLoad();
         if (config is null)
         {
-            return EmployeeProfile.LocalFallback(normalizedCode, "backend config unavailable");
+            return EmployeeProfile.LoginBlocked(normalizedCode, "Cannot verify company employee status because backend config is unavailable.");
         }
 
         try
@@ -30,14 +30,14 @@ internal sealed class EmployeeProfileResolver
                 return resolved with { Source = "backend" };
             }
 
-            return EmployeeProfile.LocalFallback(
+            return EmployeeProfile.LoginBlocked(
                 normalizedCode,
-                "employee resolver unavailable");
+                "Non-company employee or inactive employee. Login is not allowed.");
         }
         catch (Exception ex) when (
             ex is IOException or HttpRequestException or JsonException or InvalidOperationException or TaskCanceledException)
         {
-            return EmployeeProfile.LocalFallback(normalizedCode, $"{ex.GetType().Name}: {ex.Message}");
+            return EmployeeProfile.LoginBlocked(normalizedCode, $"Cannot verify company employee status: {ex.GetType().Name}: {ex.Message}");
         }
     }
 
@@ -78,6 +78,11 @@ internal sealed class EmployeeProfileResolver
                     continue;
                 }
 
+                if (response.StatusCode == HttpStatusCode.Forbidden)
+                {
+                    return EmployeeProfile.LoginBlocked(employeeCode, "Employee is inactive or not allowed to use this device.");
+                }
+
                 if (!response.IsSuccessStatusCode)
                 {
                     return null;
@@ -104,6 +109,11 @@ internal sealed class EmployeeProfileResolver
 
         using (postResponse)
         {
+            if (postResponse.StatusCode == HttpStatusCode.Forbidden)
+            {
+                return EmployeeProfile.LoginBlocked(employeeCode, "Employee is inactive or not allowed to use this device.");
+            }
+
             return postResponse.IsSuccessStatusCode
                 ? ParseEmployeeProfile(await postResponse.Content.ReadAsStringAsync(), employeeCode)
                 : null;
@@ -205,7 +215,8 @@ internal sealed class EmployeeProfileResolver
                 ? "attendance/rules will refresh after clock-in"
                 : "rule summary carried by employee profile payload",
             Source: "backend",
-            Message: "employee resolved by backend");
+            Message: "employee resolved by backend",
+            LoginAllowed: true);
     }
 
     private static string? SummarizeObject(JsonNode? node)
@@ -261,7 +272,8 @@ internal sealed record EmployeeProfile(
     string RuleSource,
     string? RuleStatus,
     string Source,
-    string Message)
+    string Message,
+    bool LoginAllowed)
 {
     public const string DefaultRuleSummary = "late after 09:30; early leave before 18:00";
 
@@ -275,7 +287,22 @@ internal sealed record EmployeeProfile(
             RuleSource: "local default",
             RuleStatus: BuildRuleFallbackStatus(message),
             Source: "local fallback",
-            Message: message);
+            Message: message,
+            LoginAllowed: false);
+    }
+
+    public static EmployeeProfile LoginBlocked(string employeeCode, string message)
+    {
+        return new EmployeeProfile(
+            EmployeeNo: employeeCode,
+            DisplayName: employeeCode,
+            Department: null,
+            RuleSummary: DefaultRuleSummary,
+            RuleSource: "blocked",
+            RuleStatus: null,
+            Source: "blocked",
+            Message: message,
+            LoginAllowed: false);
     }
 
     public EmployeeProfile WithRuleSummary(string? ruleSummary, string ruleSource, string? ruleStatus)

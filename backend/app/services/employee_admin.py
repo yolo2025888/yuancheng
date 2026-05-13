@@ -3,11 +3,12 @@ from __future__ import annotations
 import csv
 import io
 from datetime import datetime, timezone
+from uuid import UUID
 
 from sqlmodel import Session, select
 
 from app.models import Employee
-from app.schemas.admin import EmployeeImportResponse
+from app.schemas.admin import EmployeeCreateRequest, EmployeeImportResponse, EmployeeUpdateRequest
 from app.services.audit import AuditContext, AuditService
 
 
@@ -31,8 +32,120 @@ class EmployeeAdminService:
         self.session = session
         self.audit = AuditService(session)
 
+    def create_employee(
+        self,
+        payload: EmployeeCreateRequest,
+        *,
+        audit_context: AuditContext | None = None,
+    ) -> Employee:
+        existing_employee = self._get_employee_by_no(payload.employee_no)
+        if existing_employee is not None and existing_employee.status != "deleted":
+            raise ValueError("Employee number already exists")
+
+        if existing_employee is not None:
+            employee = existing_employee
+            employee.name = payload.name
+            employee.department = payload.department
+            employee.manager_name = payload.manager_name
+            employee.job_role = payload.job_role
+            employee.github_username = payload.github_username
+            employee.status = payload.status
+            employee.updated_at = utc_now()
+        else:
+            employee = Employee(
+                name=payload.name,
+                employee_no=payload.employee_no,
+                department=payload.department,
+                manager_name=payload.manager_name,
+                job_role=payload.job_role,
+                github_username=payload.github_username,
+                status=payload.status,
+            )
+
+        self.session.add(employee)
+        self.session.flush()
+        self.audit.log(
+            action="employee.created",
+            target_type="employee",
+            target_id=employee.id,
+            reason=f"Created employee {employee.employee_no}",
+            context=audit_context,
+        )
+        self.session.commit()
+        self.session.refresh(employee)
+        return employee
+
+    def update_employee(
+        self,
+        employee_id: UUID,
+        payload: EmployeeUpdateRequest,
+        *,
+        audit_context: AuditContext | None = None,
+    ) -> Employee | None:
+        employee = self.session.get(Employee, employee_id)
+        if employee is None or employee.status == "deleted":
+            return None
+
+        changed_fields: list[str] = []
+        incoming_values = payload.model_dump(exclude_unset=True)
+        if "employee_no" in incoming_values and incoming_values["employee_no"] != employee.employee_no:
+            existing_employee = self._get_employee_by_no(incoming_values["employee_no"])
+            if existing_employee is not None and existing_employee.id != employee.id and existing_employee.status != "deleted":
+                raise ValueError("Employee number already exists")
+
+        for field_name, value in incoming_values.items():
+            if getattr(employee, field_name) == value:
+                continue
+            setattr(employee, field_name, value)
+            changed_fields.append(field_name)
+
+        if not changed_fields:
+            return employee
+
+        employee.updated_at = utc_now()
+        self.session.add(employee)
+        self.audit.log(
+            action="employee.updated",
+            target_type="employee",
+            target_id=employee.id,
+            reason=f"Updated fields: {', '.join(changed_fields)}",
+            context=audit_context,
+        )
+        self.session.commit()
+        self.session.refresh(employee)
+        return employee
+
+    def delete_employee(
+        self,
+        employee_id: UUID,
+        *,
+        audit_context: AuditContext | None = None,
+    ) -> Employee | None:
+        employee = self.session.get(Employee, employee_id)
+        if employee is None or employee.status == "deleted":
+            return None
+
+        deleted_at = utc_now()
+        employee.status = "deleted"
+        employee.updated_at = deleted_at
+        self.session.add(employee)
+        self.audit.log(
+            action="employee.deleted",
+            target_type="employee",
+            target_id=employee.id,
+            reason=f"Soft deleted employee {employee.employee_no}",
+            context=audit_context,
+        )
+        self.session.commit()
+        self.session.refresh(employee)
+        return employee
+
     def export_employees_csv(self, *, audit_context: AuditContext | None = None) -> str:
-        employees = self.session.exec(select(Employee).order_by(Employee.employee_no.asc(), Employee.name.asc())).all()
+        employees = self.session.exec(
+            select(Employee)
+            .where(Employee.status != "deleted")
+            .order_by(Employee.employee_no.asc(), Employee.name.asc())
+        ).all()
         buffer = io.StringIO(newline="")
         writer = csv.DictWriter(buffer, fieldnames=self.EXPORT_FIELDNAMES)
         writer.writeheader()
@@ -155,3 +268,6 @@ class EmployeeAdminService:
             return None
         stripped = value.strip()
         return stripped or None
+
+    def _get_employee_by_no(self, employee_no: str) -> Employee | None:
+        return self.session.exec(select(Employee).where(Employee.employee_no == employee_no)).first()

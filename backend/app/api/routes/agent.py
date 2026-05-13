@@ -41,6 +41,8 @@ def resolve_employee(
     employee = session.exec(select(Employee).where(Employee.employee_no == normalized_employee_no)).first()
     if employee is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found")
+    if employee.status != "active":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Employee is not active")
     _require_agent_employee_scope(session, agent_principal, employee)
     return AgentEmployeeResponse.model_validate(employee)
 

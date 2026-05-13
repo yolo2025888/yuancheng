@@ -85,6 +85,7 @@ class Screenshot(TimestampedUUIDModel, table=True):
     employee_id: UUID = Field(foreign_key="employees.id", index=True)
     device_id: UUID = Field(foreign_key="devices.id", index=True)
     captured_at: datetime = Field(sa_column=Column(DateTime(timezone=True), nullable=False, index=True))
+    capture_batch_key: str | None = Field(default=None, index=True)
     screen_index: int = Field(default=0, ge=0)
     image_uri: str | None = None
     thumb_uri: str | None = None
@@ -115,8 +116,41 @@ class Screenshot(TimestampedUUIDModel, table=True):
         default=None,
         sa_column=Column(JSON, nullable=True),
     )
-
-
+    ai_analysis_status: str = Field(default="skipped", index=True)
+    ai_summary: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
+    ai_task_label: str | None = Field(default=None, index=True)
+    ai_risk_level: str | None = Field(default=None, index=True)
+    ai_non_work_likelihood: float | None = Field(default=None)
+    ai_confidence: float | None = Field(default=None)
+    ai_provider: str | None = Field(default=None)
+    ai_model: str | None = Field(default=None)
+    ai_recommended_action: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
+    ai_response_id: str | None = Field(default=None, index=True)
+    ai_details_json: dict[str, Any] | None = Field(
+        default=None,
+        sa_column=Column(JSON, nullable=True),
+    )
+    ai_error: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
+    ai_analyzed_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), nullable=True),
+    )
+    retention_decision: str = Field(default="pending", index=True)
+    file_retention_status: str = Field(default="full", index=True)
+    is_abnormal: bool = Field(default=False, index=True)
+    retain_until: datetime | None = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), nullable=True),
+    )
+    image_deleted_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), nullable=True),
+    )
+    thumb_deleted_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), nullable=True),
+    )
+    retention_reason: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
 class ScreenDiff(SQLModel, table=True):
     __tablename__ = "screen_diffs"
 

@@ -19,6 +19,7 @@ from app.services.agent_auth import (
     generate_device_agent_secret,
     hash_device_agent_secret,
 )
+from app.services.ai_analysis import AIAnalysisResult
 from app.services.storage import LocalScreenshotStorage
 
 ONE_PIXEL_PNG = base64.b64decode(
@@ -124,6 +125,28 @@ def test_scoped_agent_employee_resolver_does_not_enumerate_other_employees(
 
     assert response.status_code == 404
     assert response.json()["detail"] == "Employee not found"
+
+
+def test_agent_employee_resolver_rejects_inactive_employee(
+    client: TestClient,
+    seeded_device: dict[str, str],
+    agent_headers: dict[str, str],
+) -> None:
+    with Session(client.app.state.engine) as session:
+        employee = session.get(Employee, UUID(seeded_device["employee_id"]))
+        assert employee is not None
+        employee.status = "inactive"
+        session.add(employee)
+        session.commit()
+
+    response = client.get(
+        "/api/agent/employees/resolve",
+        headers=agent_headers,
+        params={"employee_no": "E-001"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Employee is not active"
 
 
 def test_legacy_global_agent_token_can_resolve_employee_in_test_environment(
@@ -929,6 +952,438 @@ def test_screenshot_direct_upload_persists_image_and_thumb(
         assert all(audit.actor_id is not None for audit in audit_logs)
         assert all(audit.ip_address == "testclient" for audit in audit_logs)
         assert all(audit.user_agent is not None for audit in audit_logs)
+
+
+def test_screenshot_direct_upload_persists_ai_analysis_when_enabled(
+    client: TestClient,
+    seeded_device: dict[str, str],
+    agent_headers: dict[str, str],
+    monkeypatch,
+) -> None:
+    def fake_analyze(
+        self,
+        *,
+        current_image_bytes: bytes,
+        previous_image_bytes: bytes | None,
+        safe_metadata: dict[str, object],
+        rules_json: dict[str, object] | None = None,
+    ):
+        assert current_image_bytes
+        assert safe_metadata["activity"]["type"] == "development"
+        return AIAnalysisResult(
+            summary="Likely focused development work with low apparent risk.",
+            task_label="development_work",
+            risk_level="low",
+            non_work_likelihood=0.06,
+            confidence=0.88,
+            evidence=["editor-like layout", "development process metadata", "limited frame-to-frame drift"],
+            recommended_follow_up="No immediate escalation; keep this as assistive context only.",
+            model="gpt-4.1-mini",
+            response_id="resp_test_success",
+        )
+
+    settings = client.app.state.settings
+    settings.ai_analysis_enabled = True
+    settings.ai_analysis_base_url = "https://api.openai.com/v1"
+    settings.ai_analysis_api_key = "test-ai-key"
+    settings.ai_analysis_model = "gpt-4.1-mini"
+    monkeypatch.setattr("app.services.ai_analysis.AIAnalysisService.analyze", fake_analyze)
+
+    response = client.post(
+        "/api/agent/screenshots/upload",
+        headers=agent_headers,
+        data={
+            "device_id": seeded_device["device_id"],
+            "captured_at": datetime(2026, 5, 11, 13, 0, tzinfo=timezone.utc).isoformat(),
+            "screen_index": "0",
+            "width": "1",
+            "height": "1",
+            "foreground_process": "Cursor.exe",
+            "window_title": "implementation branch",
+            "keyboard_count": "5",
+            "mouse_click_count": "1",
+            "mouse_move_count": "2",
+            "is_locked": "false",
+            "is_remote_session": "false",
+            "phash": "ai-enabled-upload",
+        },
+        files={"file": ("screen.png", ONE_PIXEL_PNG, "image/png")},
+    )
+
+    assert response.status_code == 201
+    screenshot_id = response.json()["screenshot_id"]
+
+    with Session(client.app.state.engine) as session:
+        screenshot = session.get(Screenshot, UUID(screenshot_id))
+        assert screenshot is not None
+        assert screenshot.analysis_status == "completed"
+        assert screenshot.activity_evidence_json is not None
+        assert screenshot.activity_evidence_json["ai_analysis"]["status"] == "completed"
+        assert screenshot.activity_evidence_json["ai_analysis"]["task_label"] == "development_work"
+        assert screenshot.activity_evidence_json["ai_analysis"]["risk_level"] == "low"
+        assert screenshot.activity_evidence_json["ai_analysis"]["response_id"] == "resp_test_success"
+
+
+def test_screenshot_direct_upload_ignores_ai_analysis_failure(
+    client: TestClient,
+    seeded_device: dict[str, str],
+    agent_headers: dict[str, str],
+    monkeypatch,
+) -> None:
+    def failing_analyze(
+        self,
+        *,
+        current_image_bytes: bytes,
+        previous_image_bytes: bytes | None,
+        safe_metadata: dict[str, object],
+        rules_json: dict[str, object] | None = None,
+    ):
+        raise RuntimeError("synthetic upstream timeout")
+
+    settings = client.app.state.settings
+    settings.ai_analysis_enabled = True
+    settings.ai_analysis_base_url = "https://api.openai.com/v1"
+    settings.ai_analysis_api_key = "test-ai-key"
+    settings.ai_analysis_model = "gpt-4.1-mini"
+    monkeypatch.setattr("app.services.ai_analysis.AIAnalysisService.analyze", failing_analyze)
+
+    response = client.post(
+        "/api/agent/screenshots/upload",
+        headers=agent_headers,
+        data={
+            "device_id": seeded_device["device_id"],
+            "captured_at": datetime(2026, 5, 11, 13, 5, tzinfo=timezone.utc).isoformat(),
+            "screen_index": "0",
+            "width": "1",
+            "height": "1",
+            "foreground_process": "Cursor.exe",
+            "window_title": "implementation branch",
+            "keyboard_count": "5",
+            "mouse_click_count": "1",
+            "mouse_move_count": "2",
+            "is_locked": "false",
+            "is_remote_session": "false",
+            "phash": "ai-failure-upload",
+        },
+        files={"file": ("screen.png", ONE_PIXEL_PNG, "image/png")},
+    )
+
+    assert response.status_code == 201
+    screenshot_id = response.json()["screenshot_id"]
+
+    with Session(client.app.state.engine) as session:
+        screenshot = session.get(Screenshot, UUID(screenshot_id))
+        assert screenshot is not None
+        assert screenshot.analysis_status == "completed"
+        assert screenshot.activity_evidence_json is not None
+        assert screenshot.activity_evidence_json["ai_analysis"]["status"] == "failed"
+        assert "synthetic upstream timeout" in screenshot.activity_evidence_json["ai_analysis"]["reason"]
+
+
+def test_normal_screenshot_visuals_are_discarded_after_next_completed_capture(
+    client: TestClient,
+    seeded_device: dict[str, str],
+    agent_headers: dict[str, str],
+    monkeypatch,
+) -> None:
+    def fake_analyze(
+        self,
+        *,
+        current_image_bytes: bytes,
+        previous_image_bytes: bytes | None,
+        safe_metadata: dict[str, object],
+        rules_json: dict[str, object] | None = None,
+    ):
+        return AIAnalysisResult(
+            summary="Normal focused work.",
+            task_label="development_work",
+            risk_level="low",
+            non_work_likelihood=0.05,
+            confidence=0.92,
+            evidence=["editor visible", "no risky app context"],
+            recommended_follow_up="No follow-up needed.",
+            model="gpt-4.1-mini",
+            response_id="resp_normal_keep",
+        )
+
+    settings = client.app.state.settings
+    settings.ai_analysis_enabled = True
+    settings.ai_analysis_base_url = "https://api.openai.com/v1"
+    settings.ai_analysis_api_key = "test-ai-key"
+    settings.ai_analysis_model = "gpt-4.1-mini"
+    monkeypatch.setattr("app.services.ai_analysis.AIAnalysisService.analyze", fake_analyze)
+
+    first_response = client.post(
+        "/api/agent/screenshots/upload",
+        headers=agent_headers,
+        data={
+            "device_id": seeded_device["device_id"],
+            "captured_at": datetime(2026, 5, 11, 14, 0, tzinfo=timezone.utc).isoformat(),
+            "screen_index": "0",
+            "width": "8",
+            "height": "8",
+            "foreground_process": "Cursor.exe",
+            "window_title": "normal frame one",
+            "keyboard_count": "1",
+            "mouse_click_count": "1",
+            "mouse_move_count": "0",
+            "is_locked": "false",
+            "is_remote_session": "false",
+            "phash": "1111111111111111",
+        },
+        files={"file": ("screen.png", solid_png_bytes(red=10, green=20, blue=30), "image/png")},
+    )
+    assert first_response.status_code == 201
+    first_payload = first_response.json()
+    first_screenshot_id = UUID(first_payload["screenshot_id"])
+    stored_first_image = LocalScreenshotStorage(settings).resolve_stored_uri(first_payload["image_uri"])
+    assert stored_first_image is not None and stored_first_image.exists()
+
+    second_response = client.post(
+        "/api/agent/screenshots/upload",
+        headers=agent_headers,
+        data={
+            "device_id": seeded_device["device_id"],
+            "captured_at": datetime(2026, 5, 11, 14, 1, tzinfo=timezone.utc).isoformat(),
+            "screen_index": "0",
+            "width": "8",
+            "height": "8",
+            "foreground_process": "Cursor.exe",
+            "window_title": "normal frame two",
+            "keyboard_count": "2",
+            "mouse_click_count": "1",
+            "mouse_move_count": "0",
+            "is_locked": "false",
+            "is_remote_session": "false",
+            "phash": "2222222222222222",
+        },
+        files={"file": ("screen.png", solid_png_bytes(red=40, green=50, blue=60), "image/png")},
+    )
+    assert second_response.status_code == 201
+
+    with Session(client.app.state.engine) as session:
+        first_screenshot = session.get(Screenshot, first_screenshot_id)
+        assert first_screenshot is not None
+        assert first_screenshot.retention_decision == "normal"
+        assert first_screenshot.file_retention_status == "metadata_only"
+        assert first_screenshot.image_uri is None
+        assert first_screenshot.thumb_uri is None
+        assert first_screenshot.image_deleted_at is not None
+        assert first_screenshot.thumb_deleted_at is not None
+
+    assert not stored_first_image.exists()
+
+
+def test_screenshot_direct_upload_creates_ai_risk_event_and_exposes_it_in_queries(
+    client: TestClient,
+    seeded_device: dict[str, str],
+    agent_headers: dict[str, str],
+    auth_headers,
+    monkeypatch,
+) -> None:
+    def fake_analyze(
+        self,
+        *,
+        current_image_bytes: bytes,
+        previous_image_bytes: bytes | None,
+        safe_metadata: dict[str, object],
+        rules_json: dict[str, object] | None = None,
+    ):
+        assert current_image_bytes
+        assert safe_metadata["activity"]["type"] == "code_review_or_browser"
+        return AIAnalysisResult(
+            summary="Browser activity appears unrelated to assigned work and needs review.",
+            task_label="possible_non_work_browsing",
+            risk_level="high",
+            non_work_likelihood=0.96,
+            confidence=0.94,
+            evidence=["browser-only activity", "high non-work likelihood", "limited input activity"],
+            recommended_follow_up="Retain this frame for reviewer confirmation.",
+            model="gpt-4.1-mini",
+            response_id="resp_test_high_risk",
+        )
+
+    settings = client.app.state.settings
+    settings.ai_analysis_enabled = True
+    settings.ai_analysis_base_url = "https://api.openai.com/v1"
+    settings.ai_analysis_api_key = "test-ai-key"
+    settings.ai_analysis_model = "gpt-4.1-mini"
+    monkeypatch.setattr("app.services.ai_analysis.AIAnalysisService.analyze", fake_analyze)
+
+    response = client.post(
+        "/api/agent/screenshots/upload",
+        headers=agent_headers,
+        data={
+            "device_id": seeded_device["device_id"],
+            "captured_at": datetime(2026, 5, 11, 13, 10, tzinfo=timezone.utc).isoformat(),
+            "screen_index": "0",
+            "width": "1",
+            "height": "1",
+            "foreground_process": "chrome.exe",
+            "window_title": "shopping comparison",
+            "keyboard_count": "1",
+            "mouse_click_count": "1",
+            "mouse_move_count": "1",
+            "is_locked": "false",
+            "is_remote_session": "false",
+            "phash": "ai-high-risk-upload",
+        },
+        files={"file": ("screen.png", ONE_PIXEL_PNG, "image/png")},
+    )
+
+    assert response.status_code == 201
+    screenshot_id = response.json()["screenshot_id"]
+    headers = auth_headers(bootstrap=True)
+
+    detail_response = client.get(f"/api/screenshots/{screenshot_id}", headers=headers)
+    timeline_response = client.get(
+        f"/api/employees/{seeded_device['employee_id']}/timeline",
+        params={"date": "2026-05-11"},
+        headers=headers,
+    )
+    filtered_timeline_response = client.get(
+        "/api/timeline",
+        params={
+            "employee_id": seeded_device["employee_id"],
+            "date": "2026-05-11",
+            "abnormal_only": "true",
+            "page": 1,
+            "page_size": 10,
+        },
+        headers=headers,
+    )
+    filtered_screenshots_response = client.get(
+        "/api/screenshots",
+        params={
+            "employee_id": seeded_device["employee_id"],
+            "risk_level": "high_risk",
+            "abnormal_only": "true",
+            "page": 1,
+            "page_size": 10,
+        },
+        headers=headers,
+    )
+    events_response = client.get(
+        "/api/events",
+        params={
+            "employee_id": seeded_device["employee_id"],
+            "event_type": "ai_suspected_non_work_activity",
+        },
+        headers=headers,
+    )
+
+    assert detail_response.status_code == 200
+    detail_payload = detail_response.json()
+    assert detail_payload["ai_analysis_status"] == "completed"
+    assert detail_payload["ai_summary"] == "Browser activity appears unrelated to assigned work and needs review."
+    assert {event["event_type"] for event in detail_payload["risk_events"]} == {"ai_suspected_non_work_activity"}
+
+    assert timeline_response.status_code == 200
+    timeline_item = next(
+        item for item in timeline_response.json()["items"] if item["screenshot_id"] == screenshot_id
+    )
+    assert timeline_item["ai_analysis_status"] == "completed"
+    assert timeline_item["ai_details"]["risk_level"] == "high"
+    assert {event["event_type"] for event in timeline_item["risk_events"]} == {"ai_suspected_non_work_activity"}
+    assert timeline_item["retention_decision"] == "high_risk"
+    assert timeline_item["is_abnormal"] is True
+
+    assert filtered_timeline_response.status_code == 200
+    filtered_timeline_payload = filtered_timeline_response.json()
+    assert filtered_timeline_payload["total"] == 1
+    assert filtered_timeline_payload["items"][0]["screenshot_id"] == screenshot_id
+
+    assert filtered_screenshots_response.status_code == 200
+    filtered_screenshots_payload = filtered_screenshots_response.json()
+    assert filtered_screenshots_payload["total"] == 1
+    assert filtered_screenshots_payload["items"][0]["retention_decision"] == "high_risk"
+
+    assert events_response.status_code == 200
+    events_payload = events_response.json()
+    assert events_payload["total"] == 1
+    assert events_payload["items"][0]["event_type"] == "ai_suspected_non_work_activity"
+    assert events_payload["items"][0]["severity"] == "high"
+    assert events_payload["items"][0]["related_screenshot_id"] == screenshot_id
+
+    with Session(client.app.state.engine) as session:
+        event = session.exec(
+            select(BehaviorEvent)
+            .where(BehaviorEvent.related_screenshot_id == UUID(screenshot_id))
+            .where(BehaviorEvent.event_type == "ai_suspected_non_work_activity")
+        ).first()
+        assert event is not None
+        assert event.severity == "high"
+        assert event.details_json["source"] == "ai_analysis"
+        assert event.details_json["risk_level"] == "high"
+        assert event.details_json["provider"] == "openai_compatible"
+
+        screenshot = session.get(Screenshot, UUID(screenshot_id))
+        assert screenshot is not None
+        assert screenshot.retention_decision == "high_risk"
+        assert screenshot.file_retention_status == "full"
+        assert screenshot.is_abnormal is True
+        assert screenshot.retain_until is not None
+
+
+def test_screenshot_direct_upload_skips_ai_analysis_when_key_is_missing(
+    client: TestClient,
+    seeded_device: dict[str, str],
+    agent_headers: dict[str, str],
+    monkeypatch,
+) -> None:
+    def unexpected_analyze(*args, **kwargs):
+        raise AssertionError("AI analysis should not be called when configuration is incomplete")
+
+    settings = client.app.state.settings
+    settings.ai_analysis_enabled = True
+    settings.ai_analysis_base_url = "https://api.openai.com/v1"
+    settings.ai_analysis_api_key = None
+    settings.ai_analysis_default_api_key = None
+    settings.ai_analysis_model = "gpt-4.1-mini"
+    monkeypatch.setattr("app.services.ai_analysis.AIAnalysisService.analyze", unexpected_analyze)
+
+    response = client.post(
+        "/api/agent/screenshots/upload",
+        headers=agent_headers,
+        data={
+            "device_id": seeded_device["device_id"],
+            "captured_at": datetime(2026, 5, 11, 13, 15, tzinfo=timezone.utc).isoformat(),
+            "screen_index": "0",
+            "width": "1",
+            "height": "1",
+            "foreground_process": "Cursor.exe",
+            "window_title": "implementation branch",
+            "keyboard_count": "5",
+            "mouse_click_count": "1",
+            "mouse_move_count": "2",
+            "is_locked": "false",
+            "is_remote_session": "false",
+            "phash": "ai-skipped-upload",
+        },
+        files={"file": ("screen.png", ONE_PIXEL_PNG, "image/png")},
+    )
+
+    assert response.status_code == 201
+    screenshot_id = response.json()["screenshot_id"]
+
+    with Session(client.app.state.engine) as session:
+        screenshot = session.get(Screenshot, UUID(screenshot_id))
+        event = session.exec(
+            select(BehaviorEvent)
+            .where(BehaviorEvent.related_screenshot_id == UUID(screenshot_id))
+            .where(BehaviorEvent.event_type == "ai_suspected_non_work_activity")
+        ).first()
+        assert screenshot is not None
+        assert screenshot.analysis_status == "completed"
+        assert screenshot.ai_analysis_status == "skipped"
+        assert screenshot.ai_error is None
+        assert screenshot.ai_details_json == {
+            "status": "skipped",
+            "reason": "AI analysis is enabled but not fully configured.",
+        }
+        assert screenshot.activity_evidence_json is not None
+        assert screenshot.activity_evidence_json["ai_analysis"]["status"] == "skipped"
+        assert event is None
 
 
 def test_protected_screenshot_files_return_404_when_missing_or_outside_storage(

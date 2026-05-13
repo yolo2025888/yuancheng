@@ -169,11 +169,12 @@ class AuthService:
     def _bootstrap_admin_if_allowed(self, *, username: str, password: str) -> None:
         if not self.settings.allows_bootstrap_admin:
             return
+        normalized_bootstrap_password = self.settings.bootstrap_admin_password.strip().casefold()
+        if any(marker in normalized_bootstrap_password for marker in ("replace-with", "change-me", "placeholder")):
+            return
         if username not in {self.settings.bootstrap_admin_username, self.settings.bootstrap_admin_email}:
             return
         if password != self.settings.bootstrap_admin_password:
-            return
-        if self.session.exec(select(User.id).limit(1)).first() is not None:
             return
 
         role = self.session.exec(select(Role).where(Role.name == "Admin")).first()
@@ -186,17 +187,32 @@ class AuthService:
             self.session.add(role)
             self.session.flush()
 
-        user = User(
-            username=self.settings.bootstrap_admin_username,
-            display_name=self.settings.bootstrap_admin_display_name,
-            email=self.settings.bootstrap_admin_email,
-            password_hash=hash_password(
-                self.settings.bootstrap_admin_password,
-                iterations=self.settings.password_hash_iterations,
-            ),
-            role_id=role.id,
-            status="active",
+        password_hash = hash_password(
+            self.settings.bootstrap_admin_password,
+            iterations=self.settings.password_hash_iterations,
         )
+
+        user = self.session.exec(select(User).where(User.username == self.settings.bootstrap_admin_username)).first()
+        if user is None:
+            user = self.session.exec(select(User).where(User.email == self.settings.bootstrap_admin_email)).first()
+
+        if user is None:
+            user = User(
+                username=self.settings.bootstrap_admin_username,
+                display_name=self.settings.bootstrap_admin_display_name,
+                email=self.settings.bootstrap_admin_email,
+                password_hash=password_hash,
+                role_id=role.id,
+                status="active",
+            )
+        else:
+            user.username = self.settings.bootstrap_admin_username
+            user.display_name = self.settings.bootstrap_admin_display_name
+            user.email = self.settings.bootstrap_admin_email
+            user.password_hash = password_hash
+            user.role_id = role.id
+            user.status = "active"
+
         self.session.add(user)
         self.session.commit()
 

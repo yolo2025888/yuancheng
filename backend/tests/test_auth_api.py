@@ -100,6 +100,50 @@ def test_login_bootstraps_dev_admin_with_email_identifier(client: TestClient) ->
     assert login_response.json()["user"]["username"] == client.app.state.settings.bootstrap_admin_username
 
 
+def test_login_bootstraps_configured_admin_when_other_users_exist(client: TestClient) -> None:
+    with Session(client.app.state.engine) as session:
+        user = User(
+            username="existing.user",
+            display_name="Existing User",
+            email="existing@example.test",
+            password_hash=hash_password(
+                "existing-password",
+                iterations=client.app.state.settings.password_hash_iterations,
+            ),
+            status="active",
+        )
+        session.add(user)
+        session.commit()
+
+    login_response = client.post(
+        "/api/auth/login",
+        json={
+            "username": client.app.state.settings.bootstrap_admin_username,
+            "password": client.app.state.settings.bootstrap_admin_password,
+        },
+    )
+
+    assert login_response.status_code == 200
+    payload = login_response.json()
+    assert payload["user"]["username"] == client.app.state.settings.bootstrap_admin_username
+    assert payload["user"]["role_name"] == "Admin"
+    assert "access_matrix.manage" in payload["user"]["permissions"]
+
+
+def test_auth_login_cors_allows_vite_preview_origin(client: TestClient) -> None:
+    response = client.options(
+        "/api/auth/login",
+        headers={
+            "Origin": "http://127.0.0.1:4173",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://127.0.0.1:4173"
+
+
 def test_login_rejects_bad_password_and_inactive_user(client: TestClient) -> None:
     with Session(client.app.state.engine) as session:
         user = User(
@@ -254,6 +298,15 @@ def test_test_environment_allows_dev_secrets_for_isolated_fixtures() -> None:
     settings = Settings(environment="test")
 
     assert settings.is_test is True
+
+
+def test_default_bootstrap_admin_credentials_are_placeholders() -> None:
+    settings = Settings(environment="test")
+
+    assert settings.bootstrap_admin_username == "admin"
+    assert settings.bootstrap_admin_password == "replace-with-dev-bootstrap-password"
+    assert settings.bootstrap_admin_display_name == "Development Admin"
+    assert settings.bootstrap_admin_email == "admin@example.test"
 
 
 def test_custom_role_name_does_not_gain_admin_permissions_by_substring(

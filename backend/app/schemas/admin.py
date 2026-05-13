@@ -12,6 +12,78 @@ def _clean_single_line(value: str) -> str:
     return "".join(character for character in value.strip() if character >= " " and character not in "\r\n\t")
 
 
+def _clean_optional_single_line(value: str | None) -> str | None:
+    if value is None:
+        return None
+    stripped = _clean_single_line(value)
+    return stripped or None
+
+
+class AIScreenshotAnalysisSettings(BaseModel):
+    enabled: bool = False
+    provider: str | None = None
+    model: str | None = None
+    base_url: str | None = None
+    timeout_seconds: int = Field(default=20, ge=1, le=120)
+    use_previous_screenshot: bool = True
+    confidence_threshold: float = Field(default=0.7, ge=0.0, le=1.0)
+    risk_threshold: float = Field(default=0.7, ge=0.0, le=1.0)
+    has_api_key: bool = False
+    api_key_masked: str | None = None
+
+
+class AIScreenshotAnalysisSettingsUpdateRequest(BaseModel):
+    enabled: bool | None = None
+    provider: str | None = Field(default=None, max_length=80)
+    model: str | None = Field(default=None, max_length=160)
+    base_url: str | None = Field(default=None, max_length=500)
+    timeout_seconds: int | None = Field(default=None, ge=1, le=120)
+    use_previous_screenshot: bool | None = None
+    confidence_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+    risk_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+    api_key: str | None = Field(default=None, max_length=500)
+    clear_api_key: bool = False
+
+    @field_validator("provider", "model", "base_url", "api_key")
+    @classmethod
+    def strip_optional_ai_analysis_text(cls, value: str | None) -> str | None:
+        return _clean_optional_single_line(value)
+
+
+class ScreenshotRetentionSettings(BaseModel):
+    enabled: bool = True
+    normal_mode: Literal["delete_on_next_cycle", "keep_until_cleanup"] = "delete_on_next_cycle"
+    keep_latest_normal_cycles: int = Field(default=1, ge=1, le=10)
+    needs_review_retention_days: int = Field(default=7, ge=1, le=3650)
+    high_risk_retention_days: int = Field(default=30, ge=1, le=3650)
+    ai_failure_retention_days: int = Field(default=7, ge=1, le=3650)
+    skipped_analysis_retention_days: int = Field(default=3, ge=1, le=3650)
+
+
+class ScreenshotRetentionSettingsUpdateRequest(BaseModel):
+    enabled: bool | None = None
+    normal_mode: Literal["delete_on_next_cycle", "keep_until_cleanup"] | None = None
+    keep_latest_normal_cycles: int | None = Field(default=None, ge=1, le=10)
+    needs_review_retention_days: int | None = Field(default=None, ge=1, le=3650)
+    high_risk_retention_days: int | None = Field(default=None, ge=1, le=3650)
+    ai_failure_retention_days: int | None = Field(default=None, ge=1, le=3650)
+    skipped_analysis_retention_days: int | None = Field(default=None, ge=1, le=3650)
+
+
+class GalleryQuerySettings(BaseModel):
+    default_page_size: int = Field(default=20, ge=1, le=200)
+    max_page_size: int = Field(default=200, ge=1, le=500)
+    default_descending: bool = True
+    default_only_abnormal: bool = False
+
+
+class GalleryQuerySettingsUpdateRequest(BaseModel):
+    default_page_size: int | None = Field(default=None, ge=1, le=200)
+    max_page_size: int | None = Field(default=None, ge=1, le=500)
+    default_descending: bool | None = None
+    default_only_abnormal: bool | None = None
+
+
 class PolicySummary(BaseModel):
     id: UUID
     name: str
@@ -21,6 +93,9 @@ class PolicySummary(BaseModel):
     retention_days: int
     is_active: bool
     rules_json: dict[str, Any] = Field(default_factory=dict)
+    ai_analysis: AIScreenshotAnalysisSettings | None = None
+    screenshot_retention: ScreenshotRetentionSettings | None = None
+    gallery_query: GalleryQuerySettings | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -72,6 +147,65 @@ class EmployeeItem(BaseModel):
 class EmployeeListResponse(BaseModel):
     items: list[EmployeeItem]
     total: int
+
+
+class EmployeeCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    employee_no: str = Field(min_length=1, max_length=64)
+    department: str | None = Field(default=None, max_length=120)
+    manager_name: str | None = Field(default=None, max_length=120)
+    job_role: str | None = Field(default=None, max_length=120)
+    github_username: str | None = Field(default=None, max_length=120)
+    status: str = Field(default="active", pattern="^(active|inactive)$")
+
+    @field_validator("name", "employee_no")
+    @classmethod
+    def strip_required_employee_text(cls, value: str) -> str:
+        stripped = _clean_single_line(value)
+        if not stripped:
+            raise ValueError("Value must not be blank")
+        return stripped
+
+    @field_validator("department", "manager_name", "job_role", "github_username")
+    @classmethod
+    def strip_optional_employee_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = _clean_single_line(value)
+        return stripped or None
+
+
+class EmployeeUpdateRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    employee_no: str | None = Field(default=None, min_length=1, max_length=64)
+    department: str | None = Field(default=None, max_length=120)
+    manager_name: str | None = Field(default=None, max_length=120)
+    job_role: str | None = Field(default=None, max_length=120)
+    github_username: str | None = Field(default=None, max_length=120)
+    status: str | None = Field(default=None, pattern="^(active|inactive)$")
+
+    @field_validator("name", "employee_no")
+    @classmethod
+    def strip_required_employee_update_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = _clean_single_line(value)
+        if not stripped:
+            raise ValueError("Value must not be blank")
+        return stripped
+
+    @field_validator("department", "manager_name", "job_role", "github_username")
+    @classmethod
+    def strip_optional_employee_update_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = _clean_single_line(value)
+        return stripped or None
+
+
+class EmployeeDeleteResponse(BaseModel):
+    id: UUID
+    deleted_at: datetime
 
 
 class DeviceItem(BaseModel):
@@ -131,6 +265,9 @@ class PolicyCreateRequest(BaseModel):
     retention_days: int = Field(ge=1)
     is_active: bool = True
     rules_json: dict[str, Any] = Field(default_factory=dict)
+    ai_analysis: AIScreenshotAnalysisSettingsUpdateRequest | None = None
+    screenshot_retention: ScreenshotRetentionSettingsUpdateRequest | None = None
+    gallery_query: GalleryQuerySettingsUpdateRequest | None = None
 
 
 class PolicyUpdateRequest(BaseModel):
@@ -141,6 +278,9 @@ class PolicyUpdateRequest(BaseModel):
     retention_days: int | None = Field(default=None, ge=1)
     is_active: bool | None = None
     rules_json: dict[str, Any] | None = None
+    ai_analysis: AIScreenshotAnalysisSettingsUpdateRequest | None = None
+    screenshot_retention: ScreenshotRetentionSettingsUpdateRequest | None = None
+    gallery_query: GalleryQuerySettingsUpdateRequest | None = None
 
 
 class PolicyActivationRequest(BaseModel):

@@ -7,6 +7,7 @@ import { KpiCard } from '../components/KpiCard';
 import { PageSection } from '../components/PageSection';
 import { EmployeeHeatmapChart } from '../components/charts/EmployeeHeatmapChart';
 import { WorkStatusStackedChart } from '../components/charts/WorkStatusStackedChart';
+import { useI18n } from '../i18n/I18nContext';
 import { adminApi } from '../services/adminApi';
 import type {
   AccessMatrixRecord,
@@ -21,6 +22,7 @@ import type {
 } from '../types/models';
 
 export function DashboardPage() {
+  const { t, text } = useI18n();
   const [kpis, setKpis] = useState<KpiMetric[]>([]);
   const [workStatus, setWorkStatus] = useState<StatusBucket[]>([]);
   const [heatmap, setHeatmap] = useState<HeatmapPoint[]>([]);
@@ -72,55 +74,58 @@ export function DashboardPage() {
   return (
     <Space direction="vertical" size={20} className="page-stack">
       <PageSection
-        title="Dashboard"
-        description="Operational overview using dashboard summary, risk scoring, access-role, and event feeds with frontend fallback where APIs are still settling."
+        title={t('dashboard.title', 'Dashboard')}
+        description={t(
+          'dashboard.description',
+          'Operational overview using live dashboard summary, risk scoring, access-role, and event feeds.'
+        )}
         extra={
           <Space size={[8, 8]} wrap>
             {dashboardApiStatus ? (
               <Tag color={dashboardApiStatus.source === 'live' ? 'green' : 'gold'}>
-                Summary {dashboardApiStatus.label}
+                {t('dashboard.summaryTag', 'Summary {{label}}', { label: text(dashboardApiStatus.label) })}
               </Tag>
             ) : null}
             {riskApiStatus ? (
               <Tag color={riskApiStatus.source === 'live' ? 'green' : 'gold'}>
-                Risk {riskApiStatus.label}
+                {t('dashboard.riskTag', 'Risk {{label}}', { label: text(riskApiStatus.label) })}
               </Tag>
             ) : null}
             {accessApiStatus ? (
               <Tag color={accessApiStatus.source === 'live' ? 'green' : 'gold'}>
-                Access {accessApiStatus.label}
+                {t('dashboard.accessTag', 'Access {{label}}', { label: text(accessApiStatus.label) })}
               </Tag>
             ) : null}
             {eventApiStatus ? (
               <Tag color={eventApiStatus.source === 'live' ? 'green' : 'gold'}>
-                Events {eventApiStatus.label}
+                {t('dashboard.eventsTag', 'Events {{label}}', { label: text(eventApiStatus.label) })}
               </Tag>
             ) : null}
             {reviewQueueApiStatus ? (
               <Tag color={reviewQueueApiStatus.source === 'live' ? 'green' : 'gold'}>
-                Queue {reviewQueueApiStatus.label}
+                {t('dashboard.queueTag', 'Queue {{label}}', { label: text(reviewQueueApiStatus.label) })}
               </Tag>
             ) : null}
             <Tag color={summary.reviewQueueCritical > 0 ? 'volcano' : 'green'}>
-              {reviewQueue.length} review items
+              {t('dashboard.reviewItems', '{{count}} review items', { count: reviewQueue.length })}
             </Tag>
             <Tag color={summary.highRiskEmployees > 0 ? 'orange' : 'green'}>
-              {summary.highRiskEmployees} employees on watch
+              {t('dashboard.watchEmployees', '{{count}} employees on watch', { count: summary.highRiskEmployees })}
             </Tag>
-            <Tag color="blue">{summary.modules} access modules</Tag>
+            <Tag color="blue">{t('dashboard.accessModules', '{{count}} access modules', { count: summary.modules })}</Tag>
           </Space>
         }
       />
       {backendHealth ? <BackendHealthNotice health={backendHealth} /> : null}
       <Row gutter={[16, 16]}>
         <Col xs={24} xl={8}>
-          {dashboardApiStatus ? <ApiStatusNotice status={dashboardApiStatus} title="Dashboard summary API" /> : null}
+          {dashboardApiStatus ? <ApiStatusNotice status={dashboardApiStatus} title={t('dashboard.summaryApi', 'Dashboard summary API')} /> : null}
         </Col>
         <Col xs={24} xl={8}>
-          {riskApiStatus ? <ApiStatusNotice status={riskApiStatus} title="Risk score API" /> : null}
+          {riskApiStatus ? <ApiStatusNotice status={riskApiStatus} title={t('dashboard.riskApi', 'Risk score API')} /> : null}
         </Col>
         <Col xs={24} xl={8}>
-          {accessApiStatus ? <ApiStatusNotice status={accessApiStatus} title="Access matrix API" /> : null}
+          {accessApiStatus ? <ApiStatusNotice status={accessApiStatus} title={t('dashboard.accessApi', 'Access matrix API')} /> : null}
         </Col>
       </Row>
       <Row gutter={[16, 16]}>
@@ -148,10 +153,10 @@ export function DashboardPage() {
         </Col>
         <Col xs={24} xl={9}>
           <Card
-            title="Access role snapshot"
+            title={t('dashboard.accessSnapshot', 'Access role snapshot')}
             bordered={false}
             className="panel-card"
-            extra={<Typography.Text type="secondary">{accessMatrix.length} roles</Typography.Text>}
+            extra={<Typography.Text type="secondary">{t('dashboard.roles', '{{count}} roles', { count: accessMatrix.length })}</Typography.Text>}
           >
             <Table
               rowKey="key"
@@ -161,43 +166,45 @@ export function DashboardPage() {
               scroll={{ x: 720 }}
               columns={[
                 {
-                  title: 'Role',
+                  title: t('common.role', 'Role'),
                   width: 160,
                   render: (_value: unknown, record: AccessMatrixRecord) => (
                     <Space direction="vertical" size={2}>
-                      <Typography.Text strong>{record.role}</Typography.Text>
-                      <Typography.Text type="secondary">{record.employeeCount} employees</Typography.Text>
+                      <Typography.Text strong>{text(record.role)}</Typography.Text>
+                      <Typography.Text type="secondary">
+                        {t('employees.count', '{{count}} employees', { count: record.employeeCount })}
+                      </Typography.Text>
                     </Space>
                   )
                 },
                 {
-                  title: 'Modules / Actions',
+                  title: t('dashboard.modulesActions', 'Modules / Actions'),
                   width: 320,
                   render: (_value: unknown, record: AccessMatrixRecord) => (
                     <Space direction="vertical" size={6}>
                       <Space size={[4, 4]} wrap>
                         {record.modules.slice(0, 4).map((module) => (
                           <Tag key={module} color="geekblue">
-                            {module}
+                            {text(module)}
                           </Tag>
                         ))}
                       </Space>
                       <Typography.Text type="secondary">
-                        {record.actions.slice(0, 3).join(', ') || 'No explicit actions'}
+                        {record.actions.slice(0, 3).map(text).join(', ') || t('dashboard.noExplicitActions', 'No explicit actions')}
                       </Typography.Text>
                     </Space>
                   )
                 },
                 {
-                  title: 'Scope',
+                  title: t('dashboard.scope', 'Scope'),
                   width: 220,
                   render: (_value: unknown, record: AccessMatrixRecord) => (
                     <Space direction="vertical" size={2}>
                       <Typography.Text type="secondary">
-                        {record.positions.slice(0, 2).join(', ') || 'No positions mapped'}
+                        {record.positions.slice(0, 2).map(text).join(', ') || t('dashboard.noPositionsMapped', 'No positions mapped')}
                       </Typography.Text>
                       <Typography.Text type="secondary">
-                        {record.policyNames.slice(0, 2).join(', ') || 'No policy binding'}
+                        {record.policyNames.slice(0, 2).map(text).join(', ') || t('dashboard.noPolicyBinding', 'No policy binding')}
                       </Typography.Text>
                     </Space>
                   )

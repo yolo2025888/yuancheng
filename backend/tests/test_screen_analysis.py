@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from app.models import Screenshot
+from app.services.ai_analysis import AIAnalysisResult, apply_ai_analysis_result
 from app.services.screen_analysis import classify_screenshot_activity
 
 
@@ -168,3 +169,54 @@ def test_returns_unknown_activity_when_no_safe_signals_exist() -> None:
     assert activity.evidence["matched_signals"] == []
     assert "Bonus Sheet" not in activity.summary
     assert "bonus.xlsx" not in str(activity.evidence)
+
+
+def test_apply_ai_analysis_result_updates_optional_ai_fields_when_present() -> None:
+    class Target:
+        ai_summary: str | None = None
+        ai_task_label: str | None = None
+        ai_risk_level: str | None = None
+        ai_non_work_likelihood: float | None = None
+        ai_confidence: float | None = None
+        ai_evidence_json: dict[str, object] | None = None
+        ai_recommended_follow_up: str | None = None
+        ai_provider: str | None = None
+        ai_model: str | None = None
+        ai_response_id: str | None = None
+
+    target = Target()
+    result = AIAnalysisResult(
+        summary="Comparing two coding-related screenshots with limited contextual risk.",
+        task_label="development_work",
+        risk_level="low",
+        non_work_likelihood=0.08,
+        confidence=0.82,
+        evidence=["IDE-like layout", "visible code editor", "small diff between frames"],
+        recommended_follow_up="Use as assistive context only; rely on policy rules for enforcement.",
+        model="gpt-4.1-mini",
+        response_id="resp_123",
+    )
+
+    applied_fields = apply_ai_analysis_result(target, result)
+
+    assert applied_fields == [
+        "ai_summary",
+        "ai_task_label",
+        "ai_risk_level",
+        "ai_non_work_likelihood",
+        "ai_confidence",
+        "ai_evidence_json",
+        "ai_recommended_follow_up",
+        "ai_provider",
+        "ai_model",
+        "ai_response_id",
+    ]
+    assert target.ai_summary == result.summary
+    assert target.ai_task_label == "development_work"
+    assert target.ai_risk_level == "low"
+    assert target.ai_non_work_likelihood == 0.08
+    assert target.ai_confidence == 0.82
+    assert target.ai_evidence_json is not None
+    assert target.ai_evidence_json["status"] == "completed"
+    assert target.ai_evidence_json["model"] == "gpt-4.1-mini"
+    assert target.ai_recommended_follow_up.startswith("Use as assistive context only")

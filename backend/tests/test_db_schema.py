@@ -14,12 +14,33 @@ def _existing_columns_with_missing(table_name: str, missing: set[str]) -> set[st
 
 def test_postgresql_schema_patch_uses_idempotent_safe_column_adds() -> None:
     missing_screenshot_columns = {
+        "capture_batch_key",
         "activity_type",
         "active_app",
         "activity_confidence",
         "activity_summary",
         "activity_evidence_json",
+        "ai_analysis_status",
+        "ai_summary",
+        "ai_task_label",
+        "ai_risk_level",
+        "ai_non_work_likelihood",
+        "ai_confidence",
+        "ai_provider",
+        "ai_model",
+        "ai_recommended_action",
+        "ai_response_id",
+        "ai_details_json",
+        "ai_error",
+        "ai_analyzed_at",
         "is_locked",
+        "retention_decision",
+        "file_retention_status",
+        "is_abnormal",
+        "retain_until",
+        "image_deleted_at",
+        "thumb_deleted_at",
+        "retention_reason",
     }
     missing_device_columns = {
         "agent_token_hash",
@@ -41,6 +62,13 @@ def test_postgresql_schema_patch_uses_idempotent_safe_column_adds() -> None:
 
     assert "ALTER TABLE screenshots ADD COLUMN IF NOT EXISTS activity_summary TEXT" in ddl
     assert "ALTER TABLE screenshots ADD COLUMN IF NOT EXISTS activity_evidence_json JSON" in ddl
+    assert "ALTER TABLE screenshots ADD COLUMN IF NOT EXISTS ai_analysis_status VARCHAR DEFAULT 'skipped' NOT NULL" in ddl
+    assert "ALTER TABLE screenshots ADD COLUMN IF NOT EXISTS ai_summary TEXT" in ddl
+    assert "ALTER TABLE screenshots ADD COLUMN IF NOT EXISTS ai_task_label VARCHAR" in ddl
+    assert "ALTER TABLE screenshots ADD COLUMN IF NOT EXISTS ai_risk_level VARCHAR" in ddl
+    assert "ALTER TABLE screenshots ADD COLUMN IF NOT EXISTS ai_details_json JSON" in ddl
+    assert "ALTER TABLE screenshots ADD COLUMN IF NOT EXISTS retention_decision VARCHAR DEFAULT 'pending' NOT NULL" in ddl
+    assert "ALTER TABLE screenshots ADD COLUMN IF NOT EXISTS file_retention_status VARCHAR DEFAULT 'full' NOT NULL" in ddl
     assert "ALTER TABLE devices ADD COLUMN IF NOT EXISTS agent_token_hash VARCHAR" in ddl
     assert "ALTER TABLE screenshots ADD COLUMN IF NOT EXISTS is_locked BOOLEAN DEFAULT FALSE NOT NULL" in ddl
 

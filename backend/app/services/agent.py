@@ -30,6 +30,11 @@ def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def build_capture_batch_key(*, device_id: UUID, captured_at: datetime) -> str:
+    normalized = captured_at if captured_at.tzinfo is not None else captured_at.replace(tzinfo=timezone.utc)
+    return f"{device_id}:{normalized.astimezone(timezone.utc).isoformat()}"
+
+
 class AgentService:
     def __init__(self, session: Session, settings: Settings | None = None):
         self.session = session
@@ -65,6 +70,7 @@ class AgentService:
             employee_id=device.employee_id,
             device_id=device.id,
             captured_at=payload.captured_at,
+            capture_batch_key=build_capture_batch_key(device_id=device.id, captured_at=payload.captured_at),
             screen_index=payload.screen_index,
             width=payload.width,
             height=payload.height,
@@ -84,6 +90,9 @@ class AgentService:
             upload_status="pending",
             ocr_status="pending",
             analysis_status="pending",
+            retention_decision="pending",
+            file_retention_status="full",
+            is_abnormal=False,
         )
 
     def _safe_foreground_window(

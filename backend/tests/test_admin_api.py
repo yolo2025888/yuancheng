@@ -463,6 +463,16 @@ def test_policy_crud_and_activation_write_audit_logs(client: TestClient, auth_he
                 "departments": ["Engineering"],
                 "positions": ["Senior Engineer"],
             },
+            "screenshot_retention": {
+                "normal_mode": "delete_on_next_cycle",
+                "needs_review_retention_days": 9,
+                "high_risk_retention_days": 45,
+            },
+            "gallery_query": {
+                "default_page_size": 40,
+                "max_page_size": 120,
+                "default_only_abnormal": True,
+            },
         },
     )
 
@@ -473,7 +483,19 @@ def test_policy_crud_and_activation_write_audit_logs(client: TestClient, auth_he
         "roles": ["engineer"],
         "departments": ["engineering"],
         "positions": ["senior engineer"],
+        "screenshot_retention": {
+            "normal_mode": "delete_on_next_cycle",
+            "needs_review_retention_days": 9,
+            "high_risk_retention_days": 45,
+        },
+        "gallery": {
+            "default_page_size": 40,
+            "max_page_size": 120,
+            "default_only_abnormal": True,
+        },
     }
+    assert created_policy["screenshot_retention"]["high_risk_retention_days"] == 45
+    assert created_policy["gallery_query"]["default_page_size"] == 40
 
     update_response = client.put(
         f"/api/policies/{created_policy['id']}",
@@ -485,6 +507,10 @@ def test_policy_crud_and_activation_write_audit_logs(client: TestClient, auth_he
                 "roles": ["Engineer", "Lead Engineer"],
                 "departments": ["Engineering"],
             },
+            "gallery_query": {
+                "default_page_size": 25,
+                "default_descending": False,
+            },
         },
     )
 
@@ -495,7 +521,13 @@ def test_policy_crud_and_activation_write_audit_logs(client: TestClient, auth_he
     assert updated_policy["rules_json"] == {
         "roles": ["engineer", "lead engineer"],
         "departments": ["engineering"],
+        "gallery": {
+            "default_page_size": 25,
+            "default_descending": False,
+        },
     }
+    assert updated_policy["gallery_query"]["default_page_size"] == 25
+    assert updated_policy["gallery_query"]["default_descending"] is False
 
     activation_response = client.post(
         f"/api/policies/{created_policy['id']}/activation",
@@ -515,15 +547,27 @@ def test_policy_crud_and_activation_write_audit_logs(client: TestClient, auth_he
         assert persisted_policy.rules_json == {
             "roles": ["engineer", "lead engineer"],
             "departments": ["engineering"],
+            "gallery": {
+                "default_page_size": 25,
+                "default_descending": False,
+            },
         }
 
+    delete_response = client.delete(f"/api/policies/{created_policy['id']}", headers=headers)
+
+    assert delete_response.status_code == 204
+
+    with Session(client.app.state.engine) as session:
+        persisted_policy = session.get(Policy, UUID(created_policy["id"]))
+        assert persisted_policy is None
         audit_logs = session.exec(select(AuditLog).order_by(AuditLog.created_at.asc())).all()
         assert [audit.action for audit in audit_logs] == [
             "policy.created",
             "policy.updated",
             "policy.activated",
+            "policy.deleted",
         ]
-        assert all(audit.target_id == persisted_policy.id for audit in audit_logs)
+        assert all(audit.target_id == UUID(created_policy["id"]) for audit in audit_logs)
         assert all(audit.target_type == "policy" for audit in audit_logs)
         assert all(audit.ip_address == "testclient" for audit in audit_logs)
         assert all(audit.user_agent is not None for audit in audit_logs)
@@ -531,9 +575,75 @@ def test_policy_crud_and_activation_write_audit_logs(client: TestClient, auth_he
     audit_response = client.get("/api/audit-logs", headers=headers)
     assert audit_response.status_code == 200
     audit_payload = audit_response.json()
-    assert audit_payload["total"] == 3
-    assert audit_payload["items"][0]["action"] == "policy.activated"
+    assert audit_payload["total"] == 4
+    assert audit_payload["items"][0]["action"] == "policy.deleted"
     assert audit_payload["items"][0]["target_type"] == "policy"
+
+
+def test_ai_analysis_settings_are_persisted_and_secrets_are_masked(
+    client: TestClient,
+    auth_headers,
+) -> None:
+    headers = auth_headers(bootstrap=True)
+
+    update_response = client.put(
+        "/api/admin/ai-analysis/settings",
+        headers=headers,
+        json={
+            "enabled": True,
+            "provider": "openai",
+            "model": "gpt-4.1-mini",
+            "base_url": "https://api.example.test/v1",
+            "api_key": "sk-test-secret-5678",
+        },
+    )
+
+    assert update_response.status_code == 200
+    update_payload = update_response.json()
+    assert update_payload["enabled"] is True
+    assert update_payload["provider"] == "openai"
+    assert update_payload["model"] == "gpt-4.1-mini"
+    assert update_payload["base_url"] == "https://api.example.test/v1"
+    assert update_payload["has_api_key"] is True
+    assert update_payload["api_key_masked"] != "sk-test-secret-5678"
+    assert update_payload["api_key_masked"].endswith("5678")
+
+    get_response = client.get("/api/admin/ai-analysis/settings", headers=headers)
+    policies_response = client.get("/api/policies", headers=headers)
+
+    assert get_response.status_code == 200
+    assert get_response.json()["api_key_masked"] == update_payload["api_key_masked"]
+    assert policies_response.status_code == 200
+    default_policy = next(item for item in policies_response.json()["items"] if item["version"] == "mvp")
+    assert default_policy["ai_analysis"]["provider"] == "openai"
+    assert default_policy["ai_analysis"]["has_api_key"] is True
+    assert default_policy["rules_json"]["ai_analysis"]["api_key_masked"] == update_payload["api_key_masked"]
+    assert default_policy["rules_json"]["ai_analysis"]["has_api_key"] is True
+    assert "api_key" not in default_policy["rules_json"]["ai_analysis"]
+
+    clear_response = client.put(
+        "/api/admin/ai-analysis/settings",
+        headers=headers,
+        json={"clear_api_key": True},
+    )
+
+    assert clear_response.status_code == 200
+    assert clear_response.json()["has_api_key"] is False
+    assert clear_response.json()["api_key_masked"] is None
+
+    with Session(client.app.state.engine) as session:
+        default_policy_row = session.exec(
+            select(Policy).where(Policy.name == client.app.state.settings.default_policy_name)
+        ).one()
+        assert default_policy_row.rules_json["ai_analysis"]["provider"] == "openai"
+        assert "api_key" not in default_policy_row.rules_json["ai_analysis"]
+        audit_logs = session.exec(
+            select(AuditLog)
+            .where(AuditLog.action == "ai_analysis.settings.updated")
+            .order_by(AuditLog.created_at.asc())
+        ).all()
+        assert len(audit_logs) == 2
+        assert all(log.target_id == default_policy_row.id for log in audit_logs)
 
 
 def test_screenshot_retention_cleanup_removes_expired_files_and_writes_audit(
@@ -1040,6 +1150,7 @@ def test_sqlite_schema_ensure_adds_new_columns_to_existing_db(tmp_path: Path) ->
     assert {
         "mouse_wheel_count",
         "window_switch_count",
+        "capture_batch_key",
         "is_rdp_session",
         "idle_seconds",
         "input_desktop_name",
@@ -1049,7 +1160,108 @@ def test_sqlite_schema_ensure_adds_new_columns_to_existing_db(tmp_path: Path) ->
         "activity_confidence",
         "activity_summary",
         "activity_evidence_json",
+        "ai_analysis_status",
+        "ai_summary",
+        "ai_task_label",
+        "ai_risk_level",
+        "ai_non_work_likelihood",
+        "ai_confidence",
+        "ai_provider",
+        "ai_model",
+        "ai_recommended_action",
+        "ai_response_id",
+        "ai_details_json",
+        "ai_error",
+        "ai_analyzed_at",
+        "retention_decision",
+        "file_retention_status",
+        "is_abnormal",
+        "retain_until",
+        "image_deleted_at",
+        "thumb_deleted_at",
+        "retention_reason",
     } <= screenshot_columns
+
+
+def test_screenshot_endpoints_expose_ai_analysis_fields(
+    client: TestClient,
+    seeded_device: dict[str, str],
+    auth_headers,
+) -> None:
+    headers = auth_headers(bootstrap=True)
+    employee_id = UUID(seeded_device["employee_id"])
+    device_id = UUID(seeded_device["device_id"])
+
+    with Session(client.app.state.engine) as session:
+        screenshot = Screenshot(
+            employee_id=employee_id,
+            device_id=device_id,
+            captured_at=datetime(2026, 5, 11, 11, 30, tzinfo=timezone.utc),
+            capture_batch_key="batch-2026-05-11T11:30:00Z",
+            screen_index=0,
+            width=1920,
+            height=1080,
+            upload_status="completed",
+            ocr_status="completed",
+            analysis_status="completed",
+            ai_analysis_status="completed",
+            ai_summary="Confidential spreadsheet content detected.",
+            ai_task_label="spreadsheet_review",
+            ai_risk_level="high",
+            ai_non_work_likelihood=0.92,
+            ai_confidence=0.91,
+            ai_provider="openai",
+            ai_model="gpt-4.1-mini",
+            ai_recommended_action="Escalate to a reviewer.",
+            ai_response_id="resp_admin_test",
+            ai_details_json={"labels": ["spreadsheet", "confidential"], "risk_level": "high"},
+            ai_analyzed_at=datetime(2026, 5, 11, 11, 31, tzinfo=timezone.utc),
+            retention_decision="high_risk",
+            file_retention_status="full",
+            is_abnormal=True,
+            retain_until=datetime(2026, 6, 10, 11, 30, tzinfo=timezone.utc),
+            retention_reason="High-risk AI result requires evidence retention.",
+        )
+        session.add(screenshot)
+        session.commit()
+        session.refresh(screenshot)
+
+    detail_response = client.get(f"/api/screenshots/{screenshot.id}", headers=headers)
+    timeline_response = client.get(
+        f"/api/employees/{employee_id}/timeline",
+        params={"date": "2026-05-11"},
+        headers=headers,
+    )
+
+    assert detail_response.status_code == 200
+    detail_payload = detail_response.json()
+    assert detail_payload["ai_analysis_status"] == "completed"
+    assert detail_payload["ai_summary"] == "Confidential spreadsheet content detected."
+    assert detail_payload["ai_task_label"] == "spreadsheet_review"
+    assert detail_payload["ai_risk_level"] == "high"
+    assert detail_payload["ai_non_work_likelihood"] == 0.92
+    assert detail_payload["ai_confidence"] == 0.91
+    assert detail_payload["ai_provider"] == "openai"
+    assert detail_payload["ai_model"] == "gpt-4.1-mini"
+    assert detail_payload["ai_recommended_action"] == "Escalate to a reviewer."
+    assert detail_payload["ai_response_id"] == "resp_admin_test"
+    assert detail_payload["capture_batch_key"] == "batch-2026-05-11T11:30:00Z"
+    assert detail_payload["retention_decision"] == "high_risk"
+    assert detail_payload["file_retention_status"] == "full"
+    assert detail_payload["is_abnormal"] is True
+    assert detail_payload["ai_details"]["risk_level"] == "high"
+    assert detail_payload["ai_details"]["labels"] == ["spreadsheet", "confidential"]
+
+    assert timeline_response.status_code == 200
+    timeline_payload = timeline_response.json()
+    assert timeline_payload["items"][0]["ai_analysis_status"] == "completed"
+    assert timeline_payload["items"][0]["ai_summary"] == "Confidential spreadsheet content detected."
+    assert timeline_payload["items"][0]["ai_task_label"] == "spreadsheet_review"
+    assert timeline_payload["items"][0]["ai_risk_level"] == "high"
+    assert timeline_payload["items"][0]["ai_confidence"] == 0.91
+    assert timeline_payload["items"][0]["ai_details"]["risk_level"] == "high"
+    assert timeline_payload["items"][0]["retention_decision"] == "high_risk"
+    assert timeline_payload["items"][0]["file_retention_status"] == "full"
 
 
 def test_dashboard_summary_reports_real_counts_and_top_risks(
@@ -2082,7 +2294,7 @@ def test_agent_attendance_scoped_token_uses_bound_employee_identity(
     assert payload["user_name"] == "Alice"
 
 
-def test_agent_attendance_scoped_token_can_create_unmatched_employee_record(
+def test_agent_attendance_scoped_token_rejects_unmatched_employee_record(
     client: TestClient,
 ) -> None:
     orphan_device_id = uuid4()
@@ -2121,15 +2333,37 @@ def test_agent_attendance_scoped_token_can_create_unmatched_employee_record(
         },
     )
 
-    assert response.status_code == 201
-    payload = response.json()
-    assert payload["employee_id"] is None
-    assert payload["employee_name"] is None
-    assert payload["device_id"] == str(orphan_device_id)
-    assert payload["device_id"] != forged_device_id
-    assert payload["employee_no"] == "E-404"
-    assert payload["anomaly_status"] == "normal"
-    assert payload["review_status"] == "reviewed"
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Employee not found"
+
+
+def test_agent_attendance_rejects_inactive_employee(
+    client: TestClient,
+    seeded_device: dict[str, str],
+    agent_headers: dict[str, str],
+) -> None:
+    with Session(client.app.state.engine) as session:
+        employee = session.get(Employee, UUID(seeded_device["employee_id"]))
+        assert employee is not None
+        employee.status = "inactive"
+        session.add(employee)
+        session.commit()
+
+    response = client.post(
+        "/api/agent/attendance",
+        headers=agent_headers,
+        json={
+            "employee_no": "E-001",
+            "user_name": "Alice",
+            "machine_name": "DEV-PC-001",
+            "event_type": "clock_in",
+            "occurred_at": "2026-05-11T08:30:00Z",
+            "source": "launcher",
+        },
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Employee is not active"
 
 
 def test_attendance_review_returns_404_for_missing_record(client: TestClient, auth_headers) -> None:
@@ -2201,6 +2435,84 @@ def test_agent_attendance_rejects_blank_required_text(
     assert response.status_code == 422
 
 
+def test_employee_crud_soft_deletes_directory_record(
+    client: TestClient,
+    seeded_device: dict[str, str],
+    auth_headers,
+) -> None:
+    headers = auth_headers(bootstrap=True)
+
+    create_response = client.post(
+        "/api/employees",
+        headers=headers,
+        json={
+            "name": "Bob",
+            "employee_no": "E-002",
+            "department": "Support",
+            "job_role": "Support Specialist",
+            "manager_name": "Morgan",
+            "github_username": "bobhub",
+            "status": "active",
+        },
+    )
+
+    assert create_response.status_code == 201
+    created_employee = create_response.json()
+    assert created_employee["employee_no"] == "E-002"
+    assert created_employee["active_device_count"] == 0
+
+    duplicate_response = client.post(
+        "/api/employees",
+        headers=headers,
+        json={
+            "name": "Duplicate Alice",
+            "employee_no": "E-001",
+            "status": "active",
+        },
+    )
+    update_response = client.put(
+        f"/api/employees/{created_employee['id']}",
+        headers=headers,
+        json={
+            "name": "Bob Updated",
+            "employee_no": "E-003",
+            "department": "Customer Success",
+            "job_role": "Support Lead",
+            "manager_name": "Dana",
+            "github_username": "boblead",
+            "status": "inactive",
+        },
+    )
+
+    assert duplicate_response.status_code == 400
+    assert update_response.status_code == 200
+    updated_employee = update_response.json()
+    assert updated_employee["name"] == "Bob Updated"
+    assert updated_employee["employee_no"] == "E-003"
+    assert updated_employee["status"] == "inactive"
+
+    delete_response = client.delete(f"/api/employees/{created_employee['id']}", headers=headers)
+    list_response = client.get("/api/employees", headers=headers)
+
+    assert delete_response.status_code == 200
+    assert list_response.status_code == 200
+    assert {item["employee_no"] for item in list_response.json()["items"]} == {"E-001"}
+
+    with Session(client.app.state.engine) as session:
+        deleted_employee = session.get(Employee, UUID(created_employee["id"]))
+        audit_logs = session.exec(
+            select(AuditLog).where(AuditLog.target_type == "employee").order_by(AuditLog.created_at.asc())
+        ).all()
+
+        assert deleted_employee is not None
+        assert deleted_employee.status == "deleted"
+        assert [audit.action for audit in audit_logs] == [
+            "employee.created",
+            "employee.updated",
+            "employee.deleted",
+        ]
+
+
 def test_employee_export_returns_csv_and_audits_action(
     client: TestClient,
     seeded_device: dict[str, str],
@@ -2222,6 +2534,69 @@ def test_employee_export_returns_csv_and_audits_action(
         ).all()
         assert len(audit_logs) == 1
         assert audit_logs[0].target_type == "employee_directory"
+
+
+def test_employee_create_update_and_delete_manage_employee_directory(
+    client: TestClient,
+    auth_headers,
+) -> None:
+    headers = auth_headers(bootstrap=True)
+
+    create_response = client.post(
+        "/api/employees",
+        headers=headers,
+        json={
+            "name": "Zhang San",
+            "employee_no": "1",
+            "department": "Engineering",
+            "job_role": "Backend Engineer",
+            "manager_name": "Li Manager",
+            "github_username": "zhangsan",
+            "status": "active",
+        },
+    )
+
+    assert create_response.status_code == 201
+    created = create_response.json()
+    assert created["employee_no"] == "1"
+    assert created["job_role"] == "Backend Engineer"
+
+    duplicate_response = client.post(
+        "/api/employees",
+        headers=headers,
+        json={
+            "name": "Duplicate",
+            "employee_no": "1",
+            "status": "active",
+        },
+    )
+    assert duplicate_response.status_code == 400
+    assert duplicate_response.json()["detail"] == "Employee number already exists"
+
+    update_response = client.put(
+        f"/api/employees/{created['id']}",
+        headers=headers,
+        json={
+            "name": "Zhang San Updated",
+            "department": "Platform",
+            "job_role": "Senior Backend Engineer",
+            "status": "inactive",
+        },
+    )
+
+    assert update_response.status_code == 200
+    updated = update_response.json()
+    assert updated["name"] == "Zhang San Updated"
+    assert updated["department"] == "Platform"
+    assert updated["job_role"] == "Senior Backend Engineer"
+    assert updated["status"] == "inactive"
+
+    delete_response = client.delete(f"/api/employees/{created['id']}", headers=headers)
+    assert delete_response.status_code == 200
+
+    list_response = client.get("/api/employees", headers=headers)
+    assert list_response.status_code == 200
+    assert all(item["employee_no"] != "1" for item in list_response.json()["items"])
 
 
 def test_employee_import_upserts_csv_rows_and_audits_action(

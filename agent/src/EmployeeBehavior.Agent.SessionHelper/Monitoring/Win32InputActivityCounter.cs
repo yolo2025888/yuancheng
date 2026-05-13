@@ -140,8 +140,8 @@ public sealed class Win32InputActivityCounter : IInputActivityCounter, IHostedSe
         _lastCollectedAtUtc = now;
 
         var keyboardEventCount = Interlocked.Exchange(ref _keyboardEventCount, 0);
-        var mouseMoveCount = Interlocked.Exchange(ref _mouseMoveCount, 0);
         var mouseClickCount = Interlocked.Exchange(ref _mouseClickCount, 0);
+        var mouseMoveCount = Interlocked.Exchange(ref _mouseMoveCount, 0);
         var mouseWheelCount = Interlocked.Exchange(ref _mouseWheelCount, 0);
         var windowSwitchCount = Interlocked.Exchange(ref _windowSwitchCount, 0);
 
@@ -153,7 +153,7 @@ public sealed class Win32InputActivityCounter : IInputActivityCounter, IHostedSe
             MouseMoveCount = mouseMoveCount,
             MouseClickCount = mouseClickCount,
             MouseWheelCount = mouseWheelCount,
-            MouseEventCount = mouseMoveCount + mouseClickCount + mouseWheelCount,
+            MouseEventCount = mouseClickCount,
             WindowSwitchCount = windowSwitchCount
         });
     }
@@ -254,17 +254,11 @@ public sealed class Win32InputActivityCounter : IInputActivityCounter, IHostedSe
             var message = unchecked((int)wParam.ToInt64());
             switch (message)
             {
-                case WM_MOUSEMOVE:
-                    Interlocked.Increment(ref _mouseMoveCount);
-                    break;
                 case WM_LBUTTONDOWN:
                 case WM_RBUTTONDOWN:
                 case WM_MBUTTONDOWN:
                 case WM_XBUTTONDOWN:
                     Interlocked.Increment(ref _mouseClickCount);
-                    break;
-                case WM_MOUSEWHEEL:
-                    Interlocked.Increment(ref _mouseWheelCount);
                     break;
             }
         }

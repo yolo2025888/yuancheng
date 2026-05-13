@@ -7,12 +7,14 @@ import { ApiStatusNotice } from '../components/ApiStatusNotice';
 import { ChangeMetricsSummary } from '../components/ChangeMetricsSummary';
 import { PageSection } from '../components/PageSection';
 import { StatusTag } from '../components/StatusTag';
+import { useI18n } from '../i18n/I18nContext';
 import { adminApi } from '../services/adminApi';
 import type { ApiStatus, EventRecord, EventStatus } from '../types/models';
 
 const REVIEW_ACTIONS: EventStatus[] = ['reviewing', 'reviewed', 'confirmed', 'ignored', 'closed'];
 
 export function EventsPage() {
+  const { t, text } = useI18n();
   const { canAccess, permissionsResolved } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const [rows, setRows] = useState<EventRecord[]>([]);
@@ -53,7 +55,7 @@ export function EventsPage() {
                 ...item,
                 status: nextStatus,
                 reviewedAt: nextStatus === 'reviewing' ? item.reviewedAt : new Date().toLocaleString(),
-                reviewNote: nextStatus === 'reviewing' ? item.reviewNote : item.reviewNote ?? buildReviewNote(nextStatus)
+                reviewNote: nextStatus === 'reviewing' ? item.reviewNote : item.reviewNote ?? buildReviewNote(nextStatus, t)
               }
             : item
         )
@@ -67,12 +69,12 @@ export function EventsPage() {
 
       if (result.events) {
         setRows(result.events);
-        messageApi.success(`Event ${record.id} updated to ${nextStatus}.`);
+        messageApi.success(t('events.updated', 'Event {{id}} updated to {{status}}.', { id: record.id, status: text(nextStatus) }));
       } else if (result.apiStatus.label === 'Access denied') {
         setRows(previousRows);
-        messageApi.error(`Review access denied. Event ${record.id} was not changed.`);
+        messageApi.error(t('events.accessDenied', 'Review access denied. Event {{id}} was not changed.', { id: record.id }));
       } else {
-        messageApi.warning(`Backend review API unavailable. Event ${record.id} is updated locally only.`);
+        messageApi.warning(t('events.localOnly', 'Backend review API unavailable. Event {{id}} is updated locally only.', { id: record.id }));
       }
 
       setPendingIds((current) => {
@@ -97,23 +99,26 @@ export function EventsPage() {
     <Space direction="vertical" size={20} className="page-stack">
       {contextHolder}
       <PageSection
-        title="Events"
-        description="Events load from the live list endpoint when available. Review actions update rows optimistically, then reload from the backend when the review endpoint succeeds."
+        title={t('events.title', 'Events')}
+        description={t(
+          'events.description',
+          'Events load from the live list endpoint when available. Review actions update rows optimistically, then reload from the backend when the review endpoint succeeds.'
+        )}
         extra={
           <Space size={8} wrap>
-            <Tag color="orange">{reviewableCount} need review</Tag>
+            <Tag color="orange">{t('events.needReview', '{{count}} need review', { count: reviewableCount })}</Tag>
             <Select
               size="small"
               value={statusFilter}
               style={{ width: 150 }}
               onChange={(value) => updateFilter('status', value)}
               options={[
-                { value: 'reviewable', label: 'Need review' },
-                { value: 'all', label: 'All statuses' },
-                { value: 'reviewed', label: 'Reviewed' },
-                { value: 'confirmed', label: 'Confirmed' },
-                { value: 'ignored', label: 'Ignored' },
-                { value: 'closed', label: 'Closed' }
+                { value: 'reviewable', label: t('events.needReviewLabel', 'Need review') },
+                { value: 'all', label: t('events.allStatuses', 'All statuses') },
+                { value: 'reviewed', label: t('events.reviewed', 'Reviewed') },
+                { value: 'confirmed', label: t('events.confirmed', 'Confirmed') },
+                { value: 'ignored', label: t('events.ignored', 'Ignored') },
+                { value: 'closed', label: t('events.closed', 'Closed') }
               ]}
             />
             <Select
@@ -122,20 +127,20 @@ export function EventsPage() {
               style={{ width: 130 }}
               onChange={(value) => updateFilter('severity', value)}
               options={[
-                { value: 'all', label: 'All severity' },
-                { value: 'critical', label: 'Critical' },
-                { value: 'high', label: 'High' },
-                { value: 'medium', label: 'Medium' },
-                { value: 'low', label: 'Low' }
+                { value: 'all', label: t('events.allSeverity', 'All severity') },
+                { value: 'critical', label: t('events.critical', 'Critical') },
+                { value: 'high', label: t('events.high', 'High') },
+                { value: 'medium', label: t('events.medium', 'Medium') },
+                { value: 'low', label: t('events.low', 'Low') }
               ]}
             />
             <Button size="small" onClick={() => void loadEvents()} loading={loading}>
-              Reload
+              {t('common.reload', 'Reload')}
             </Button>
           </Space>
         }
       />
-      {apiStatus ? <ApiStatusNotice status={apiStatus} title="Event API" /> : null}
+      {apiStatus ? <ApiStatusNotice status={apiStatus} title={t('events.api', 'Event API')} /> : null}
       <Card bordered={false} className="panel-card">
         <Table
           rowKey="id"
@@ -145,36 +150,36 @@ export function EventsPage() {
           pagination={false}
           scroll={{ x: 1580 }}
           columns={[
-            { title: 'Event ID', dataIndex: 'id', width: 120, fixed: 'left' },
-            { title: 'Employee', dataIndex: 'employee', width: 120 },
-            { title: 'Department', dataIndex: 'department', width: 150 },
+            { title: t('events.eventId', 'Event ID'), dataIndex: 'id', width: 120, fixed: 'left' },
+            { title: t('common.employee', 'Employee'), dataIndex: 'employee', width: 120 },
+            { title: t('common.department', 'Department'), dataIndex: 'department', width: 150, render: (value: string) => text(value) },
             {
-              title: 'Type',
+              title: t('common.type', 'Type'),
               dataIndex: 'type',
               width: 220,
               render: (_value: string, record: EventRecord) => (
                 <Space direction="vertical" size={4}>
-                  <Typography.Text strong>{record.type}</Typography.Text>
+                  <Typography.Text strong>{text(record.type)}</Typography.Text>
                   {record.noChangeStreakTriggered ? <StatusTag value="no_change_streak" /> : null}
                 </Space>
               )
             },
             {
-              title: 'Severity',
+              title: t('events.severity', 'Severity'),
               dataIndex: 'severity',
               width: 100,
               render: (value: string) => <StatusTag value={value} />
             },
             {
-              title: 'Status',
+              title: t('common.status', 'Status'),
               dataIndex: 'status',
               width: 110,
               render: (value: string) => <StatusTag value={value} />
             },
-            { title: 'Started', dataIndex: 'startedAt', width: 180 },
-            { title: 'Duration', dataIndex: 'duration', width: 100 },
+            { title: t('events.started', 'Started'), dataIndex: 'startedAt', width: 180 },
+            { title: t('events.duration', 'Duration'), dataIndex: 'duration', width: 100 },
             {
-              title: 'Screenshot diff',
+              title: t('events.screenshotDiff', 'Screenshot diff'),
               width: 340,
               render: (_value: unknown, record: EventRecord) => (
                 <ChangeMetricsSummary
@@ -184,36 +189,46 @@ export function EventsPage() {
               )
             },
             {
-              title: 'Summary / review',
+              title: t('events.summaryReview', 'Summary / review'),
               dataIndex: 'summary',
               width: 330,
               render: (value: string, record: EventRecord) => (
                 <Space direction="vertical" size={4}>
-                  <Typography.Text>{value}</Typography.Text>
+                  <Typography.Text>{text(value)}</Typography.Text>
                   {record.streakCount ? (
-                    <Typography.Text type="secondary">Streak count {record.streakCount}</Typography.Text>
+                    <Typography.Text type="secondary">
+                      {t('events.streakCount', 'Streak count {{count}}', { count: record.streakCount })}
+                    </Typography.Text>
                   ) : null}
                   {record.relatedScreenshotId ? (
-                    <Typography.Text type="secondary">Screenshot {record.relatedScreenshotId}</Typography.Text>
+                    <Typography.Text type="secondary">
+                      {t('events.screenshot', 'Screenshot {{id}}', { id: record.relatedScreenshotId })}
+                    </Typography.Text>
                   ) : null}
                   <Space size={4}>
-                    <Typography.Text type="secondary">Review status</Typography.Text>
+                    <Typography.Text type="secondary">{t('events.reviewStatus', 'Review status')}</Typography.Text>
                     <StatusTag value={record.status} />
                   </Space>
                   {record.reviewedAt ? (
                     <Typography.Text type="secondary">
-                      Reviewed {record.reviewedAt}
-                      {record.reviewerName ? ` by ${record.reviewerName}` : ''}
+                      {t('events.reviewedAt', 'Reviewed {{time}}{{reviewer}}', {
+                        time: record.reviewedAt,
+                        reviewer: record.reviewerName
+                          ? t('events.byReviewer', ' by {{name}}', { name: record.reviewerName })
+                          : ''
+                      })}
                     </Typography.Text>
                   ) : null}
                   {record.reviewNote ? (
-                    <Typography.Text type="secondary">Review note: {record.reviewNote}</Typography.Text>
+                    <Typography.Text type="secondary">
+                      {t('events.reviewNote', 'Review note: {{note}}', { note: text(record.reviewNote) })}
+                    </Typography.Text>
                   ) : null}
                 </Space>
               )
             },
             {
-              title: 'Review Actions',
+              title: t('events.reviewActions', 'Review Actions'),
               width: 340,
               fixed: 'right',
               render: (_value: unknown, record: EventRecord) => (
@@ -227,7 +242,7 @@ export function EventsPage() {
                       disabled={Boolean(pendingIds[record.id]) || !canReviewEvents}
                       onClick={() => void handleReviewAction(record, status)}
                     >
-                      {status}
+                      {text(status)}
                     </Button>
                   ))}
                 </Space>
@@ -238,23 +253,28 @@ export function EventsPage() {
       </Card>
       {!canReviewEvents ? (
         <Typography.Text type="secondary">
-          Review actions are disabled because the current auth profile does not include `events.review`.
+          {t(
+            'events.reviewDisabled',
+            'Review actions are disabled because the current auth profile does not include `events.review`.'
+          )}
         </Typography.Text>
       ) : null}
     </Space>
   );
 }
 
-function buildReviewNote(status: EventStatus) {
+type TranslateFn = ReturnType<typeof useI18n>['t'];
+
+function buildReviewNote(status: EventStatus, t: TranslateFn) {
   switch (status) {
     case 'reviewed':
-      return 'Reviewed in admin UI fallback flow.';
+      return t('events.noteReviewed', 'Reviewed in admin UI fallback flow.');
     case 'confirmed':
-      return 'Confirmed in admin UI fallback flow.';
+      return t('events.noteConfirmed', 'Confirmed in admin UI fallback flow.');
     case 'ignored':
-      return 'Marked ignored in admin UI fallback flow.';
+      return t('events.noteIgnored', 'Marked ignored in admin UI fallback flow.');
     case 'closed':
-      return 'Closed in admin UI fallback flow.';
+      return t('events.noteClosed', 'Closed in admin UI fallback flow.');
     default:
       return '';
   }

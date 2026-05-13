@@ -1,18 +1,3 @@
-import {
-  auditLogs,
-  attendanceRecords,
-  dashboardKpis,
-  devices,
-  employeeHeatmap,
-  employees,
-  events,
-  githubRisks,
-  githubTrend,
-  policies,
-  realtimeStatus,
-  screenshotComparison,
-  workStatusSeries
-} from '../mock/data';
 import { ApiClientError, apiClient, getErrorMessage } from './apiClient';
 import type {
   AccessMatrixRecord,
@@ -30,6 +15,7 @@ import type {
   DeviceRecord,
   EmployeeRecord,
   EmployeeImportSummary,
+  EmployeeMutationInput,
   EventRecord,
   EventSeverity,
   EventStatus,
@@ -37,11 +23,13 @@ import type {
   HeatmapPoint,
   KpiMetric,
   LinkedRiskRecord,
+  PolicyAiAnalysisSettings,
   PolicyMutationInput,
   PolicyRecord,
   RealtimeStatusRecord,
   ReviewQueueRecord,
   RiskScoreRecord,
+  ScreenshotAiAnalysis,
   ScreenshotComparison,
   ScreenshotListItem,
   StatusBucket,
@@ -70,8 +58,20 @@ type TimelineData = {
   screenshots: ScreenshotListItem[];
   apiStatus: ApiStatus;
   employeeId?: string;
+  department?: string;
   employeeLabel: string;
   selectedDate: string;
+  total: number;
+  page: number;
+  pageSize: number;
+};
+
+type ScreenshotGalleryData = {
+  data: ScreenshotListItem[];
+  total: number;
+  page: number;
+  pageSize: number;
+  apiStatus: ApiStatus;
 };
 
 type RealtimeStatusData = {
@@ -135,6 +135,7 @@ type EmployeeExportResult = {
   filename?: string;
   apiStatus: ApiStatus;
 };
+type EmployeeMutationResult = { apiStatus: ApiStatus; data?: EmployeeRecord[]; errorCode?: 'forbidden' | 'not_found' | 'invalid' | 'unavailable' };
 type PolicyStateAction = 'activate' | 'deactivate' | 'set_active';
 type PolicyMutationAttempt = {
   path: string;
@@ -179,19 +180,30 @@ type EventListQuery = {
 type ReviewQueueApiItem = Record<string, unknown>;
 
 type TimelineApiItem = Record<string, unknown> & {
+  id?: string;
+  employee_id?: string;
+  device_id?: string;
   time?: string;
+  captured_at?: string;
+  screen_index?: number;
   screenshot_id?: string;
   thumbnail_url?: string | null;
   thumb_uri?: string | null;
   image_url?: string | null;
   image_uri?: string | null;
   full_image_url?: string | null;
+  window_title?: string | null;
+  upload_status?: string;
+  ocr_status?: string;
+  analysis_status?: string;
   activity_type?: string;
   active_app?: string | null;
   activity_confidence?: number | null;
   activity_summary?: string | null;
   activity_evidence?: Record<string, unknown> | null;
+  activity_evidence_json?: Record<string, unknown> | null;
   activity?: Record<string, unknown> | null;
+  analysis?: Record<string, unknown> | null;
   change_level?: string;
   change?: Record<string, unknown> | null;
   diff?: Record<string, unknown> | null;
@@ -206,8 +218,12 @@ type TimelineApiItem = Record<string, unknown> & {
 };
 
 type TimelineApiResponse = {
-  employee_id: string;
-  date: string;
+  employee_id?: string | null;
+  department?: string | null;
+  date?: string | null;
+  total?: number;
+  page?: number;
+  page_size?: number;
   items: TimelineApiItem[];
 };
 
@@ -302,7 +318,23 @@ type AuthMePayload = Record<string, unknown>;
 
 type TimelineQuery = {
   employeeId?: string;
+  department?: string;
   date?: string;
+  riskLevel?: string;
+  abnormalOnly?: boolean;
+  page?: number;
+  pageSize?: number;
+};
+
+type ScreenshotGalleryQuery = {
+  employeeId?: string;
+  department?: string;
+  date?: string;
+  riskLevel?: string;
+  abnormalOnly?: boolean;
+  page?: number;
+  pageSize?: number;
+  limit?: number;
 };
 
 type ScreenshotDetailQuery = TimelineQuery & {
@@ -316,7 +348,7 @@ const defaultAttendanceRuleSummary: AttendanceRuleSummary = {
   lateThreshold: '09:30',
   earlyLeaveThreshold: '18:00',
   timezone: 'Local time',
-  sourceLabel: 'Fallback defaults'
+  sourceLabel: 'Backend unavailable'
 };
 
 const liveStatus = (endpoint: string, detail: string): ApiStatus => ({
@@ -329,8 +361,8 @@ const liveStatus = (endpoint: string, detail: string): ApiStatus => ({
 
 const fallbackStatus = (endpoint: string, detail: string): ApiStatus => ({
   source: 'mock',
-  state: 'fallback',
-  label: 'Mock fallback',
+  state: 'unavailable',
+  label: 'Backend unavailable',
   detail,
   endpoint
 });
@@ -456,7 +488,7 @@ export const adminApi = {
       return {
         data: {
           kpis,
-          workStatusSeries: liveSeries.length > 0 ? liveSeries : workStatusSeries
+          workStatusSeries: liveSeries
         },
         apiStatus: liveStatus(endpoint, 'Dashboard summary loaded')
       };
@@ -464,9 +496,9 @@ export const adminApi = {
       return {
         data: {
           kpis: buildDashboardKpis(fallbackEvents),
-          workStatusSeries
+          workStatusSeries: []
         },
-        apiStatus: fallbackStatus(endpoint, getErrorMessage(error))
+        apiStatus: unavailableStatus(endpoint, getErrorMessage(error))
       };
     }
   },
@@ -483,11 +515,9 @@ export const adminApi = {
         apiStatus: liveStatus(endpoint, `Loaded ${scores.length} risk score rows`)
       };
     } catch (error) {
-      const fallbackScores = buildMockRiskScores();
-
       return {
-        data: fallbackScores,
-        apiStatus: fallbackStatus(endpoint, getErrorMessage(error))
+        data: [],
+        apiStatus: unavailableStatus(endpoint, getErrorMessage(error))
       };
     }
   },
@@ -514,10 +544,9 @@ export const adminApi = {
       }
     }
 
-    const fallbackRecords = buildMockAccessMatrix();
     return {
-      data: fallbackRecords,
-      apiStatus: fallbackStatus(endpoints[0], getErrorMessage(lastError))
+      data: [],
+      apiStatus: unavailableStatus(endpoints[0], getErrorMessage(lastError))
     };
   },
 
@@ -539,10 +568,10 @@ export const adminApi = {
   },
 
   async getRealtimeStatus(): Promise<RealtimeStatusData> {
-    const backendHealth = await this.getHealth();
+    const [backendHealth, deviceResult] = await Promise.all([this.getHealth(), this.getDevices()]);
 
     return {
-      rows: realtimeStatus,
+      rows: mapRealtimeStatusRows(deviceResult.data),
       backendHealth
     };
   },
@@ -562,8 +591,8 @@ export const adminApi = {
       };
     } catch (error) {
       return {
-        data: employees,
-        apiStatus: fallbackStatus('/api/employees', getErrorMessage(error))
+        data: [],
+        apiStatus: unavailableStatus('/api/employees', getErrorMessage(error))
       };
     }
   },
@@ -619,6 +648,21 @@ export const adminApi = {
     };
   },
 
+  async createEmployee(employee: EmployeeMutationInput): Promise<EmployeeMutationResult> {
+    const endpoint = '/api/employees';
+    return attemptEmployeeMutation(endpoint, 'POST', buildEmployeePayload(employee), `Created employee ${employee.name}`);
+  },
+
+  async updateEmployee(employeeId: string, employee: EmployeeMutationInput): Promise<EmployeeMutationResult> {
+    const endpoint = `/api/employees/${employeeId}`;
+    return attemptEmployeeMutation(endpoint, 'PUT', buildEmployeePayload(employee), `Saved employee ${employee.name}`);
+  },
+
+  async deleteEmployee(employeeId: string, employeeName: string): Promise<EmployeeMutationResult> {
+    const endpoint = `/api/employees/${employeeId}`;
+    return attemptEmployeeMutation(endpoint, 'DELETE', undefined, `Deleted employee ${employeeName}`);
+  },
+
   async getDevices(): Promise<DeviceListData> {
     try {
       const payload = await apiClient<DeviceApiItem[] | { items: DeviceApiItem[] }>('/api/devices');
@@ -649,8 +693,8 @@ export const adminApi = {
       }
 
       return {
-        data: devices,
-        apiStatus: fallbackStatus('/api/devices', getErrorMessage(error))
+        data: [],
+        apiStatus: unavailableStatus('/api/devices', getErrorMessage(error))
       };
     }
   },
@@ -766,53 +810,62 @@ export const adminApi = {
 
   async getTimeline(query: TimelineQuery = {}): Promise<TimelineData> {
     const selectedDate = query.date ?? today;
+    const page = query.page ?? 1;
+    const pageSize = query.pageSize ?? 50;
     const discoveredEmployeeId = query.employeeId ?? (await discoverEmployeeId());
-    const mockTimeline = buildMockTimeline(selectedDate);
 
-    if (!discoveredEmployeeId) {
-      return {
-        kpis: buildTimelineKpis(mockTimeline.screenshots),
-        segments: mockTimeline.segments,
-        screenshots: mockTimeline.screenshots,
-        apiStatus: fallbackStatus(
-          '/api/employees/{employee_id}/timeline',
-          'No employee_id could be discovered from live data'
-        ),
-        employeeLabel: mockTimeline.employeeLabel,
-        selectedDate
-      };
+    const params = new URLSearchParams();
+    if (discoveredEmployeeId) {
+      params.set('employee_id', discoveredEmployeeId);
     }
+    if (query.department) {
+      params.set('department', query.department);
+    }
+    params.set('date', selectedDate);
+    if (query.riskLevel) {
+      params.set('risk_level', query.riskLevel);
+    }
+    if (query.abnormalOnly) {
+      params.set('abnormal_only', 'true');
+    }
+    params.set('page', String(page));
+    params.set('page_size', String(pageSize));
+    const endpoint = `/api/timeline?${params.toString()}`;
 
     try {
-      const payload = await apiClient<TimelineApiResponse>(
-        `/api/employees/${discoveredEmployeeId}/timeline?date=${selectedDate}`
-      );
+      const payload = await apiClient<TimelineApiResponse>(endpoint);
       const screenshots = payload.items.map(mapScreenshotListItem);
+      const employeeLabel =
+        screenshots[0]?.employeeName ??
+        screenshots[0]?.employeeNo ??
+        (payload.employee_id ? shortenUuid(payload.employee_id) : '');
 
       return {
         kpis: buildTimelineKpis(screenshots),
         segments: payload.items.map(mapTimelineSegment),
         screenshots,
-        apiStatus: liveStatus(
-          `/api/employees/${discoveredEmployeeId}/timeline`,
-          `Loaded ${payload.items.length} screenshots for ${selectedDate}`
-        ),
-        employeeId: payload.employee_id,
-        employeeLabel: shortenUuid(payload.employee_id),
-        selectedDate: payload.date
+        apiStatus: liveStatus(endpoint, `Loaded ${payload.items.length} timeline items for ${selectedDate}`),
+        employeeId: payload.employee_id ?? discoveredEmployeeId ?? undefined,
+        department: payload.department ?? query.department,
+        employeeLabel,
+        selectedDate: payload.date ?? selectedDate,
+        total: payload.total ?? screenshots.length,
+        page: payload.page ?? page,
+        pageSize: payload.page_size ?? pageSize
       };
     } catch (error) {
       return {
-        kpis: buildTimelineKpis(mockTimeline.screenshots),
-        segments: mockTimeline.segments,
-        screenshots: mockTimeline.screenshots,
-        apiStatus: fallbackStatus(
-          `/api/employees/${discoveredEmployeeId}/timeline`,
-          getErrorMessage(error)
-        ),
+        kpis: buildTimelineKpis([]),
+        segments: [],
+        screenshots: [],
+        apiStatus: unavailableStatus(endpoint, getErrorMessage(error)),
         employeeId: discoveredEmployeeId,
-        employeeLabel: shortenUuid(discoveredEmployeeId),
-        selectedDate
+        department: query.department,
+        employeeLabel: discoveredEmployeeId ? shortenUuid(discoveredEmployeeId) : '',
+        selectedDate,
+        total: 0,
+        page,
+        pageSize
       };
     }
   },
@@ -824,6 +877,60 @@ export const adminApi = {
       data: timeline.screenshots,
       apiStatus: timeline.apiStatus
     };
+  },
+
+  async getScreenshotGallery(query: ScreenshotGalleryQuery = {}): Promise<ScreenshotGalleryData> {
+    const params = new URLSearchParams();
+    const page = query.page ?? 1;
+    const pageSize = query.pageSize ?? query.limit ?? 24;
+    params.set('limit', String(query.limit ?? pageSize));
+    params.set('page', String(page));
+    params.set('page_size', String(pageSize));
+    if (query.employeeId) {
+      params.set('employee_id', query.employeeId);
+    }
+    if (query.department) {
+      params.set('department', query.department);
+    }
+    if (query.date) {
+      params.set('date', query.date);
+    }
+    if (query.riskLevel) {
+      params.set('risk_level', query.riskLevel);
+    }
+    if (query.abnormalOnly) {
+      params.set('abnormal_only', 'true');
+    }
+
+    const endpoint = `/api/screenshots?${params.toString()}`;
+
+    try {
+      const payload = await apiClient<unknown>(endpoint);
+      const items = extractUnknownItems(payload, ['items']) ?? [];
+      const screenshots = items
+        .map((item) => {
+          const record = asRecord(item);
+          return record ? mapScreenshotListItem(record as TimelineApiItem) : null;
+        })
+        .filter((item): item is ScreenshotListItem => Boolean(item))
+        .sort(compareScreenshotsByCapturedAt);
+
+      return {
+        data: screenshots,
+        total: readNumber(asRecord(payload), ['total']) ?? screenshots.length,
+        page: readNumber(asRecord(payload), ['page']) ?? page,
+        pageSize: readNumber(asRecord(payload), ['page_size']) ?? pageSize,
+        apiStatus: liveStatus(endpoint, `Loaded ${screenshots.length} screenshots`)
+      };
+    } catch (error) {
+      return {
+        data: [],
+        total: 0,
+        page,
+        pageSize,
+        apiStatus: unavailableStatus(endpoint, getErrorMessage(error))
+      };
+    }
   },
 
   async getEvents(query: EventListQuery = {}): Promise<ApiResult<EventRecord[]>> {
@@ -850,8 +957,8 @@ export const adminApi = {
       }
 
       return {
-        data: buildMockEventRecords().sort(compareEvents),
-        apiStatus: fallbackStatus(endpoint, getErrorMessage(error))
+        data: [],
+        apiStatus: unavailableStatus(endpoint, getErrorMessage(error))
       };
     }
   },
@@ -890,10 +997,9 @@ export const adminApi = {
       }
     }
 
-    const fallbackRows = buildFallbackReviewQueue(fallbackEvents, fallbackRiskScores);
     return {
-      data: fallbackRows.sort(compareReviewQueueItems),
-      apiStatus: fallbackStatus(endpoints[0], getErrorMessage(lastError))
+      data: [],
+      apiStatus: unavailableStatus(endpoints[0], getErrorMessage(lastError))
     };
   },
 
@@ -945,24 +1051,38 @@ export const adminApi = {
   },
 
   async getScreenshotDetail(query: ScreenshotDetailQuery = {}): Promise<ScreenshotComparison> {
-    const timeline = await this.getTimeline(query);
+    let currentFromDetail: ScreenshotListItem | undefined;
+
+    if (query.screenshotId) {
+      try {
+        const payload = await apiClient<Record<string, unknown>>(`/api/screenshots/${query.screenshotId}`);
+        currentFromDetail = mapScreenshotListItem(payload as TimelineApiItem);
+      } catch {
+        currentFromDetail = undefined;
+      }
+    }
+
+    const timeline = await this.getTimeline({
+      employeeId: currentFromDetail?.employeeId ?? query.employeeId,
+      department: currentFromDetail?.department,
+      date: currentFromDetail?.capturedDate ?? query.date,
+      page: 1,
+      pageSize: 200
+    });
     const screenshots = timeline.screenshots;
-    const current =
-      screenshots.find((item) => item.id === query.screenshotId) ?? screenshots[screenshots.length - 1];
+    const current = screenshots.find((item) => item.id === query.screenshotId) ?? currentFromDetail ?? screenshots[0];
 
     if (!current) {
-      return {
-        ...screenshotComparison,
-        apiStatus: timeline.apiStatus
-      };
+      return buildEmptyScreenshotComparison(timeline.apiStatus);
     }
 
     const currentIndex = screenshots.findIndex((item) => item.id === current.id);
-    const previous = currentIndex > 0 ? screenshots[currentIndex - 1] : undefined;
+    const previous =
+      currentIndex >= 0 && currentIndex < screenshots.length - 1 ? screenshots[currentIndex + 1] : undefined;
 
     return {
-      currentImageLabel: `Current ${current.capturedAt}`,
-      previousImageLabel: previous ? `Previous ${previous.capturedAt}` : 'No previous screenshot',
+      currentImageLabel: `当前 ${current.capturedAt}`,
+      previousImageLabel: previous ? `上一张 ${previous.capturedAt}` : '没有上一张截图',
       currentImageUri: current.imageUri ?? current.thumbUri ?? null,
       currentThumbUri: current.thumbUri ?? null,
       previousImageUri: previous?.imageUri ?? previous?.thumbUri ?? null,
@@ -974,7 +1094,19 @@ export const adminApi = {
       noChangeStreakTriggered: current.noChangeStreakTriggered,
       currentActivity: current,
       previousActivity: previous,
-      apiStatus: timeline.apiStatus
+      aiAnalysis: current.aiAnalysis,
+      apiStatus:
+        timeline.apiStatus.source === 'live'
+          ? {
+              ...timeline.apiStatus,
+              label: '实时接口',
+              detail: '截图详情和上下文已加载。'
+            }
+          : {
+              ...timeline.apiStatus,
+              label: '接口不可用',
+              detail: `截图详情加载失败：${timeline.apiStatus.detail}`
+            }
     };
   },
 
@@ -993,8 +1125,8 @@ export const adminApi = {
       };
     } catch (error) {
       return {
-        data: policies,
-        apiStatus: fallbackStatus('/api/policies', getErrorMessage(error))
+        data: [],
+        apiStatus: unavailableStatus('/api/policies', getErrorMessage(error))
       };
     }
   },
@@ -1057,6 +1189,26 @@ export const adminApi = {
     );
   },
 
+  async deletePolicy(policyId: string, policyName: string): Promise<PolicyMutationResult> {
+    const endpoint = `/api/policies/${policyId}`;
+
+    try {
+      await apiClient(endpoint, { method: 'DELETE' });
+      const refreshed = await adminApi.getPolicies();
+      return {
+        data: refreshed.data,
+        apiStatus:
+          refreshed.apiStatus.source === 'live'
+            ? liveStatus(endpoint, `Deleted policy ${policyName}`)
+            : fallbackStatus(endpoint, `Deleted policy ${policyName}; list refresh used fallback data`)
+      };
+    } catch (error) {
+      return {
+        apiStatus: fallbackStatus(endpoint, `Policy delete unavailable: ${getErrorMessage(error)}`)
+      };
+    }
+  },
+
   async getAuditLogs(): Promise<AuditLogListData> {
     try {
       const payload = await apiClient<AuditLogApiItem[] | { items: AuditLogApiItem[] }>('/api/audit-logs');
@@ -1072,8 +1224,8 @@ export const adminApi = {
       };
     } catch (error) {
       return {
-        data: auditLogs,
-        apiStatus: fallbackStatus('/api/audit-logs', getErrorMessage(error))
+        data: [],
+        apiStatus: unavailableStatus('/api/audit-logs', getErrorMessage(error))
       };
     }
   },
@@ -1108,8 +1260,8 @@ export const adminApi = {
       }
 
       return {
-        data: attendanceRecords,
-        apiStatus: fallbackStatus(endpoint, getErrorMessage(error))
+        data: [],
+        apiStatus: unavailableStatus(endpoint, getErrorMessage(error))
       };
     }
   },
@@ -1316,12 +1468,10 @@ export const adminApi = {
       }
     }
 
-    const fallbackRecords = sortGitHubRiskRecords(githubRisks);
-
     return {
-      records: fallbackRecords,
-      trend: githubTrend,
-      apiStatus: fallbackStatus(endpoints[0], getErrorMessage(lastError))
+      records: [],
+      trend: [],
+      apiStatus: unavailableStatus(endpoints[0], getErrorMessage(lastError))
     };
   }
 };
@@ -1346,8 +1496,26 @@ function buildEventsEndpoint(query: EventListQuery = {}) {
 
 async function discoverEmployeeId() {
   try {
-    const payload = await fetchEventsRaw();
-    return payload.items[0]?.employee_id;
+    const screenshotsPayload = await apiClient<{ items?: Array<Record<string, unknown>> }>('/api/screenshots?limit=1');
+    const screenshotEmployeeId = screenshotsPayload.items?.[0] && readString(screenshotsPayload.items[0], ['employee_id']);
+    if (screenshotEmployeeId) {
+      return screenshotEmployeeId;
+    }
+  } catch {}
+
+  try {
+    const devicesPayload = await apiClient<DeviceApiItem[] | { items: DeviceApiItem[] }>('/api/devices');
+    const deviceItems = extractItems(devicesPayload);
+    const deviceEmployeeId = deviceItems?.[0] && readString(deviceItems[0], ['employee_id']);
+    if (deviceEmployeeId) {
+      return deviceEmployeeId;
+    }
+  } catch {}
+
+  try {
+    const employeesPayload = await apiClient<EmployeeApiItem[] | { items: EmployeeApiItem[] }>('/api/employees');
+    const employeeItems = extractItems(employeesPayload);
+    return employeeItems?.[0] && readString(employeeItems[0], ['id']);
   } catch {
     return undefined;
   }
@@ -1594,6 +1762,38 @@ function extractItems<T>(payload: T[] | { items: T[] }) {
   return Array.isArray(payload.items) ? payload.items : undefined;
 }
 
+async function attemptEmployeeMutation(
+  endpoint: string,
+  method: 'POST' | 'PUT' | 'DELETE',
+  body: unknown,
+  successDetail: string
+): Promise<EmployeeMutationResult> {
+  try {
+    await apiClient(endpoint, { method, body });
+    const refreshed = await adminApi.getEmployees();
+    return {
+      data: refreshed.data,
+      apiStatus:
+        refreshed.apiStatus.source === 'live'
+          ? liveStatus(endpoint, successDetail)
+          : fallbackStatus(endpoint, `${successDetail}; list refresh used fallback data`)
+    };
+  } catch (error) {
+    const status = readErrorStatus(error);
+    return {
+      apiStatus: unavailableStatus(endpoint, getErrorMessage(error)),
+      errorCode:
+        status === 401 || status === 403
+          ? 'forbidden'
+          : status === 404
+            ? 'not_found'
+            : status === 400 || status === 422
+              ? 'invalid'
+              : 'unavailable'
+    };
+  }
+}
+
 async function attemptPolicyMutation(
   attempts: PolicyMutationAttempt[],
   successDetail: string
@@ -1628,12 +1828,25 @@ async function attemptPolicyMutation(
   };
 }
 
+function buildEmployeePayload(employee: EmployeeMutationInput) {
+  return {
+    name: employee.name,
+    employee_no: employee.employeeNo,
+    department: employee.department || null,
+    job_role: employee.role || null,
+    manager_name: employee.manager || null,
+    github_username: employee.githubAccount || null,
+    status: employee.status || 'active'
+  };
+}
+
 function buildPolicyPayload(policy: PolicyMutationInput) {
   const roles = dedupeLabels(policy.roles);
   const departments = dedupeLabels(policy.departments);
   const positions = dedupeLabels(policy.positions);
+  const aiAnalysis = buildPolicyAiAnalysisPayload(policy.aiAnalysis);
 
-    return {
+  return {
     name: policy.name,
     version: policy.version?.trim() || 'draft',
     screenshot_interval_seconds: policy.screenshotIntervalSeconds,
@@ -1653,8 +1866,79 @@ function buildPolicyPayload(policy: PolicyMutationInput) {
       target_positions: positions,
       screenshot_interval_seconds: policy.screenshotIntervalSeconds,
       no_change_threshold: policy.noChangeThresholdFrames,
-      retention_days: policy.retentionDays
+      retention_days: policy.retentionDays,
+      ai_analysis: aiAnalysis
     }
+  };
+}
+
+function buildPolicyAiAnalysisPayload(policy: PolicyMutationInput['aiAnalysis']) {
+  const apiKey = policy.apiKey?.trim();
+
+  return {
+    enabled: policy.enabled,
+    provider: policy.provider?.trim() || undefined,
+    model: policy.model?.trim() || undefined,
+    base_url: policy.baseUrl?.trim() || undefined,
+    timeout_seconds: policy.timeoutSeconds ?? undefined,
+    use_previous_screenshot: policy.usePreviousScreenshot ?? undefined,
+    confidence_threshold: serializeThresholdValue(policy.confidenceThreshold),
+    risk_threshold: serializeThresholdValue(policy.riskThreshold),
+    ...(apiKey ? { api_key: apiKey } : {})
+  };
+}
+
+function extractPolicyAiAnalysis(
+  item: PolicyApiItem,
+  rules?: Record<string, unknown>
+): PolicyAiAnalysisSettings {
+  const analysisRecord =
+    pickRecords(rules, ['ai_analysis', 'aiAnalysis', 'vision_analysis', 'screenshot_ai_analysis']) ??
+    pickRecords(item, ['ai_analysis', 'aiAnalysis', 'vision_analysis', 'screenshot_ai_analysis']);
+  const sources = collectRecordSources(item, rules, analysisRecord);
+  const confidenceThreshold = readNumberFromSources(sources, [
+    'confidence_threshold',
+    'min_confidence',
+    'activity_confidence_threshold',
+    'minimum_confidence'
+  ]);
+  const riskThreshold = readNumberFromSources(sources, [
+    'risk_threshold',
+    'review_threshold',
+    'alert_threshold',
+    'escalation_threshold'
+  ]);
+  const rawApiKey = firstStringFromSources(sources, ['api_key', 'apiKey']);
+  const apiKeyMasked =
+    firstStringFromSources(sources, [
+      'api_key_masked',
+      'apiKeyMasked',
+      'masked_api_key',
+      'api_key_display'
+    ]) ?? (rawApiKey ? maskApiKey(rawApiKey) : null);
+  const hasApiKey =
+    firstBooleanFromSources(sources, ['has_api_key', 'api_key_configured', 'configured']) ??
+    Boolean(apiKeyMasked || rawApiKey);
+
+  return {
+    enabled:
+      firstBooleanFromSources(sources, ['enabled', 'ai_analysis_enabled', 'analysis_enabled']) ??
+      Boolean(analysisRecord || hasApiKey || confidenceThreshold !== undefined || riskThreshold !== undefined),
+    provider: firstStringFromSources(sources, ['provider', 'vendor', 'ai_provider']) ?? undefined,
+    model: firstStringFromSources(sources, ['model', 'model_name', 'model_version', 'ai_model']) ?? undefined,
+    baseUrl: firstStringFromSources(sources, ['base_url', 'baseUrl', 'api_base_url']) ?? undefined,
+    timeoutSeconds: readNumberFromSources(sources, ['timeout_seconds', 'timeoutSeconds', 'request_timeout']) ?? null,
+    usePreviousScreenshot:
+      firstBooleanFromSources(sources, ['use_previous_screenshot', 'usePreviousScreenshot']) ?? true,
+    apiKeyMasked,
+    apiKeyState: normalizeApiKeyState(
+      firstStringFromSources(sources, ['api_key_state', 'key_state']),
+      hasApiKey,
+      firstBooleanFromSources(sources, ['enabled', 'ai_analysis_enabled', 'analysis_enabled']) ?? false
+    ),
+    hasApiKey,
+    confidenceThreshold: normalizeThresholdValue(confidenceThreshold) ?? null,
+    riskThreshold: normalizeThresholdValue(riskThreshold) ?? null
   };
 }
 
@@ -1752,6 +2036,22 @@ function mapDeviceRecord(item: DeviceApiItem, index: number): DeviceRecord {
   };
 }
 
+function mapRealtimeStatusRows(devices: DeviceRecord[]): RealtimeStatusRecord[] {
+  return devices.map((device, index) => ({
+    key: device.key || `realtime-${index + 1}`,
+    employee: device.employee,
+    department: device.department ?? 'Unassigned',
+    role: device.position ?? device.role ?? 'Unknown',
+    device: device.deviceName,
+    currentStatus: device.status,
+    app: device.metadataLabels?.[0] ?? '--',
+    activity: device.metadataLabels?.slice(1).join(' / ') || 'No live activity summary',
+    lastScreenshotAt: device.lastHeartbeat,
+    noChangeCount: 0,
+    riskLevel: device.status === 'warning' ? 'watch' : device.status === 'offline' ? 'high' : 'normal'
+  }));
+}
+
 function mapPolicyRecord(item: PolicyApiItem, index: number): PolicyRecord {
   const rules = asRecord(item.rules_json);
   const scope = asRecord(item.scope);
@@ -1813,7 +2113,8 @@ function mapPolicyRecord(item: PolicyApiItem, index: number): PolicyRecord {
         ['ocr_enabled', 'enable_ocr', 'ocr']
       ) ?? false,
     retentionDays,
-    originalRetention: `${retentionDays} days`
+    originalRetention: `${retentionDays} days`,
+    aiAnalysis: extractPolicyAiAnalysis(item, rules)
   };
 }
 
@@ -2248,6 +2549,98 @@ function extractActivityInfo(item: TimelineApiItem, details?: Record<string, unk
   };
 }
 
+function extractScreenshotAiAnalysis(
+  item: TimelineApiItem,
+  details: Record<string, unknown> | undefined,
+  activity: ReturnType<typeof extractActivityInfo>
+): ScreenshotAiAnalysis {
+  const metadata = asRecord(item.metadata);
+  const topLevelAnalysis = asRecord({
+    analysis_status: readString(item, ['ai_analysis_status']),
+    provider: readString(item, ['ai_provider']),
+    model: readString(item, ['ai_model']),
+    confidence: readNumber(item, ['ai_confidence']),
+    summary: readString(item, ['ai_summary']),
+    error: readString(item, ['ai_error']),
+    analyzed_at: readString(item, ['ai_analyzed_at'])
+  });
+  const topLevelEvidence =
+    asRecord((item as Record<string, unknown>).ai_evidence) ??
+    asRecord((item as Record<string, unknown>).ai_details);
+  const analysisRecord =
+    asRecord(item.analysis) ??
+    topLevelAnalysis ??
+    pickRecords(details, ['ai_analysis', 'analysis', 'vision_analysis']) ??
+    pickRecords(metadata, ['ai_analysis', 'analysis', 'vision_analysis']) ??
+    topLevelEvidence ??
+    pickRecords(activity.evidence, ['ai_analysis', 'analysis', 'vision_analysis']);
+  const sources = collectRecordSources(analysisRecord, topLevelEvidence, metadata, details, activity.evidence);
+  const confidence =
+    readNumberFromSources(sources, ['confidence', 'analysis_confidence', 'activity_confidence']) ??
+    activity.confidence ??
+    null;
+  const findings = Array.from(
+    new Set(
+      [
+        ...extractReadableStringArray(analysisRecord, ['findings', 'matched_signals', 'signals', 'reasons', 'tags']),
+        ...extractReadableStringArray(details, ['analysis_findings', 'analysis_reasons']),
+        ...extractReadableStringArray(activity.evidence, ['matched_signals', 'signals', 'reasons', 'tags'])
+      ]
+        .map(formatAnalysisFinding)
+        .filter((value): value is string => Boolean(value))
+    )
+  ).slice(0, 6);
+
+  return {
+    status: normalizeAnalysisStatus(
+      firstString(
+        readString(item, ['ai_analysis_status']),
+        item.analysis_status,
+        firstStringFromSources(sources, ['analysis_status', 'analysis_state'])
+      ) ??
+        'pending'
+    ),
+    uploadStatus: firstString(item.upload_status, readString(details, ['upload_status'])) ?? null,
+    ocrStatus: firstString(item.ocr_status, readString(details, ['ocr_status'])) ?? null,
+    provider: firstStringFromSources(sources, ['provider', 'vendor', 'analysis_provider']) ?? null,
+    model: firstStringFromSources(sources, ['model', 'model_name', 'model_version', 'analysis_model']) ?? null,
+    taskLabel: firstString(readString(item, ['ai_task_label']), firstStringFromSources(sources, ['task_label'])) ?? null,
+    riskLevel: firstString(readString(item, ['ai_risk_level']), firstStringFromSources(sources, ['risk_level'])) ?? null,
+    nonWorkLikelihood:
+      readNumber(item, ['ai_non_work_likelihood']) ??
+      readNumberFromSources(sources, ['non_work_likelihood']) ??
+      null,
+    confidence,
+    summary:
+      firstString(
+        readString(item, ['ai_summary']),
+        readString(analysisRecord, ['summary', 'analysis_summary', 'result']),
+        readString(details, ['analysis_summary', 'analysis_result'])
+      ) ?? null,
+    error:
+      normalizeAnalysisStatus(
+        firstString(
+          readString(item, ['ai_analysis_status']),
+          item.analysis_status,
+          firstStringFromSources(sources, ['analysis_status', 'analysis_state'])
+        ) ??
+          'pending'
+      ) === 'failed'
+        ? firstString(
+            readString(item, ['ai_error']),
+            readString(analysisRecord, ['error', 'error_message', 'failure_reason', 'reason']),
+            readString(details, ['analysis_error', 'analysis_failure_reason', 'error'])
+          ) ?? null
+        : null,
+    recommendedAction:
+      firstString(readString(item, ['ai_recommended_action']), firstStringFromSources(sources, ['recommended_follow_up'])) ??
+      null,
+    responseId: firstString(readString(item, ['ai_response_id']), firstStringFromSources(sources, ['response_id'])) ?? null,
+    findings,
+    thresholds: buildScreenshotAnalysisThresholds(sources)
+  };
+}
+
 function mapTimelineSegment(item: TimelineApiItem): TimelineSegment {
   const linkedRisks = extractLinkedRisks(item);
   const details = asRecord(item.details_json);
@@ -2292,10 +2685,21 @@ function mapScreenshotListItem(item: TimelineApiItem): ScreenshotListItem {
     asRecord(item.metadata)
   );
   const noChangeStreakTriggered = linkedRisks.some((risk) => risk.noChangeStreakTriggered);
+  const aiAnalysis = extractScreenshotAiAnalysis(item, details, activity);
+  const capturedAtRaw = readString(item, ['captured_at']);
 
   return {
-    id: item.screenshot_id ?? `frame-${item.time ?? Date.now()}`,
-    capturedAt: item.time ?? '--',
+    id: item.screenshot_id ?? readString(item, ['id']) ?? `frame-${item.time ?? capturedAtRaw ?? Date.now()}`,
+    employeeId: readString(item, ['employee_id']) ?? undefined,
+    employeeName: readString(item, ['employee_name']) ?? undefined,
+    employeeNo: readString(item, ['employee_no']) ?? undefined,
+    department: readString(item, ['department']) ?? undefined,
+    deviceId: readString(item, ['device_id']) ?? undefined,
+    capturedAt: item.time ?? formatDateTime(capturedAtRaw) ?? '--',
+    capturedDate: capturedAtRaw ? capturedAtRaw.slice(0, 10) : null,
+    capturedAtRaw: capturedAtRaw ?? null,
+    sortTimestamp: capturedAtRaw ? toTimestamp(capturedAtRaw) : null,
+    captureBatchKey: readString(item, ['capture_batch_key']) ?? null,
     thumbUri:
       firstString(item.thumbnail_url, item.thumb_uri, readString(details, ['thumbnail_url', 'thumb_uri'])) ??
       null,
@@ -2306,6 +2710,25 @@ function mapScreenshotListItem(item: TimelineApiItem): ScreenshotListItem {
         item.full_image_url,
         readString(details, ['image_url', 'full_image_url', 'image_uri'])
       ) ?? null,
+    screenIndex: readNumber(item, ['screen_index']) ?? undefined,
+    windowTitle: readString(item, ['window_title']) ?? null,
+    uploadStatus: firstString(item.upload_status, readString(details, ['upload_status'])) ?? null,
+    ocrStatus: firstString(item.ocr_status, readString(details, ['ocr_status'])) ?? null,
+    analysisStatus: firstString(item.analysis_status, readString(details, ['analysis_status'])) ?? null,
+    fileRetentionStatus:
+      firstString(readString(item, ['file_retention_status']), readString(details, ['file_retention_status'])) ?? null,
+    retentionDecision:
+      firstString(readString(item, ['retention_decision']), readString(details, ['retention_decision'])) ?? null,
+    retentionReason:
+      firstString(readString(item, ['retention_reason']), readString(details, ['retention_reason'])) ?? null,
+    isAbnormal:
+      readBoolean(item, ['is_abnormal']) ?? readBoolean(details, ['is_abnormal']) ?? undefined,
+    retainUntil:
+      firstString(readString(item, ['retain_until']), readString(details, ['retain_until'])) ?? null,
+    imageDeletedAt:
+      firstString(readString(item, ['image_deleted_at']), readString(details, ['image_deleted_at'])) ?? null,
+    thumbDeletedAt:
+      firstString(readString(item, ['thumb_deleted_at']), readString(details, ['thumb_deleted_at'])) ?? null,
     activityType: activity.activityType,
     activeApp: activity.activeApp,
     activityConfidence: activity.confidence,
@@ -2313,7 +2736,10 @@ function mapScreenshotListItem(item: TimelineApiItem): ScreenshotListItem {
     activityEvidence: activity.evidence,
     changeLevel: changeMetrics.changeLevel,
     keyboardCount: readNumber(item, ['keyboard_count']) ?? readNumber(details, ['keyboard_count']) ?? 0,
-    mouseCount: readNumber(item, ['mouse_count']) ?? readNumber(details, ['mouse_count']) ?? 0,
+    mouseCount:
+      readNumber(item, ['mouse_count', 'mouse_click_count']) ??
+      readNumber(details, ['mouse_count', 'mouse_click_count']) ??
+      0,
     riskCount: linkedRisks.length,
     riskSummary:
       linkedRisks.map((risk) => risk.type).join(', ') ||
@@ -2321,7 +2747,8 @@ function mapScreenshotListItem(item: TimelineApiItem): ScreenshotListItem {
       'No linked risk events',
     changeMetrics,
     linkedRisks,
-    noChangeStreakTriggered
+    noChangeStreakTriggered,
+    aiAnalysis
   };
 }
 
@@ -2329,19 +2756,18 @@ function buildDashboardKpis(eventItems: EventRecord[]): KpiMetric[] {
   const noChangeCount = eventItems.filter((item) => item.noChangeStreakTriggered).length;
   const reviewableCount = eventItems.filter((item) => item.status === 'new' || item.status === 'reviewing').length;
 
-  return dashboardKpis.map((metric) => {
-    if (metric.key !== 'risk') {
-      return metric;
-    }
-
-    return {
-      ...metric,
+  return [
+    { key: 'online', title: 'Online devices', value: '0', delta: 'No live summary', tone: 'default' },
+    { key: 'active', title: 'Active employees', value: '0', delta: 'No live summary', tone: 'default' },
+    {
+      key: 'risk',
       title: 'High-risk events',
       value: String(reviewableCount),
       delta: noChangeCount > 0 ? `${noChangeCount} no-change streak` : 'No no-change streak',
-      tone: noChangeCount > 0 ? 'warning' : 'positive'
-    };
-  });
+      tone: noChangeCount > 0 ? 'warning' : 'default'
+    },
+    { key: 'github', title: 'GitHub risk events', value: '0', delta: 'No live summary', tone: 'default' }
+  ];
 }
 
 function mapDashboardSummaryKpis(
@@ -2662,24 +3088,7 @@ function buildHeatmapFromRiskScores(scores: RiskScoreRecord[]): HeatmapPoint[] {
 }
 
 function buildMockRiskScores(): RiskScoreRecord[] {
-  return employeeHeatmap.map((point, index) => {
-    const employeeRecord = employees.find((item) => item.name === point.employee);
-
-    return {
-      key: `mock-risk-score-${index + 1}`,
-      employee: point.employee,
-      employeeNo: employeeRecord?.employeeNo,
-      department: employeeRecord?.department ?? 'Unassigned',
-      role: employeeRecord?.role ?? 'General',
-      position: employeeRecord?.position,
-      slot: point.slot,
-      score: point.riskLevel * 25,
-      riskLevel: point.riskLevel,
-      status: point.status,
-      eventCount: employeeRecord?.todayRisk ?? 0,
-      policyName: employeeRecord?.policyName
-    };
-  });
+  return [];
 }
 
 function mapAccessMatrixRecords(payload: unknown): AccessMatrixRecord[] {
@@ -2768,30 +3177,7 @@ function mapAccessMatrixRecord(item: unknown, index: number): AccessMatrixRecord
 }
 
 function buildMockAccessMatrix(): AccessMatrixRecord[] {
-  const roles = Array.from(new Set([...employees.map((item) => item.role), ...policies.flatMap((item) => item.roles)]));
-
-  return roles.map((role, index) => {
-    const relatedEmployees = employees.filter((item) => item.role === role);
-    const relatedPolicies = policies.filter((item) => item.roles.includes(role) || item.role === role);
-
-    return {
-      key: `mock-access-${index + 1}`,
-      role,
-      modules: buildDefaultModulesForRole(role),
-      actions: buildDefaultActionsForRole(role),
-      departments: dedupeLabels([
-        ...relatedEmployees.map((item) => item.department),
-        ...relatedPolicies.flatMap((item) => item.departments)
-      ]),
-      positions: dedupeLabels([
-        ...relatedEmployees.map((item) => item.position ?? ''),
-        ...relatedPolicies.flatMap((item) => item.positions)
-      ]),
-      employees: relatedEmployees.map((item) => item.name),
-      employeeCount: relatedEmployees.length,
-      policyNames: dedupeLabels(relatedPolicies.map((item) => item.name))
-    };
-  });
+  return [];
 }
 
 function buildDefaultModulesForRole(role: string) {
@@ -3193,147 +3579,90 @@ function sortAccessMatrix(records: AccessMatrixRecord[]) {
 function buildTimelineKpis(screenshots: ScreenshotListItem[]): KpiMetric[] {
   if (screenshots.length === 0) {
     return [
-      { key: 'frames', title: 'Timeline frames', value: '0', delta: 'no data', tone: 'default' },
-      { key: 'effective', title: 'Effective changes', value: '0', delta: '0%', tone: 'default' },
-      { key: 'no-change', title: 'No-change streak risks', value: '0', delta: 'clear', tone: 'positive' },
-      { key: 'input', title: 'Aggregate input', value: '0', delta: 'keyboard 0 / mouse 0', tone: 'default' }
+      { key: 'frames', title: '时间线帧数', value: '0', delta: '暂无数据', tone: 'default' },
+      { key: 'effective', title: '有效变化', value: '0', delta: '0%', tone: 'default' },
+      { key: 'no-change', title: '无变化连续风险', value: '0', delta: '无异常', tone: 'positive' },
+      { key: 'input', title: '聚合输入', value: '0', delta: '键盘 0 / 鼠标 0', tone: 'default' }
     ];
   }
 
-  const effectiveChanges = screenshots.filter((item) => item.changeMetrics.effectiveChange === true).length;
-  const noChangeRisks = screenshots.filter((item) => item.noChangeStreakTriggered).length;
-  const keyboardCount = screenshots.reduce((sum, item) => sum + item.keyboardCount, 0);
-  const mouseCount = screenshots.reduce((sum, item) => sum + item.mouseCount, 0);
+  const groupedByCapture = new Map<string, ScreenshotListItem[]>();
+  for (const item of screenshots) {
+    const current = groupedByCapture.get(item.capturedAt) ?? [];
+    current.push(item);
+    groupedByCapture.set(item.capturedAt, current);
+  }
+
+  const groupedScreenshots = Array.from(groupedByCapture.values());
+  const effectiveChanges = groupedScreenshots.filter((items) =>
+    items.some((item) => item.changeMetrics.effectiveChange === true)
+  ).length;
+  const noChangeRisks = groupedScreenshots.filter((items) =>
+    items.some((item) => item.noChangeStreakTriggered)
+  ).length;
+  const keyboardCount = groupedScreenshots.reduce(
+    (sum, items) => sum + Math.max(...items.map((item) => item.keyboardCount)),
+    0
+  );
+  const mouseCount = groupedScreenshots.reduce(
+    (sum, items) => sum + Math.max(...items.map((item) => item.mouseCount)),
+    0
+  );
 
   return [
     {
       key: 'frames',
-      title: 'Timeline frames',
-      value: String(screenshots.length),
-      delta: 'live',
+      title: '时间线帧数',
+      value: String(groupedScreenshots.length),
+      delta: '实时',
       tone: 'positive'
     },
     {
       key: 'effective',
-      title: 'Effective changes',
+      title: '有效变化',
       value: String(effectiveChanges),
-      delta: `${Math.round((effectiveChanges / screenshots.length) * 100)}%`,
+      delta: `${Math.round((effectiveChanges / groupedScreenshots.length) * 100)}%`,
       tone: effectiveChanges > 0 ? 'positive' : 'default'
     },
     {
       key: 'no-change',
-      title: 'No-change streak risks',
+      title: '无变化连续风险',
       value: String(noChangeRisks),
-      delta: noChangeRisks > 0 ? 'review needed' : 'clear',
+      delta: noChangeRisks > 0 ? '需要复核' : '无异常',
       tone: noChangeRisks > 0 ? 'warning' : 'positive'
     },
     {
       key: 'input',
-      title: 'Aggregate input',
+      title: '聚合输入',
       value: String(keyboardCount + mouseCount),
-      delta: `keyboard ${keyboardCount} / mouse ${mouseCount}`,
+      delta: `键盘 ${keyboardCount} / 鼠标 ${mouseCount}`,
       tone: 'default'
     }
   ];
 }
 
-function buildMockTimeline(selectedDate: string) {
-  const frames: ScreenshotListItem[] = [
-    buildMockScreenshot({
-      id: 'mock-1',
-      time: `${selectedDate} 09:10`,
-      activityType: 'Coding',
-      keyboardCount: 28,
-      mouseCount: 12,
-      changeLevel: 'high',
-      effectiveChange: true,
-      changedBlockRatio: 0.24,
-      similarity: 0.86,
-      distance: 11,
-      reason: 'Editor and terminal regions changed together.'
-    }),
-    buildMockScreenshot({
-      id: 'mock-2',
-      time: `${selectedDate} 10:00`,
-      activityType: 'Code review',
-      keyboardCount: 10,
-      mouseCount: 16,
-      changeLevel: 'medium',
-      effectiveChange: true,
-      changedBlockRatio: 0.15,
-      similarity: 0.92,
-      distance: 7,
-      reason: 'Review comments and diff pane changed.'
-    }),
-    buildMockScreenshot({
-      id: 'mock-3',
-      time: `${selectedDate} 11:25`,
-      activityType: 'Meeting',
-      keyboardCount: 3,
-      mouseCount: 4,
-      changeLevel: 'low',
-      effectiveChange: true,
-      changedBlockRatio: 0.09,
-      similarity: 0.96,
-      distance: 4,
-      reason: 'Meeting window controls and participant tiles changed.'
-    }),
-    buildMockScreenshot({
-      id: 'mock-4',
-      time: `${selectedDate} 14:05`,
-      activityType: 'IDE foreground',
-      keyboardCount: 1,
-      mouseCount: 2,
-      changeLevel: 'low',
-      effectiveChange: false,
-      changedBlockRatio: 0.031,
-      similarity: 0.992,
-      distance: 2,
-      reason: 'Only cursor and clock regions changed across repeated captures.',
-      linkedRisks: [
-        {
-          id: 'mock-risk-1',
-          type: 'No-change streak triggered',
-          severity: 'high',
-          status: 'reviewing',
-          reason: 'Repeated low-diff screenshots with near-zero aggregate input.',
-          streakCount: 6,
-          noChangeStreakTriggered: true
-        }
-      ]
-    }),
-    buildMockScreenshot({
-      id: 'mock-5',
-      time: `${selectedDate} 15:10`,
-      activityType: 'Recovered work',
-      keyboardCount: 18,
-      mouseCount: 9,
-      changeLevel: 'medium',
-      effectiveChange: true,
-      changedBlockRatio: 0.18,
-      similarity: 0.9,
-      distance: 8,
-      reason: 'Terminal output and code editor resumed changing.'
-    }),
-    buildMockScreenshot({
-      id: 'mock-6',
-      time: `${selectedDate} 16:02`,
-      activityType: 'Documentation',
-      keyboardCount: 4,
-      mouseCount: 7,
-      changeLevel: 'low',
-      effectiveChange: false,
-      changedBlockRatio: 0.055,
-      similarity: 0.984,
-      distance: 3,
-      reason: 'Document stayed open with only small viewport movement.'
-    })
-  ];
-
+function buildEmptyScreenshotComparison(apiStatus: ApiStatus): ScreenshotComparison {
   return {
-    employeeLabel: 'Mock employee',
-    screenshots: frames,
-    segments: frames.map(mapMockFrameToSegment)
+    currentImageLabel: 'No screenshot available',
+    previousImageLabel: 'No previous screenshot',
+    currentImageUri: null,
+    currentThumbUri: null,
+    previousImageUri: null,
+    previousThumbUri: null,
+    metrics: [],
+    reasoning: ['No live screenshot was returned by the backend.'],
+    linkedRisks: [],
+    noChangeStreakTriggered: false,
+    apiStatus
+  };
+}
+
+function buildMockTimeline(selectedDate: string) {
+  return {
+    employeeLabel: '',
+    screenshots: [],
+    segments: [],
+    selectedDate
   };
 }
 
@@ -3378,7 +3707,16 @@ function buildMockScreenshot(input: {
     riskSummary: linkedRisks.map((risk) => risk.type).join(', ') || input.reason,
     changeMetrics,
     linkedRisks,
-    noChangeStreakTriggered: linkedRisks.some((risk) => risk.noChangeStreakTriggered)
+    noChangeStreakTriggered: linkedRisks.some((risk) => risk.noChangeStreakTriggered),
+    aiAnalysis: {
+      status: 'completed',
+      uploadStatus: 'completed',
+      ocrStatus: 'skipped',
+      confidence: 0.82,
+      summary: `${input.activityType} activity inferred from mock timeline data.`,
+      findings: ['Rule-based mock activity summary only.'],
+      thresholds: []
+    }
   };
 }
 
@@ -3405,42 +3743,7 @@ function mapMockFrameToSegment(item: ScreenshotListItem): TimelineSegment {
 }
 
 function buildMockEventRecords(): EventRecord[] {
-  return events.map((item) => {
-    if (item.id === 'EVT-1024') {
-      return {
-        ...item,
-        eventCode: 'no_change_streak_triggered',
-        relatedScreenshotId: 'mock-4',
-        streakCount: 6,
-        noChangeStreakTriggered: true,
-        changeMetrics: {
-          changeLevel: 'low',
-          effectiveChange: false,
-          changedBlockRatio: 0.031,
-          similarity: 0.992,
-          distance: 2,
-          reason: 'Repeated low-diff screenshots with near-zero aggregate input.'
-        }
-      };
-    }
-
-    if (item.id === 'EVT-1023') {
-      return {
-        ...item,
-        eventCode: 'unexpected_app_focus',
-        changeMetrics: {
-          changeLevel: 'medium',
-          effectiveChange: true,
-          changedBlockRatio: 0.17,
-          similarity: 0.91,
-          distance: 9,
-          reason: 'Foreground application changed away from expected work tools.'
-        }
-      };
-    }
-
-    return item;
-  });
+  return [];
 }
 
 function buildDeviceMetadataLabels(
@@ -3528,6 +3831,154 @@ function resolvePolicyStatus(item: PolicyApiItem, rules?: Record<string, unknown
   }
 
   return 'draft';
+}
+
+function normalizeApiKeyState(value: string | undefined, hasApiKey: boolean, enabled: boolean) {
+  if (value) {
+    const normalized = value.trim().toLowerCase();
+
+    if (['configured', 'present', 'set', 'stored', 'masked'].includes(normalized)) {
+      return 'configured';
+    }
+
+    if (['missing', 'absent', 'empty', 'not_set'].includes(normalized)) {
+      return enabled ? 'missing' : 'not_required';
+    }
+
+    if (['invalid', 'rejected', 'failed'].includes(normalized)) {
+      return 'invalid';
+    }
+
+    if (normalized.includes('rotate')) {
+      return 'rotation_required';
+    }
+
+    return normalized;
+  }
+
+  if (hasApiKey) {
+    return 'configured';
+  }
+
+  return enabled ? 'missing' : 'not_required';
+}
+
+function normalizeThresholdValue(value?: number | null) {
+  if (value === undefined || value === null || Number.isNaN(value)) {
+    return undefined;
+  }
+
+  return value > 1 ? value : Math.round(value * 1000) / 10;
+}
+
+function serializeThresholdValue(value?: number | null) {
+  if (value === undefined || value === null || Number.isNaN(value)) {
+    return undefined;
+  }
+
+  return value > 1 ? Math.round(value) / 100 : value;
+}
+
+function formatThresholdDisplay(value?: number | null) {
+  const normalized = normalizeThresholdValue(value);
+  if (normalized === undefined) {
+    return null;
+  }
+
+  return `${normalized.toFixed(Number.isInteger(normalized) ? 0 : 1)}%`;
+}
+
+function maskApiKey(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  if (trimmed.length <= 4) {
+    return '••••';
+  }
+
+  return `••••${trimmed.slice(-4)}`;
+}
+
+function extractReadableStringArray(
+  source: Record<string, unknown> | undefined,
+  keys: string[]
+) {
+  return readStringArray(source, keys) ?? [];
+}
+
+function formatAnalysisFinding(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const separatorIndex = trimmed.indexOf(':');
+  if (separatorIndex > 0) {
+    const left = trimmed.slice(0, separatorIndex);
+    const right = trimmed.slice(separatorIndex + 1).trim();
+    return right ? `${formatLabel(left)}: ${right}` : formatLabel(left);
+  }
+
+  if (/^[a-z0-9_-]+$/i.test(trimmed)) {
+    return formatLabel(trimmed);
+  }
+
+  return trimmed;
+}
+
+function buildScreenshotAnalysisThresholds(sources: Record<string, unknown>[]) {
+  const confidenceThreshold = readNumberFromSources(sources, [
+    'confidence_threshold',
+    'min_confidence',
+    'activity_confidence_threshold',
+    'minimum_confidence'
+  ]);
+  const riskThreshold = readNumberFromSources(sources, [
+    'risk_threshold',
+    'review_threshold',
+    'alert_threshold',
+    'escalation_threshold'
+  ]);
+  const thresholds = [
+    confidenceThreshold !== undefined
+      ? { label: 'Confidence floor', value: formatThresholdDisplay(confidenceThreshold) ?? String(confidenceThreshold) }
+      : null,
+    riskThreshold !== undefined
+      ? { label: 'Review threshold', value: formatThresholdDisplay(riskThreshold) ?? String(riskThreshold) }
+      : null
+  ];
+
+  return thresholds.filter(
+    (item): item is { label: string; value: string } => Boolean(item)
+  );
+}
+
+function normalizeAnalysisStatus(value: string) {
+  const normalized = value.trim().toLowerCase();
+
+  if (['completed', 'complete', 'succeeded', 'success', 'done'].includes(normalized)) {
+    return 'completed';
+  }
+
+  if (['processing', 'running', 'in_progress', 'in-progress', 'working'].includes(normalized)) {
+    return 'processing';
+  }
+
+  if (['failed', 'error', 'errored'].includes(normalized)) {
+    return 'failed';
+  }
+
+  if (['skipped', 'disabled', 'not_applicable', 'not-applicable'].includes(normalized)) {
+    return 'skipped';
+  }
+
+  if (['queued', 'created', 'new'].includes(normalized)) {
+    return 'pending';
+  }
+
+  return normalized || 'pending';
 }
 
 function buildTimelineStatus(
@@ -3799,6 +4250,17 @@ function compareAuditLogItems(left: AuditLogApiItem, right: AuditLogApiItem) {
     toTimestamp(readString(right, ['timestamp', 'occurred_at', 'created_at', 'updated_at'])) -
     toTimestamp(readString(left, ['timestamp', 'occurred_at', 'created_at', 'updated_at']))
   );
+}
+
+function compareScreenshotsByCapturedAt(left: ScreenshotListItem, right: ScreenshotListItem) {
+  const leftTimestamp = left.sortTimestamp ?? toTimestamp(left.capturedAtRaw ?? left.capturedAt);
+  const rightTimestamp = right.sortTimestamp ?? toTimestamp(right.capturedAtRaw ?? right.capturedAt);
+
+  if (leftTimestamp !== rightTimestamp) {
+    return rightTimestamp - leftTimestamp;
+  }
+
+  return right.id.localeCompare(left.id);
 }
 
 function severityWeight(value: EventSeverity) {

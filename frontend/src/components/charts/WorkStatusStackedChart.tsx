@@ -1,4 +1,5 @@
 import type { StatusBucket } from '../../types/models';
+import { useI18n } from '../../i18n/I18nContext';
 import { EChartPanel } from './EChartPanel';
 
 type WorkStatusStackedChartProps = {
@@ -16,9 +17,11 @@ const statusColorMap = {
 };
 
 export function WorkStatusStackedChart({ data }: WorkStatusStackedChartProps) {
+  const { t } = useI18n();
+
   return (
     <EChartPanel
-      title="Work Status Distribution"
+      title={t('chart.workStatus', 'Work Status Distribution')}
       option={{
         tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
         legend: { top: 0, itemWidth: 12, textStyle: { color: '#334155' } },
@@ -33,13 +36,13 @@ export function WorkStatusStackedChart({ data }: WorkStatusStackedChartProps) {
           splitLine: { lineStyle: { color: '#e2e8f0' } }
         },
         series: [
-          ['coding', 'Coding'],
-          ['review', 'Review'],
-          ['meeting', 'Meeting'],
-          ['documentation', 'Documentation'],
-          ['communication', 'Communication'],
-          ['idle', 'Idle'],
-          ['locked', 'Locked']
+          ['coding', t('chart.coding', 'Coding')],
+          ['review', t('chart.review', 'Review')],
+          ['meeting', t('chart.meeting', 'Meeting')],
+          ['documentation', t('chart.documentation', 'Documentation')],
+          ['communication', t('chart.communication', 'Communication')],
+          ['idle', t('chart.idle', 'Idle')],
+          ['locked', t('chart.locked', 'Locked')]
         ].map(([key, label]) => ({
           name: label,
           type: 'bar',

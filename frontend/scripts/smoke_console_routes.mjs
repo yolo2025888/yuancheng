@@ -10,7 +10,6 @@ function readRelative(path) {
   if (!existsSync(fullPath)) {
     throw new Error(`Missing file: ${path}`);
   }
-
   return readFileSync(fullPath, 'utf8');
 }
 
@@ -26,7 +25,8 @@ const adminApiSource = readRelative('src/services/adminApi.ts');
 const requiredSurfaces = [
   {
     key: 'dashboard',
-    label: 'Dashboard',
+    labelKey: 'nav.dashboard',
+    labelFallback: 'Dashboard',
     path: '/',
     permission: 'dashboard.view',
     component: 'DashboardPage',
@@ -36,7 +36,8 @@ const requiredSurfaces = [
   },
   {
     key: 'realtime',
-    label: 'Realtime Status',
+    labelKey: 'nav.realtime',
+    labelFallback: 'Realtime Status',
     path: '/realtime-status',
     permissions: ['screenshots.metadata.view', 'dashboard.view'],
     component: 'RealtimeStatusPage',
@@ -46,7 +47,8 @@ const requiredSurfaces = [
   },
   {
     key: 'employees',
-    label: 'Employees',
+    labelKey: 'nav.employees',
+    labelFallback: 'Employees',
     path: '/employees',
     permission: 'directory.view',
     component: 'EmployeesPage',
@@ -56,7 +58,8 @@ const requiredSurfaces = [
   },
   {
     key: 'devices',
-    label: 'Devices',
+    labelKey: 'nav.devices',
+    labelFallback: 'Devices',
     path: '/devices',
     permission: 'directory.view',
     component: 'DevicesPage',
@@ -66,17 +69,30 @@ const requiredSurfaces = [
   },
   {
     key: 'timeline',
-    label: 'Timeline',
+    labelKey: 'nav.timeline.fixed',
+    labelFallback: '时间线',
     path: '/timeline',
     permission: 'screenshots.metadata.view',
     component: 'TimelinePage',
     page: 'src/pages/Timeline.tsx',
-    pageSignals: ['Timeline', 'getTimeline'],
-    apiSignals: ['/api/employees/${discoveredEmployeeId}/timeline']
+    pageSignals: ['时间线', 'getTimeline'],
+    apiSignals: ['/api/timeline']
+  },
+  {
+    key: 'screenshots',
+    labelKey: 'nav.screenshotGallery.fixed',
+    labelFallback: '截图库',
+    path: '/screenshots',
+    permission: 'screenshots.metadata.view',
+    component: 'ScreenshotGalleryPage',
+    page: 'src/pages/ScreenshotGallery.tsx',
+    pageSignals: ['截图库', 'getScreenshotGallery'],
+    apiSignals: ['/api/screenshots']
   },
   {
     key: 'events',
-    label: 'Events',
+    labelKey: 'nav.events',
+    labelFallback: 'Events',
     path: '/events',
     permission: 'events.review',
     component: 'EventsPage',
@@ -86,7 +102,8 @@ const requiredSurfaces = [
   },
   {
     key: 'attendance',
-    label: 'Attendance',
+    labelKey: 'nav.attendance',
+    labelFallback: 'Attendance',
     path: '/attendance',
     permission: 'attendance.view',
     component: 'AttendancePage',
@@ -96,17 +113,18 @@ const requiredSurfaces = [
   },
   {
     key: 'screenshot-detail',
-    label: 'Screenshot Detail',
-    path: '/screenshot-detail',
+    nav: false,
+    path: '/screenshots/detail',
     permission: 'screenshots.metadata.view',
     component: 'ScreenshotDetailPage',
     page: 'src/pages/ScreenshotDetail.tsx',
-    pageSignals: ['Activity', 'Diff summary'],
+    pageSignals: ['截图详情', '关联风险'],
     apiSignals: ['getScreenshotDetail']
   },
   {
     key: 'github-risk',
-    label: 'GitHub Risk',
+    labelKey: 'nav.githubRisk',
+    labelFallback: 'GitHub Risk',
     path: '/github-risk',
     permission: 'github_risks.view',
     component: 'GitHubRiskPage',
@@ -116,7 +134,8 @@ const requiredSurfaces = [
   },
   {
     key: 'access-roles',
-    label: 'Access Roles',
+    labelKey: 'nav.accessRoles',
+    labelFallback: 'Access Roles',
     path: '/access-roles',
     permission: 'access_matrix.view',
     component: 'AccessRolesPage',
@@ -126,7 +145,8 @@ const requiredSurfaces = [
   },
   {
     key: 'policies',
-    label: 'Policies',
+    labelKey: 'nav.policies',
+    labelFallback: 'Policies',
     path: '/policies',
     permission: 'policies.manage',
     component: 'PoliciesPage',
@@ -136,7 +156,8 @@ const requiredSurfaces = [
   },
   {
     key: 'audit-logs',
-    label: 'Audit Logs',
+    labelKey: 'nav.auditLogs',
+    labelFallback: 'Audit Logs',
     path: '/audit-logs',
     permission: 'audit_logs.view',
     component: 'AuditLogsPage',
@@ -156,16 +177,18 @@ for (const surface of requiredSurfaces) {
   }
 
   const pageSource = readFileSync(pagePath, 'utf8');
-  const routePath = surface.path === '/' ? "{ index: true" : `path: '${surface.path.slice(1)}'`;
-
+  const routePath = surface.path === '/' ? '{ index: true' : `path: '${surface.path.slice(1)}'`;
   const permissions = surface.permissions ?? [surface.permission];
-  const routeChecks = [
-    [`key: '${surface.key}'`, 'nav key'],
-    [`label: '${surface.label}'`, 'nav label'],
-    [`path: '${surface.path}'`, 'nav path'],
-    [surface.component, 'lazy component'],
-    [routePath, 'router child path']
-  ];
+  const routeChecks = [[surface.component, 'lazy component'], [routePath, 'router child path']];
+
+  if (surface.nav !== false) {
+    routeChecks.unshift(
+      [`path: '${surface.path}'`, 'nav path'],
+      [`labelFallback: '${surface.labelFallback}'`, 'nav fallback label'],
+      [`labelKey: '${surface.labelKey}'`, 'nav label key'],
+      [`key: '${surface.key}'`, 'nav key']
+    );
+  }
 
   for (const [needle, label] of routeChecks) {
     if (!routerSource.includes(needle)) {
@@ -208,11 +231,17 @@ if (failures.length > 0) {
   process.exit(1);
 }
 
-console.log(JSON.stringify({
-  status: 'passed',
-  checkedSurfaces: requiredSurfaces.map((surface) => ({
-    key: surface.key,
-    path: surface.path,
-    permissions: surface.permissions ?? [surface.permission]
-  }))
-}, null, 2));
+console.log(
+  JSON.stringify(
+    {
+      status: 'passed',
+      checkedSurfaces: requiredSurfaces.map((surface) => ({
+        key: surface.key,
+        path: surface.path,
+        permissions: surface.permissions ?? [surface.permission]
+      }))
+    },
+    null,
+    2
+  )
+);

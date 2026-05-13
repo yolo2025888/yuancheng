@@ -16,6 +16,8 @@ public sealed class AgentServiceOptions
 
     public bool DryRun { get; set; } = true;
 
+    public bool AllowInsecureLoopbackForDevelopment { get; set; } = false;
+
     public string? EmployeeId { get; set; }
 
     public string DeviceIdPath { get; set; } = @"C:\ProgramData\EmployeeBehaviorAgent\device-id.json";

@@ -3,10 +3,12 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { ApiStatusNotice } from '../components/ApiStatusNotice';
 import { PageSection } from '../components/PageSection';
+import { useI18n } from '../i18n/I18nContext';
 import { adminApi } from '../services/adminApi';
 import type { ApiStatus, AuditLogRecord } from '../types/models';
 
 export function AuditLogsPage() {
+  const { t, text } = useI18n();
   const [rows, setRows] = useState<AuditLogRecord[]>([]);
   const [apiStatus, setApiStatus] = useState<ApiStatus | null>(null);
   const [loading, setLoading] = useState(false);
@@ -43,20 +45,25 @@ export function AuditLogsPage() {
   return (
     <Space direction="vertical" size={20} className="page-stack">
       <PageSection
-        title="Audit Logs"
-        description="Review operator actions and safe session or risk metadata without exposing private capture content. The page uses the live audit endpoint when available and keeps a mock fallback otherwise."
+        title={t('audit.title', 'Audit Logs')}
+        description={t(
+          'audit.description',
+          'Review operator actions and safe session or risk metadata without exposing private capture content.'
+        )}
         extra={
           <Space size={8} wrap>
-            <Tag color="blue">{summary.reviewActions} review actions</Tag>
-            <Tag color="purple">{summary.policyActions} policy changes</Tag>
-            <Tag color="gold">{summary.screenshotAccess} screenshot access actions</Tag>
+            <Tag color="blue">{t('audit.reviewActions', '{{count}} review actions', { count: summary.reviewActions })}</Tag>
+            <Tag color="purple">{t('audit.policyChanges', '{{count}} policy changes', { count: summary.policyActions })}</Tag>
+            <Tag color="gold">
+              {t('audit.screenshotActions', '{{count}} screenshot access actions', { count: summary.screenshotAccess })}
+            </Tag>
             <Button size="small" onClick={() => void loadAuditLogs()} loading={loading}>
-              Reload
+              {t('common.reload', 'Reload')}
             </Button>
           </Space>
         }
       />
-      {apiStatus ? <ApiStatusNotice status={apiStatus} title="Audit Log API" /> : null}
+      {apiStatus ? <ApiStatusNotice status={apiStatus} title={t('audit.api', 'Audit Log API')} /> : null}
       <Card bordered={false} className="panel-card">
         <Table
           rowKey="key"
@@ -67,46 +74,46 @@ export function AuditLogsPage() {
           scroll={{ x: 1260 }}
           columns={[
             {
-              title: 'Operator',
+              title: t('audit.operator', 'Operator'),
               dataIndex: 'operator',
               width: 160
             },
             {
-              title: 'Action',
+              title: t('audit.action', 'Action'),
               width: 180,
               render: (_value: unknown, record: AuditLogRecord) => (
                 <Space direction="vertical" size={2}>
-                  <Typography.Text strong>{record.action}</Typography.Text>
+                  <Typography.Text strong>{text(record.action)}</Typography.Text>
                   {record.scope ? <Tag>{record.scope}</Tag> : null}
                 </Space>
               )
             },
             {
-              title: 'Target / metadata',
+              title: t('audit.targetMetadata', 'Target / metadata'),
               width: 320,
               render: (_value: unknown, record: AuditLogRecord) => (
                 <Space direction="vertical" size={2}>
-                  <Typography.Text>{record.target}</Typography.Text>
+                  <Typography.Text>{text(record.target)}</Typography.Text>
                   {record.metadataSummary ? (
-                    <Typography.Text type="secondary">{record.metadataSummary}</Typography.Text>
+                    <Typography.Text type="secondary">{text(record.metadataSummary)}</Typography.Text>
                   ) : null}
                 </Space>
               )
             },
             {
-              title: 'Reason',
+              title: t('audit.reason', 'Reason'),
               dataIndex: 'reason',
               width: 320
             },
             {
-              title: 'Result',
+              title: t('audit.result', 'Result'),
               width: 120,
               render: (_value: unknown, record: AuditLogRecord) => (
-                <Tag color={auditResultColor(record.result)}>{record.result}</Tag>
+                <Tag color={auditResultColor(record.result)}>{text(record.result)}</Tag>
               )
             },
             {
-              title: 'Timestamp',
+              title: t('audit.timestamp', 'Timestamp'),
               dataIndex: 'timestamp',
               width: 180
             }

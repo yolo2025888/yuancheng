@@ -15,7 +15,7 @@ internal sealed class AgentServiceOptionsValidator : IValidateOptions<AgentServi
         }
 
         var failures = new List<string>();
-        ValidateApiBaseUrl(options.ApiBaseUrl, failures);
+        ValidateApiBaseUrl(options.ApiBaseUrl, failures, options.AllowInsecureLoopbackForDevelopment);
         ValidateAuthentication(options.ProtectedTokenPath, options.ApiToken, failures);
 
         return failures.Count == 0
@@ -23,7 +23,7 @@ internal sealed class AgentServiceOptionsValidator : IValidateOptions<AgentServi
             : ValidateOptionsResult.Fail(failures);
     }
 
-    private static void ValidateApiBaseUrl(string? apiBaseUrl, List<string> failures)
+    private static void ValidateApiBaseUrl(string? apiBaseUrl, List<string> failures, bool allowInsecureLoopbackForDevelopment = false)
     {
         var normalizedApiBaseUrl = apiBaseUrl?.Trim();
         if (!Uri.TryCreate(normalizedApiBaseUrl, UriKind.Absolute, out var apiUri))
@@ -32,12 +32,15 @@ internal sealed class AgentServiceOptionsValidator : IValidateOptions<AgentServi
             return;
         }
 
-        if (!string.Equals(apiUri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+        var isLoopbackHost = IsLoopbackHost(apiUri.Host);
+        var allowLoopback = allowInsecureLoopbackForDevelopment && isLoopbackHost;
+
+        if (!string.Equals(apiUri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase) && !allowLoopback)
         {
             failures.Add("AgentService.ApiBaseUrl must use HTTPS when DryRun=false.");
         }
 
-        if (IsUnsafeProductionHost(apiUri.Host))
+        if (IsUnsafeProductionHost(apiUri.Host) && !allowLoopback)
         {
             failures.Add(
                 $"AgentService.ApiBaseUrl host '{apiUri.Host}' is not allowed when DryRun=false. Use a production HTTPS backend instead of localhost or reserved example hosts.");
@@ -71,10 +74,7 @@ internal sealed class AgentServiceOptionsValidator : IValidateOptions<AgentServi
         }
 
         var normalizedHost = hostName.Trim().ToLowerInvariant();
-        return normalizedHost == "localhost" ||
-               normalizedHost == "127.0.0.1" ||
-               normalizedHost == "::1" ||
-               IPAddress.TryParse(normalizedHost, out var ipAddress) && IPAddress.IsLoopback(ipAddress) ||
+        return IsLoopbackHost(normalizedHost) ||
                normalizedHost.EndsWith(".local", StringComparison.Ordinal) ||
                normalizedHost.EndsWith(".example", StringComparison.Ordinal) ||
                normalizedHost.EndsWith(".test", StringComparison.Ordinal) ||
@@ -87,5 +87,19 @@ internal sealed class AgentServiceOptionsValidator : IValidateOptions<AgentServi
                normalizedHost.EndsWith(".example.org", StringComparison.Ordinal) ||
                normalizedHost.Contains("example.internal", StringComparison.Ordinal) ||
                normalizedHost.Contains("replace-", StringComparison.Ordinal);
+    }
+
+    private static bool IsLoopbackHost(string? hostName)
+    {
+        if (string.IsNullOrWhiteSpace(hostName))
+        {
+            return false;
+        }
+
+        var normalizedHost = hostName.Trim().ToLowerInvariant();
+        return normalizedHost == "localhost" ||
+               normalizedHost == "127.0.0.1" ||
+               normalizedHost == "::1" ||
+               IPAddress.TryParse(normalizedHost, out var ipAddress) && IPAddress.IsLoopback(ipAddress);
     }
 }

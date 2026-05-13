@@ -98,7 +98,7 @@ def test_timeline_and_events_queries(client: TestClient, seeded_device: dict[str
     assert timeline_payload["items"][0]["thumb_uri"].endswith("/thumbnail")
     assert timeline_payload["items"][0]["image_uri"] is None
     assert timeline_payload["items"][0]["keyboard_count"] == 23
-    assert timeline_payload["items"][0]["mouse_count"] == 23
+    assert timeline_payload["items"][0]["mouse_count"] == 4
     assert timeline_payload["items"][0]["activity_type"] == "development"
     assert timeline_payload["items"][0]["active_app"] == "cursor"
     assert timeline_payload["items"][0]["activity_confidence"] >= 0.8
@@ -169,7 +169,9 @@ def test_screenshot_list_and_detail_queries(client: TestClient, seeded_device: d
 
     assert list_response.status_code == 200
     list_payload = list_response.json()
-    assert list_payload["total"] == 1
+    assert list_payload["total"] == 2
+    assert list_payload["page"] == 1
+    assert list_payload["page_size"] == 1
     assert list_payload["items"][0]["screen_index"] == 1
     assert list_payload["items"][0]["thumb_uri"].endswith("/thumbnail")
     assert list_payload["items"][0]["foreground_process"] is None
@@ -191,6 +193,142 @@ def test_screenshot_list_and_detail_queries(client: TestClient, seeded_device: d
     assert detail_payload["risk_events"] == []
     assert detail_payload["activity_type"] == "development"
     assert detail_payload["activity_summary"]
+
+
+def test_screenshot_and_timeline_filters_support_department_date_risk_paging_and_sorting(
+    client: TestClient,
+    seeded_device: dict[str, str],
+    auth_headers,
+) -> None:
+    headers = auth_headers(bootstrap=True)
+    alice_id = UUID(seeded_device["employee_id"])
+    alice_device_id = UUID(seeded_device["device_id"])
+    bob_id = uuid4()
+    bob_device_id = uuid4()
+
+    with Session(client.app.state.engine) as session:
+        alice = session.get(Employee, alice_id)
+        assert alice is not None
+        alice.department = "Engineering"
+        session.add(alice)
+        session.add(
+            Employee(
+                id=bob_id,
+                name="Bob",
+                employee_no="E-002",
+                department="Support",
+            )
+        )
+        session.add(
+            Device(
+                id=bob_device_id,
+                employee_id=bob_id,
+                hostname="SUP-PC-002",
+                os_type="windows",
+                agent_version="0.1.0",
+                status="online",
+            )
+        )
+        session.add(
+            Screenshot(
+                employee_id=alice_id,
+                device_id=alice_device_id,
+                captured_at=datetime(2026, 5, 11, 9, 0, tzinfo=timezone.utc),
+                capture_batch_key="alice-batch-1",
+                screen_index=0,
+                width=1,
+                height=1,
+                upload_status="completed",
+                ocr_status="completed",
+                analysis_status="completed",
+                retention_decision="normal",
+                file_retention_status="full",
+                is_abnormal=False,
+            )
+        )
+        session.add(
+            Screenshot(
+                employee_id=alice_id,
+                device_id=alice_device_id,
+                captured_at=datetime(2026, 5, 12, 10, 0, tzinfo=timezone.utc),
+                capture_batch_key="alice-batch-2",
+                screen_index=0,
+                width=1,
+                height=1,
+                upload_status="completed",
+                ocr_status="completed",
+                analysis_status="completed",
+                ai_analysis_status="completed",
+                ai_risk_level="high",
+                ai_summary="Needs investigation.",
+                retention_decision="high_risk",
+                file_retention_status="full",
+                is_abnormal=True,
+            )
+        )
+        session.add(
+            Screenshot(
+                employee_id=bob_id,
+                device_id=bob_device_id,
+                captured_at=datetime(2026, 5, 12, 11, 0, tzinfo=timezone.utc),
+                capture_batch_key="bob-batch-1",
+                screen_index=0,
+                width=1,
+                height=1,
+                upload_status="completed",
+                ocr_status="completed",
+                analysis_status="completed",
+                ai_analysis_status="completed",
+                ai_risk_level="high",
+                retention_decision="high_risk",
+                file_retention_status="full",
+                is_abnormal=True,
+            )
+        )
+        session.commit()
+
+    screenshots_response = client.get(
+        "/api/screenshots",
+        params={
+            "department": "Engineering",
+            "date_from": "2026-05-11",
+            "date_to": "2026-05-12",
+            "descending": "false",
+            "page": 1,
+            "page_size": 1,
+        },
+        headers=headers,
+    )
+    timeline_response = client.get(
+        "/api/timeline",
+        params={
+            "department": "Engineering",
+            "date_from": "2026-05-11",
+            "date_to": "2026-05-12",
+            "risk_level": "high",
+            "abnormal_only": "true",
+            "descending": "true",
+            "page": 1,
+            "page_size": 5,
+        },
+        headers=headers,
+    )
+
+    assert screenshots_response.status_code == 200
+    screenshots_payload = screenshots_response.json()
+    assert screenshots_payload["total"] == 2
+    assert screenshots_payload["page"] == 1
+    assert screenshots_payload["page_size"] == 1
+    assert screenshots_payload["items"][0]["capture_batch_key"] == "alice-batch-1"
+    assert screenshots_payload["items"][0]["department"] == "Engineering"
+
+    assert timeline_response.status_code == 200
+    timeline_payload = timeline_response.json()
+    assert timeline_payload["total"] == 1
+    assert timeline_payload["items"][0]["capture_batch_key"] == "alice-batch-2"
+    assert timeline_payload["items"][0]["is_abnormal"] is True
+    assert timeline_payload["items"][0]["ai_risk_level"] == "high"
+    assert timeline_payload["items"][0]["department"] == "Engineering"
 
 
 def test_scoped_role_limits_directory_screenshots_images_and_timeline(

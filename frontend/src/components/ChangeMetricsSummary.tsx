@@ -1,5 +1,6 @@
 import { Space, Tag, Typography } from 'antd';
 
+import { useI18n } from '../i18n/I18nContext';
 import type { ChangeMetrics } from '../types/models';
 
 type ChangeMetricsSummaryProps = {
@@ -13,6 +14,8 @@ export function ChangeMetricsSummary({
   noChangeStreakTriggered = false,
   showReason = true
 }: ChangeMetricsSummaryProps) {
+  const { t, text } = useI18n();
+
   if (!metrics) {
     return null;
   }
@@ -27,25 +30,31 @@ export function ChangeMetricsSummary({
   return (
     <Space direction="vertical" size={6} className="change-summary">
       <Space size={[6, 6]} wrap>
-        <Tag color={changeLevelColor(metrics.changeLevel)}>{formatLabel(metrics.changeLevel)}</Tag>
+        <Tag color={changeLevelColor(metrics.changeLevel)}>{text(formatLabel(metrics.changeLevel))}</Tag>
         <Tag color={metrics.effectiveChange ? 'green' : 'default'}>
           {metrics.effectiveChange === null
-            ? 'Effective change unknown'
+            ? t('change.effectiveUnknown', 'Effective change unknown')
             : metrics.effectiveChange
-              ? 'Effective change'
-              : 'No effective change'}
+              ? t('change.effective', 'Effective change')
+              : t('change.noEffective', 'No effective change')}
         </Tag>
         <Tag>
-          Changed blocks {formatPercent(metrics.changedBlockRatio) ?? '--'}
+          {t('change.changedBlocks', 'Changed blocks {{value}}', {
+            value: formatPercent(metrics.changedBlockRatio) ?? '--'
+          })}
         </Tag>
-        {similarityText ? <Tag>Similarity {similarityText}</Tag> : null}
+        {similarityText ? <Tag>{t('change.similarity', 'Similarity {{value}}', { value: similarityText })}</Tag> : null}
         {metrics.distance !== null && metrics.distance !== undefined ? (
-          <Tag>Distance {metrics.distance.toFixed(Number.isInteger(metrics.distance) ? 0 : 2)}</Tag>
+          <Tag>
+            {t('change.distance', 'Distance {{value}}', {
+              value: metrics.distance.toFixed(Number.isInteger(metrics.distance) ? 0 : 2)
+            })}
+          </Tag>
         ) : null}
-        {noChangeStreakTriggered ? <Tag color="warning">No-change streak risk</Tag> : null}
+        {noChangeStreakTriggered ? <Tag color="warning">{t('change.noChangeRisk', 'No-change streak risk')}</Tag> : null}
       </Space>
       {showReason && metrics.reason ? (
-        <Typography.Text type="secondary">{metrics.reason}</Typography.Text>
+        <Typography.Text type="secondary">{text(metrics.reason)}</Typography.Text>
       ) : null}
     </Space>
   );
@@ -84,7 +93,15 @@ function formatPercent(value?: number | null) {
 
 function formatLabel(value: string) {
   if (!value) {
-    return 'Unknown change level';
+    return '未知变化等级';
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'unknown') {
+    return '未知';
+  }
+  if (normalized === 'none') {
+    return '无变化';
   }
 
   return value

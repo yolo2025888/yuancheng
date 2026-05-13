@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +12,9 @@ from sqlmodel import Session, select
 
 from app.core.config import Settings
 from app.models import BehaviorEvent, Policy, ScreenDiff, Screenshot
+from app.services.ai_analysis import AIAnalysisService, apply_ai_analysis_result
+from app.services.policies import PolicyService
+from app.services.storage import LocalScreenshotStorage
 
 try:
     from PIL import Image, ImageChops, ImageOps, ImageStat
@@ -19,6 +23,9 @@ except ImportError:  # pragma: no cover - exercised via fallback behavior
     ImageChops = None
     ImageOps = None
     ImageStat = None
+
+
+logger = logging.getLogger(__name__)
 
 
 def utc_now() -> datetime:
@@ -417,6 +424,8 @@ class ScreenshotAnalysisService:
     def __init__(self, session: Session, settings: Settings):
         self.session = session
         self.settings = settings
+        self.ai_analysis = AIAnalysisService(settings, session)
+        self.storage = LocalScreenshotStorage(settings)
         self.backend_root = Path(__file__).resolve().parents[2]
         self.storage_root = Path(settings.storage_root_dir)
         if not self.storage_root.is_absolute():
@@ -428,11 +437,18 @@ class ScreenshotAnalysisService:
         screenshot: Screenshot,
         image_bytes: bytes | None = None,
     ) -> ScreenDiff:
+        policy_service = PolicyService(self.session, self.settings)
+        policy = policy_service.resolve_policy_for_device(screenshot.device_id)
         previous = self._get_previous_completed_screenshot(screenshot)
         metrics = self._build_metrics(
             current=screenshot,
             previous=previous,
             current_image_bytes=image_bytes,
+        )
+        activity = classify_screenshot_activity(
+            screenshot=screenshot,
+            change_level=metrics.change_level,
+            is_effective_change=metrics.is_effective_change,
         )
 
         diff = self.session.exec(
@@ -455,18 +471,13 @@ class ScreenshotAnalysisService:
         diff.reason = metrics.reason
         self.session.add(diff)
 
-        activity = classify_screenshot_activity(
-            screenshot=screenshot,
-            change_level=metrics.change_level,
-            is_effective_change=metrics.is_effective_change,
-        )
         screenshot.ocr_status = "skipped" if screenshot.ocr_status == "pending" else screenshot.ocr_status
         screenshot.analysis_status = "completed"
         screenshot.activity_type = activity.activity_type
         screenshot.active_app = activity.active_app
         screenshot.activity_confidence = activity.confidence
         screenshot.activity_summary = activity.summary
-        screenshot.activity_evidence_json = activity.evidence
+        screenshot.activity_evidence_json = dict(activity.evidence)
         screenshot.updated_at = utc_now()
         self.session.add(screenshot)
         self.session.commit()
@@ -475,6 +486,20 @@ class ScreenshotAnalysisService:
 
         self._apply_no_change_state_machine(screenshot=screenshot, diff=diff)
         self.session.refresh(diff)
+        self._apply_ai_analysis(
+            screenshot=screenshot,
+            previous=previous,
+            diff=diff,
+            activity=activity,
+            current_image_bytes=image_bytes,
+            policy=policy,
+        )
+        self.session.refresh(screenshot)
+        self._apply_retention_lifecycle(
+            screenshot=screenshot,
+            previous=previous,
+            policy=policy,
+        )
         return diff
 
     def mark_analysis_failed(self, screenshot: Screenshot, reason: str) -> None:
@@ -842,6 +867,422 @@ class ScreenshotAnalysisService:
             streak_count += 1
             streak_start_at = item.captured_at
         return streak_count, streak_start_at
+
+    def _apply_ai_analysis(
+        self,
+        *,
+        screenshot: Screenshot,
+        previous: Screenshot | None,
+        diff: ScreenDiff,
+        activity: ActivityClassification,
+        current_image_bytes: bytes | None,
+        policy: Policy,
+    ) -> None:
+        ai_config = self.ai_analysis.resolve_config(policy.rules_json)
+
+        if not ai_config.enabled:
+            self._set_ai_analysis_state(
+                screenshot=screenshot,
+                status="skipped",
+                details={"status": "skipped", "reason": "AI analysis is disabled."},
+            )
+            self._persist_ai_updates(screenshot)
+            return
+
+        if not (ai_config.base_url and ai_config.api_key and ai_config.model):
+            self._set_ai_analysis_state(
+                screenshot=screenshot,
+                status="skipped",
+                details={
+                    "status": "skipped",
+                    "reason": "AI analysis is enabled but not fully configured.",
+                },
+            )
+            self._persist_ai_updates(screenshot)
+            return
+
+        current_visual = self._read_ai_visual_bytes(
+            screenshot=screenshot,
+            preferred_bytes=current_image_bytes,
+        )
+        if current_visual is None:
+            self._set_ai_analysis_state(
+                screenshot=screenshot,
+                status="skipped",
+                details={
+                    "status": "skipped",
+                    "reason": "Current screenshot bytes were unavailable for AI analysis.",
+                },
+            )
+            self._persist_ai_updates(screenshot)
+            return
+
+        previous_visual = (
+            self._read_ai_visual_bytes(screenshot=previous)
+            if previous is not None and ai_config.use_previous_screenshot
+            else None
+        )
+        safe_metadata = self._build_ai_safe_metadata(
+            screenshot=screenshot,
+            previous=previous,
+            diff=diff,
+            activity=activity,
+        )
+        try:
+            result = self.ai_analysis.analyze(
+                current_image_bytes=current_visual,
+                previous_image_bytes=previous_visual,
+                safe_metadata=safe_metadata,
+                rules_json=policy.rules_json,
+            )
+        except Exception as exc:
+            logger.warning("AI screenshot analysis failed for screenshot %s: %s", screenshot.id, exc)
+            self._set_ai_analysis_state(
+                screenshot=screenshot,
+                status="failed",
+                details={
+                    "status": "failed",
+                    "reason": str(exc),
+                },
+            )
+            self._persist_ai_updates(screenshot)
+            return
+
+        self._set_ai_analysis_state(
+            screenshot=screenshot,
+            status="completed",
+            details=result.to_payload(),
+        )
+        apply_ai_analysis_result(screenshot, result)
+        self._persist_ai_updates(screenshot)
+        self._apply_ai_risk_event(screenshot=screenshot, diff=diff, result=result, ai_config=ai_config)
+
+    def _apply_retention_lifecycle(
+        self,
+        *,
+        screenshot: Screenshot,
+        previous: Screenshot | None,
+        policy: Policy,
+    ) -> None:
+        settings = PolicyService(self.session, self.settings).get_screenshot_retention_settings(policy)
+        decision, is_abnormal, reason, retain_until = self._decide_retention_classification(
+            screenshot=screenshot,
+            policy=policy,
+            settings_enabled=settings.enabled,
+            needs_review_retention_days=settings.needs_review_retention_days,
+            high_risk_retention_days=settings.high_risk_retention_days,
+            ai_failure_retention_days=settings.ai_failure_retention_days,
+            skipped_analysis_retention_days=settings.skipped_analysis_retention_days,
+            normal_mode=settings.normal_mode,
+        )
+        self._set_screenshot_retention_state(
+            screenshot=screenshot,
+            decision=decision,
+            is_abnormal=is_abnormal,
+            reason=reason,
+            retain_until=retain_until,
+        )
+
+        if previous is None or not settings.enabled:
+            return
+
+        current_time = screenshot.captured_at
+        if settings.normal_mode == "delete_on_next_cycle":
+            self._discard_superseded_normal_screenshots(
+                screenshot=screenshot,
+                keep_latest_normal_cycles=settings.keep_latest_normal_cycles,
+                deleted_at=current_time,
+            )
+
+        if previous.retain_until is not None and self._ensure_utc(previous.retain_until) <= self._ensure_utc(current_time):
+            self._discard_screenshot_visuals(
+                previous,
+                deleted_at=current_time,
+                reason="Screenshot visuals expired under retention policy.",
+            )
+
+    def _decide_retention_classification(
+        self,
+        *,
+        screenshot: Screenshot,
+        policy: Policy,
+        settings_enabled: bool,
+        needs_review_retention_days: int,
+        high_risk_retention_days: int,
+        ai_failure_retention_days: int,
+        skipped_analysis_retention_days: int,
+        normal_mode: str,
+    ) -> tuple[str, bool, str, datetime | None]:
+        related_events = self.session.exec(
+            select(BehaviorEvent)
+            .where(BehaviorEvent.related_screenshot_id == screenshot.id)
+            .order_by(desc(BehaviorEvent.created_at))
+        ).all()
+        has_related_events = bool(related_events)
+        has_high_risk_events = any(event.severity in {"high", "critical"} for event in related_events)
+        ai_status = (screenshot.ai_analysis_status or "skipped").casefold()
+        ai_risk_level = (screenshot.ai_risk_level or "").casefold()
+        non_work_likelihood = screenshot.ai_non_work_likelihood or 0.0
+
+        if ai_status == "completed":
+            if ai_risk_level == "high" or non_work_likelihood >= 0.85 or has_high_risk_events:
+                return (
+                    "high_risk",
+                    True,
+                    "High-risk AI or related risk-event evidence requires screenshot retention.",
+                    self._expire_at(screenshot.captured_at, high_risk_retention_days) if settings_enabled else self._expire_at(screenshot.captured_at, policy.retention_days),
+                )
+            if ai_risk_level == "medium" or non_work_likelihood >= 0.5 or has_related_events:
+                return (
+                    "needs_review",
+                    True,
+                    "Screenshot retained for manual review due to medium AI signal or linked events.",
+                    self._expire_at(screenshot.captured_at, needs_review_retention_days) if settings_enabled else self._expire_at(screenshot.captured_at, policy.retention_days),
+                )
+            if settings_enabled and normal_mode == "keep_until_cleanup":
+                return (
+                    "normal",
+                    False,
+                    "Normal screenshot kept until cleanup by policy.",
+                    self._expire_at(screenshot.captured_at, policy.retention_days),
+                )
+            return ("normal", False, "Normal screenshot will be discarded on the next analyzed capture.", None)
+
+        if ai_status == "failed":
+            return (
+                "ai_failed",
+                True,
+                "AI analysis failed; retain screenshot for later review.",
+                self._expire_at(screenshot.captured_at, ai_failure_retention_days) if settings_enabled else self._expire_at(screenshot.captured_at, policy.retention_days),
+            )
+
+        return (
+            "skipped",
+            False,
+            "AI analysis skipped or unavailable; keep screenshot for bounded retention.",
+            self._expire_at(screenshot.captured_at, skipped_analysis_retention_days) if settings_enabled else self._expire_at(screenshot.captured_at, policy.retention_days),
+        )
+
+    def _set_screenshot_retention_state(
+        self,
+        *,
+        screenshot: Screenshot,
+        decision: str,
+        is_abnormal: bool,
+        reason: str,
+        retain_until: datetime | None,
+    ) -> None:
+        screenshot.retention_decision = decision
+        screenshot.is_abnormal = is_abnormal
+        screenshot.retention_reason = reason
+        screenshot.retain_until = retain_until
+        if screenshot.file_retention_status not in {"metadata_only", "deleted"}:
+            screenshot.file_retention_status = "full"
+        screenshot.updated_at = utc_now()
+        self.session.add(screenshot)
+        self.session.commit()
+        self.session.refresh(screenshot)
+
+    def _discard_superseded_normal_screenshots(
+        self,
+        *,
+        screenshot: Screenshot,
+        keep_latest_normal_cycles: int,
+        deleted_at: datetime,
+    ) -> None:
+        previous_normals = self.session.exec(
+            select(Screenshot)
+            .where(Screenshot.device_id == screenshot.device_id)
+            .where(Screenshot.screen_index == screenshot.screen_index)
+            .where(Screenshot.id != screenshot.id)
+            .where(Screenshot.captured_at < screenshot.captured_at)
+            .where(Screenshot.retention_decision == "normal")
+            .where(Screenshot.file_retention_status == "full")
+            .order_by(desc(Screenshot.captured_at), desc(Screenshot.created_at))
+        ).all()
+        preserve_count = max(keep_latest_normal_cycles - 1, 0)
+        for stale_screenshot in previous_normals[preserve_count:]:
+            self._discard_screenshot_visuals(
+                stale_screenshot,
+                deleted_at=deleted_at,
+                reason="Normal screenshot discarded after a newer capture completed analysis.",
+            )
+
+    def _discard_screenshot_visuals(
+        self,
+        screenshot: Screenshot,
+        *,
+        deleted_at: datetime,
+        reason: str,
+    ) -> None:
+        image_result = self.storage.delete(screenshot.image_uri)
+        thumb_result = self.storage.delete(screenshot.thumb_uri)
+        if screenshot.image_uri:
+            if image_result.handled:
+                screenshot.image_uri = None
+                screenshot.image_deleted_at = deleted_at
+        if screenshot.thumb_uri:
+            if thumb_result.handled:
+                screenshot.thumb_uri = None
+                screenshot.thumb_deleted_at = deleted_at
+        if image_result.error or thumb_result.error:
+            screenshot.file_retention_status = "delete_failed"
+        else:
+            screenshot.file_retention_status = "metadata_only"
+        screenshot.retention_reason = reason
+        screenshot.updated_at = utc_now()
+        self.session.add(screenshot)
+        self.session.commit()
+        self.session.refresh(screenshot)
+
+    def _expire_at(self, captured_at: datetime, retention_days: int) -> datetime:
+        return self._ensure_utc(captured_at) + timedelta(days=retention_days)
+
+    def _build_ai_safe_metadata(
+        self,
+        *,
+        screenshot: Screenshot,
+        previous: Screenshot | None,
+        diff: ScreenDiff,
+        activity: ActivityClassification,
+    ) -> dict[str, Any]:
+        return {
+            "capture": {
+                "screen_index": screenshot.screen_index,
+                "width": screenshot.width,
+                "height": screenshot.height,
+                "has_previous_screenshot": previous is not None,
+            },
+            "diff": {
+                "change_level": diff.change_level,
+                "is_effective_change": diff.is_effective_change,
+                "hash_distance": diff.hash_distance,
+                "ssim_score": diff.ssim_score,
+                "changed_block_ratio": diff.changed_block_ratio,
+            },
+            "activity": {
+                "type": activity.activity_type,
+                "active_app": activity.active_app,
+                "confidence": activity.confidence,
+                "summary": activity.summary,
+                "evidence": activity.evidence,
+            },
+            "input_activity": {
+                "keyboard_count": screenshot.keyboard_count,
+                "mouse_click_count": screenshot.mouse_click_count,
+                "mouse_move_count": screenshot.mouse_move_count,
+                "mouse_wheel_count": screenshot.mouse_wheel_count,
+                "window_switch_count": screenshot.window_switch_count,
+            },
+            "session": {
+                "is_locked": screenshot.is_locked,
+                "is_remote_session": screenshot.is_remote_session,
+                "is_rdp_session": screenshot.is_rdp_session,
+                "idle_seconds": screenshot.idle_seconds,
+                "input_desktop_name": self._sanitize_session_label(screenshot.input_desktop_name),
+                "session_connect_state": self._sanitize_session_label(screenshot.session_connect_state),
+            },
+        }
+
+    def _sanitize_session_label(self, value: str | None) -> str | None:
+        if not value:
+            return None
+        normalized = value.strip().casefold()
+        if normalized in {"active", "default", "connected", "console", "disconnected", "idle", "winlogon"}:
+            return normalized
+        return "other"
+
+    def _read_ai_visual_bytes(
+        self,
+        *,
+        screenshot: Screenshot | None,
+        preferred_bytes: bytes | None = None,
+    ) -> bytes | None:
+        if screenshot is None:
+            return None
+        thumb_bytes = self._read_image_bytes(screenshot.thumb_uri)
+        if thumb_bytes is not None:
+            return thumb_bytes
+        if preferred_bytes is not None:
+            return preferred_bytes
+        return self._read_image_bytes(screenshot.image_uri)
+
+    def _set_ai_analysis_state(
+        self,
+        *,
+        screenshot: Screenshot,
+        status: str,
+        details: dict[str, Any],
+    ) -> None:
+        screenshot.ai_analysis_status = status
+        screenshot.ai_details_json = details
+        screenshot.ai_error = details.get("reason") if status == "failed" else None
+        screenshot.ai_analyzed_at = utc_now()
+        activity_evidence = dict(screenshot.activity_evidence_json or {})
+        activity_evidence["ai_analysis"] = details
+        screenshot.activity_evidence_json = activity_evidence
+
+    def _apply_ai_risk_event(
+        self,
+        *,
+        screenshot: Screenshot,
+        diff: ScreenDiff,
+        result,
+        ai_config,
+    ) -> None:
+        if result.confidence < ai_config.confidence_threshold:
+            return
+        exceeds_risk_threshold = result.non_work_likelihood >= ai_config.risk_threshold
+        if not exceeds_risk_threshold and result.risk_level != "high":
+            return
+
+        severity = "high" if result.non_work_likelihood >= 0.9 or result.risk_level == "high" else "medium"
+        reason = f"AI assistive analysis flagged possible non-work activity: {result.summary}"
+        details = {
+            "source": "ai_analysis",
+            "screen_index": screenshot.screen_index,
+            "change_level": diff.change_level,
+            "summary": result.summary,
+            "task_label": result.task_label,
+            "risk_level": result.risk_level,
+            "non_work_likelihood": result.non_work_likelihood,
+            "confidence": result.confidence,
+            "recommended_follow_up": result.recommended_follow_up,
+            "provider": result.provider,
+            "model": result.model,
+        }
+        existing = self.session.exec(
+            select(BehaviorEvent)
+            .where(BehaviorEvent.related_screenshot_id == screenshot.id)
+            .where(BehaviorEvent.event_type == "ai_suspected_non_work_activity")
+        ).first()
+        if existing is None:
+            existing = BehaviorEvent(
+                employee_id=screenshot.employee_id,
+                device_id=screenshot.device_id,
+                event_type="ai_suspected_non_work_activity",
+                severity=severity,
+                start_at=screenshot.captured_at,
+                related_screenshot_id=screenshot.id,
+                related_diff_id=diff.id,
+                status="open",
+                reason=reason,
+                details_json=details,
+            )
+        else:
+            existing.severity = severity
+            existing.reason = reason
+            existing.details_json = details
+            existing.related_diff_id = diff.id
+            existing.updated_at = utc_now()
+        self.session.add(existing)
+        self.session.commit()
+
+    def _persist_ai_updates(self, screenshot: Screenshot) -> None:
+        screenshot.updated_at = utc_now()
+        self.session.add(screenshot)
+        self.session.commit()
+        self.session.refresh(screenshot)
 
     def _read_image_bytes(self, image_uri: str | None) -> bytes | None:
         path = self._resolve_image_path(image_uri)

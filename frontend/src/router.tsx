@@ -1,12 +1,13 @@
 import {
   AlertOutlined,
   CalendarOutlined,
-  KeyOutlined,
   ClockCircleOutlined,
   DashboardOutlined,
   DeploymentUnitOutlined,
   GithubOutlined,
+  KeyOutlined,
   LaptopOutlined,
+  PictureOutlined,
   SafetyCertificateOutlined,
   TeamOutlined,
   UnorderedListOutlined
@@ -15,6 +16,7 @@ import { lazy, Suspense, type ComponentType, type ReactElement } from 'react';
 import { createBrowserRouter } from 'react-router-dom';
 
 import App from './App';
+import type { TranslationKey } from './i18n/translations';
 
 function lazyNamed<T extends Record<string, ComponentType>>(loader: () => Promise<T>, exportName: keyof T) {
   return lazy(async () => ({ default: (await loader())[exportName] }));
@@ -32,6 +34,7 @@ const LoginPage = lazyNamed(() => import('./pages/Login'), 'LoginPage');
 const PoliciesPage = lazyNamed(() => import('./pages/Policies'), 'PoliciesPage');
 const RealtimeStatusPage = lazyNamed(() => import('./pages/RealtimeStatus'), 'RealtimeStatusPage');
 const ScreenshotDetailPage = lazyNamed(() => import('./pages/ScreenshotDetail'), 'ScreenshotDetailPage');
+const ScreenshotGalleryPage = lazyNamed(() => import('./pages/ScreenshotGallery'), 'ScreenshotGalleryPage');
 const TimelinePage = lazyNamed(() => import('./pages/Timeline'), 'TimelinePage');
 
 function routeElement(Page: ComponentType): ReactElement {
@@ -44,7 +47,8 @@ function routeElement(Page: ComponentType): ReactElement {
 
 export type NavRoute = {
   key: string;
-  label: string;
+  labelKey: TranslationKey;
+  labelFallback: string;
   path: string;
   icon: JSX.Element;
   permissionKeys?: string[];
@@ -53,84 +57,96 @@ export type NavRoute = {
 export const navRoutes: NavRoute[] = [
   {
     key: 'dashboard',
-    label: 'Dashboard',
+    labelKey: 'nav.dashboard',
+    labelFallback: 'Dashboard',
     path: '/',
     icon: <DashboardOutlined />,
     permissionKeys: ['dashboard.view']
   },
   {
     key: 'realtime',
-    label: 'Realtime Status',
+    labelKey: 'nav.realtime',
+    labelFallback: 'Realtime Status',
     path: '/realtime-status',
     icon: <LaptopOutlined />,
     permissionKeys: ['screenshots.metadata.view', 'dashboard.view']
   },
   {
     key: 'employees',
-    label: 'Employees',
+    labelKey: 'nav.employees',
+    labelFallback: 'Employees',
     path: '/employees',
     icon: <TeamOutlined />,
     permissionKeys: ['directory.view']
   },
   {
     key: 'devices',
-    label: 'Devices',
+    labelKey: 'nav.devices',
+    labelFallback: 'Devices',
     path: '/devices',
     icon: <DeploymentUnitOutlined />,
     permissionKeys: ['directory.view']
   },
   {
     key: 'timeline',
-    label: 'Timeline',
+    labelKey: 'nav.timeline.fixed',
+    labelFallback: '时间线',
     path: '/timeline',
     icon: <ClockCircleOutlined />,
     permissionKeys: ['screenshots.metadata.view']
   },
   {
+    key: 'screenshots',
+    labelKey: 'nav.screenshotGallery.fixed',
+    labelFallback: '截图库',
+    path: '/screenshots',
+    icon: <PictureOutlined />,
+    permissionKeys: ['screenshots.metadata.view']
+  },
+  {
     key: 'events',
-    label: 'Events',
+    labelKey: 'nav.events',
+    labelFallback: 'Events',
     path: '/events',
     icon: <AlertOutlined />,
     permissionKeys: ['events.review']
   },
   {
     key: 'attendance',
-    label: 'Attendance',
+    labelKey: 'nav.attendance',
+    labelFallback: 'Attendance',
     path: '/attendance',
     icon: <CalendarOutlined />,
     permissionKeys: ['attendance.view']
   },
   {
-    key: 'screenshot-detail',
-    label: 'Screenshot Detail',
-    path: '/screenshot-detail',
-    icon: <UnorderedListOutlined />,
-    permissionKeys: ['screenshots.metadata.view']
-  },
-  {
     key: 'access-roles',
-    label: 'Access Roles',
+    labelKey: 'nav.accessRoles',
+    labelFallback: 'Access Roles',
     path: '/access-roles',
     icon: <KeyOutlined />,
     permissionKeys: ['access_matrix.view']
   },
   {
     key: 'policies',
-    label: 'Policies',
+    labelKey: 'nav.policies',
+    labelFallback: 'Policies',
     path: '/policies',
     icon: <SafetyCertificateOutlined />,
     permissionKeys: ['policies.manage']
   },
   {
     key: 'audit-logs',
-    label: 'Audit Logs',
+    labelKey: 'nav.auditLogs',
+    labelFallback: 'Audit Logs',
     path: '/audit-logs',
     icon: <UnorderedListOutlined />,
     permissionKeys: ['audit_logs.view']
   },
   {
     key: 'github-risk',
-    label: 'GitHub Risk',
+    labelKey: 'nav.githubRisk',
+    labelFallback: 'GitHub Risk',
     path: '/github-risk',
     icon: <GithubOutlined />,
     permissionKeys: ['github_risks.view']
@@ -151,6 +167,8 @@ export const router = createBrowserRouter([
       { path: 'employees', element: routeElement(EmployeesPage) },
       { path: 'devices', element: routeElement(DevicesPage) },
       { path: 'timeline', element: routeElement(TimelinePage) },
+      { path: 'screenshots', element: routeElement(ScreenshotGalleryPage) },
+      { path: 'screenshots/detail', element: routeElement(ScreenshotDetailPage) },
       { path: 'events', element: routeElement(EventsPage) },
       { path: 'attendance', element: routeElement(AttendancePage) },
       { path: 'screenshot-detail', element: routeElement(ScreenshotDetailPage) },
